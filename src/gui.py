@@ -57,44 +57,44 @@ class RailEditorFrame(ctk.CTkFrame):
         ctk.CTkLabel(row1, text="Name:", width=80).pack(side="left", padx=(0, 4))
         self.entry_name = ctk.CTkEntry(row1, width=120)
         self.entry_name.insert(0, self.rail.name)
-        self.entry_name.pack(side="left", padx=(0, 8))
-        self.btn_apply = ctk.CTkButton(row1, text="Apply", width=50, command=self._on_apply_changes)
-        self.btn_apply.pack(side="left", padx=(0, 16))
+        self.entry_name.pack(side="left", padx=(0, 16))
         ctk.CTkLabel(row1, text="Type:", width=40).pack(side="left", padx=(0, 4))
         self.var_type = ctk.StringVar(value=self.rail.seq_type)
         for st, label in SEQ_TYPE_LABELS.items():
             ctk.CTkRadioButton(row1, text=label, variable=self.var_type, value=st).pack(side="left", padx=(0, 8))
+        self.btn_apply = ctk.CTkButton(row1, text="Apply", width=50, command=self._on_apply_changes)
+        self.btn_apply.pack(side="left", padx=(8, 0))
         self.var_type.trace_add("write", lambda *_: self._on_type_change())
 
         self.row2 = ctk.CTkFrame(self, fg_color="transparent")
         self.row2.pack(fill="x", pady=2)
         ctk.CTkLabel(self.row2, text="CYCLE_HI:", width=80).pack(side="left", padx=(0, 4))
-        self.entry_hi = ctk.CTkEntry(self.row2, width=60)
+        self.entry_hi = ctk.CTkEntry(self.row2, width=100)
         self.entry_hi.insert(0, str(self.rail.cycle_hi))
         self.entry_hi.pack(side="left", padx=(0, 16))
         ctk.CTkLabel(self.row2, text="CYCLE_LO:", width=80).pack(side="left", padx=(0, 4))
-        self.entry_lo = ctk.CTkEntry(self.row2, width=60)
+        self.entry_lo = ctk.CTkEntry(self.row2, width=100)
         self.entry_lo.insert(0, str(self.rail.cycle_lo))
         self.entry_lo.pack(side="left", padx=(0, 16))
-        ctk.CTkLabel(self.row2, text="INIT:", width=50).pack(side="left", padx=(0, 4))
+        ctk.CTkLabel(self.row2, text="INIT:", width=80).pack(side="left", padx=(0, 4))
         self.var_pseq_init = ctk.StringVar(value="1" if getattr(self.rail, "init", 0) == 1 else "0")
-        ctk.CTkComboBox(self.row2, values=["0", "1"], variable=self.var_pseq_init, width=80).pack(side="left")
+        ctk.CTkComboBox(self.row2, values=["0", "1"], variable=self.var_pseq_init, width=100).pack(side="left")
 
         self.row2b = ctk.CTkFrame(self, fg_color="transparent")
         self.row2b.pack(fill="x", pady=2)
-        pulses = list(self.get_pulses())
+        pulses = list(self.get_pulses()) + ["High"]
         for v in (getattr(self.rail, "pulse_hi", "iPulse_1us") or "iPulse_1us",
                   getattr(self.rail, "pulse_lo", "iPulse_1us") or "iPulse_1us",
                   getattr(self.rail, "pulse_force", "iPulse_1us") or "iPulse_1us"):
             if v and v not in pulses:
                 pulses.append(v)
-        ctk.CTkLabel(self.row2b, text="Pulse Hi:", width=80).pack(side="left", padx=(0, 4))
+        ctk.CTkLabel(self.row2b, text="Timing Hi:", width=80).pack(side="left", padx=(0, 4))
         self.var_pulse_hi = ctk.StringVar(value=getattr(self.rail, "pulse_hi", "iPulse_1us") or "iPulse_1us")
         ctk.CTkComboBox(self.row2b, values=pulses, variable=self.var_pulse_hi, width=100).pack(side="left", padx=(0, 16))
-        ctk.CTkLabel(self.row2b, text="Pulse Lo:", width=80).pack(side="left", padx=(0, 4))
+        ctk.CTkLabel(self.row2b, text="Timing Lo:", width=80).pack(side="left", padx=(0, 4))
         self.var_pulse_lo = ctk.StringVar(value=getattr(self.rail, "pulse_lo", "iPulse_1us") or "iPulse_1us")
         ctk.CTkComboBox(self.row2b, values=pulses, variable=self.var_pulse_lo, width=100).pack(side="left", padx=(0, 16))
-        ctk.CTkLabel(self.row2b, text="Pulse Force:", width=80).pack(side="left", padx=(0, 4))
+        ctk.CTkLabel(self.row2b, text="Timing Force:", width=80).pack(side="left", padx=(0, 4))
         self.var_pulse_force = ctk.StringVar(value=getattr(self.rail, "pulse_force", "iPulse_1us") or "iPulse_1us")
         ctk.CTkComboBox(self.row2b, values=pulses, variable=self.var_pulse_force, width=100).pack(side="left")
 
@@ -134,26 +134,34 @@ class RailEditorFrame(ctk.CTkFrame):
 
         self.row_deb = ctk.CTkFrame(self, fg_color="transparent")
         self.row_deb.pack(fill="x", pady=2)
-        self.var_deb_enable = ctk.BooleanVar(value=getattr(self.rail, "deb_enable", False))
-        ctk.CTkCheckBox(self.row_deb, text="Debounce", variable=self.var_deb_enable, width=90).pack(side="left", padx=(0, 16))
-        ctk.CTkLabel(self.row_deb, text="INIT:", width=50).pack(side="left", padx=(0, 4))
-        self.var_deb_init = ctk.StringVar(value="1" if getattr(self.rail, "deb_init", 0) == 1 else "0")
-        ctk.CTkComboBox(self.row_deb, values=["0", "1"], variable=self.var_deb_init, width=60).pack(side="left", padx=(0, 12))
-        ctk.CTkLabel(self.row_deb, text="CYCLE_HI:", width=70).pack(side="left", padx=(0, 4))
-        self.entry_deb_cycle_hi = ctk.CTkEntry(self.row_deb, width=40)
+        self.var_deb_enable = ctk.BooleanVar(value=getattr(self.rail, "deb_enable", True))
+        ctk.CTkCheckBox(self.row_deb, text="Debounce", variable=self.var_deb_enable,
+                        width=90, command=self._on_deb_toggle).pack(side="left", padx=(0, 16))
+
+        self.row_deb_params = ctk.CTkFrame(self, fg_color="transparent")
+        deb_row1 = ctk.CTkFrame(self.row_deb_params, fg_color="transparent")
+        deb_row1.pack(fill="x", pady=1)
+        ctk.CTkLabel(deb_row1, text="CYCLE_HI:", width=80).pack(side="left", padx=(0, 4))
+        self.entry_deb_cycle_hi = ctk.CTkEntry(deb_row1, width=100)
         self.entry_deb_cycle_hi.insert(0, str(getattr(self.rail, "deb_cycle_hi", 2)))
         self.entry_deb_cycle_hi.pack(side="left", padx=(0, 12))
-        ctk.CTkLabel(self.row_deb, text="CYCLE_LO:", width=70).pack(side="left", padx=(0, 4))
-        self.entry_deb_cycle_lo = ctk.CTkEntry(self.row_deb, width=40)
+        ctk.CTkLabel(deb_row1, text="CYCLE_LO:", width=80).pack(side="left", padx=(0, 4))
+        self.entry_deb_cycle_lo = ctk.CTkEntry(deb_row1, width=100)
         self.entry_deb_cycle_lo.insert(0, str(getattr(self.rail, "deb_cycle_lo", 2)))
         self.entry_deb_cycle_lo.pack(side="left", padx=(0, 12))
-        ctk.CTkLabel(self.row_deb, text="Pulse:", width=50).pack(side="left", padx=(0, 4))
-        deb_pulses = list(self.get_pulses())
+        ctk.CTkLabel(deb_row1, text="INIT:", width=80).pack(side="left", padx=(0, 4))
+        self.var_deb_init = ctk.StringVar(value="1" if getattr(self.rail, "deb_init", 0) == 1 else "0")
+        ctk.CTkComboBox(deb_row1, values=["0", "1"], variable=self.var_deb_init, width=100).pack(side="left")
+
+        deb_row2 = ctk.CTkFrame(self.row_deb_params, fg_color="transparent")
+        deb_row2.pack(fill="x", pady=1)
+        ctk.CTkLabel(deb_row2, text="Timing Deb:", width=80).pack(side="left", padx=(0, 4))
+        deb_pulses = list(self.get_pulses()) + ["High"]
         deb_pulse_val = getattr(self.rail, "deb_pulse", "iPulse_1us") or "iPulse_1us"
         if deb_pulse_val not in deb_pulses:
             deb_pulses.append(deb_pulse_val)
         self.var_deb_pulse = ctk.StringVar(value=deb_pulse_val)
-        ctk.CTkComboBox(self.row_deb, values=deb_pulses, variable=self.var_deb_pulse, width=100).pack(side="left")
+        ctk.CTkComboBox(deb_row2, values=deb_pulses, variable=self.var_deb_pulse, width=100).pack(side="left")
 
         self.row3.pack(fill="x", pady=2)
         self._on_type_change()
@@ -165,15 +173,18 @@ class RailEditorFrame(ctk.CTkFrame):
         for w in self.hi_groups_frame.winfo_children():
             w.destroy()
         self.hi_group_frames.clear()
+        self.dep_hi_inv_vars.clear()
+        self.dep_hi_use_vars.clear()
+        self.dep_hi_rows.clear()
         for gi, group in enumerate(self.dep_hi_groups):
             self._add_hi_group_ui(gi)
 
     def _add_hi_group_ui(self, group_idx: int):
         group = self.dep_hi_groups[group_idx]
-        frame = ctk.CTkFrame(self.hi_groups_frame, fg_color=("gray95", "gray20"))
-        frame.pack(fill="x", pady=4, padx=(20, 0))
+        frame = ctk.CTkFrame(self.hi_groups_frame, fg_color=("gray95", "gray20"), corner_radius=4)
+        frame.pack(fill="x", pady=2, padx=(20, 0))
         header = ctk.CTkFrame(frame, fg_color="transparent")
-        header.pack(fill="x", padx=8, pady=4)
+        header.pack(fill="x", padx=4, pady=2)
         ctk.CTkLabel(header, text=f"Group {group_idx + 1}", width=50).pack(side="left", padx=(0, 8))
         combo_vals = self._get_dep_combo_values()
         combo = ctk.CTkComboBox(header, values=combo_vals, width=120)
@@ -183,31 +194,36 @@ class RailEditorFrame(ctk.CTkFrame):
         ctk.CTkButton(header, text="+ Add", width=60, command=lambda: self._add_hi_dep_to_group(group_idx)).pack(side="left", padx=(0, 8))
         ctk.CTkButton(header, text="Del Group", width=60, command=lambda: self._remove_hi_group(group_idx)).pack(side="left")
         list_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        list_frame.pack(fill="x", padx=8, pady=(0, 8))
         self.hi_group_frames.append({"frame": frame, "combo": combo, "list_frame": list_frame})
-        for name in group:
-            self._add_hi_dep_row_to_group(group_idx, name)
+        for ii, name in enumerate(group):
+            self._add_hi_dep_row_to_group(group_idx, name, item_idx=ii)
 
-    def _add_hi_dep_row_to_group(self, group_idx: int, name: str):
+    def _add_hi_dep_row_to_group(self, group_idx: int, name: str, item_idx: int | None = None):
+        if item_idx is None:
+            item_idx = len(self.dep_hi_groups[group_idx]) - 1
+        key = (group_idx, item_idx)
         display_name = "High" if name == DEP_HIGH else ("Low" if name == DEP_LOW else name)
         is_const = name in (DEP_HIGH, DEP_LOW)
         dep_rail = self.name_to_rail.get(name)
         can_use_hi_lo = dep_rail is not None and dep_rail.has_pseqcell
-        if name not in self.dep_hi_inv_vars:
-            self.dep_hi_inv_vars[name] = ctk.BooleanVar(value=False if is_const else self.rail.depends_on_hi_inv.get(name, False))
-        if name not in self.dep_hi_use_vars:
-            _use_display = {"self": "Node", "hi": "Hi Dep", "lo": "Lo Dep"}
-            self.dep_hi_use_vars[name] = ctk.StringVar(value=_use_display.get(self.rail.depends_on_hi_use.get(name, "self"), "Node"))
+        _use_display = {"self": "Node", "hi": "Hi Dep", "lo": "Lo Dep"}
+        inv_val = False if is_const else self.rail.get_hi_inv(group_idx, item_idx, name)
+        use_val = self.rail.get_hi_use(group_idx, item_idx, name)
+        self.dep_hi_inv_vars[key] = ctk.BooleanVar(value=inv_val)
+        self.dep_hi_use_vars[key] = ctk.StringVar(value=_use_display.get(use_val, "Node"))
         list_frame = self.hi_group_frames[group_idx]["list_frame"]
+        if not list_frame.winfo_ismapped():
+            list_frame.pack(fill="x", padx=4, pady=(0, 2))
         row = ctk.CTkFrame(list_frame, fg_color="transparent")
-        row.pack(fill="x", pady=2)
-        self.dep_hi_rows[(group_idx, name)] = row
+        row.pack(fill="x", pady=1)
+        self.dep_hi_rows[key] = row
         ctk.CTkLabel(row, text=display_name, width=100).pack(side="left", padx=(0, 4))
         if not is_const:
-            ctk.CTkCheckBox(row, text="Inv", variable=self.dep_hi_inv_vars[name], width=50).pack(side="left", padx=(0, 4))
+            ctk.CTkCheckBox(row, text="Inv", variable=self.dep_hi_inv_vars[key], width=50).pack(side="left", padx=(0, 4))
         if can_use_hi_lo:
-            ctk.CTkComboBox(row, values=["Node", "Hi Dep", "Lo Dep"], variable=self.dep_hi_use_vars[name], width=90).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(row, text="Del", width=50, command=lambda: self._remove_hi_dep_from_group(group_idx, name)).pack(side="left")
+            ctk.CTkComboBox(row, values=["Node", "Hi Dep", "Lo Dep"], variable=self.dep_hi_use_vars[key], width=90).pack(side="left", padx=(0, 4))
+        captured_key = key
+        ctk.CTkButton(row, text="Del", width=50, command=lambda: self._remove_hi_dep_by_key(captured_key)).pack(side="left")
 
     def _add_hi_dep_to_group(self, group_idx: int):
         gf = self.hi_group_frames[group_idx]
@@ -218,25 +234,20 @@ class RailEditorFrame(ctk.CTkFrame):
         self.dep_hi_groups[group_idx].append(dep_key)
         self._add_hi_dep_row_to_group(group_idx, dep_key)
 
-    def _remove_hi_dep_from_group(self, group_idx: int, name: str):
-        if group_idx < len(self.dep_hi_groups) and name in self.dep_hi_groups[group_idx]:
-            self.dep_hi_groups[group_idx].remove(name)
-            key = (group_idx, name)
+    def _remove_hi_dep_by_key(self, key: tuple[int, int]):
+        group_idx, item_idx = key
+        if group_idx < len(self.dep_hi_groups) and item_idx < len(self.dep_hi_groups[group_idx]):
+            del self.dep_hi_groups[group_idx][item_idx]
+            self.dep_hi_inv_vars.pop(key, None)
+            self.dep_hi_use_vars.pop(key, None)
             if key in self.dep_hi_rows:
                 self.dep_hi_rows[key].destroy()
                 del self.dep_hi_rows[key]
-            if not any(name in g for g in self.dep_hi_groups):
-                self.dep_hi_inv_vars.pop(name, None)
-                self.dep_hi_use_vars.pop(name, None)
+            self._rebuild_hi_groups_ui()
 
     def _remove_hi_group(self, group_idx: int):
         if group_idx < len(self.dep_hi_groups):
-            removed_names = set(self.dep_hi_groups[group_idx])
             del self.dep_hi_groups[group_idx]
-            for name in removed_names:
-                if not any(name in g for g in self.dep_hi_groups):
-                    self.dep_hi_inv_vars.pop(name, None)
-                    self.dep_hi_use_vars.pop(name, None)
             self._rebuild_hi_groups_ui()
 
     def _add_hi_group(self):
@@ -247,15 +258,18 @@ class RailEditorFrame(ctk.CTkFrame):
         for w in self.lo_groups_frame.winfo_children():
             w.destroy()
         self.lo_group_frames.clear()
+        self.dep_lo_inv_vars.clear()
+        self.dep_lo_use_vars.clear()
+        self.dep_lo_rows.clear()
         for gi, group in enumerate(self.dep_lo_groups):
             self._add_lo_group_ui(gi)
 
     def _add_lo_group_ui(self, group_idx: int):
         group = self.dep_lo_groups[group_idx]
-        frame = ctk.CTkFrame(self.lo_groups_frame, fg_color=("gray95", "gray20"))
-        frame.pack(fill="x", pady=4, padx=(20, 0))
+        frame = ctk.CTkFrame(self.lo_groups_frame, fg_color=("gray95", "gray20"), corner_radius=4)
+        frame.pack(fill="x", pady=2, padx=(20, 0))
         header = ctk.CTkFrame(frame, fg_color="transparent")
-        header.pack(fill="x", padx=8, pady=4)
+        header.pack(fill="x", padx=4, pady=2)
         ctk.CTkLabel(header, text=f"Group {group_idx + 1}", width=50).pack(side="left", padx=(0, 8))
         combo_vals = self._get_dep_combo_values()
         combo = ctk.CTkComboBox(header, values=combo_vals, width=120)
@@ -265,31 +279,36 @@ class RailEditorFrame(ctk.CTkFrame):
         ctk.CTkButton(header, text="+ Add", width=60, command=lambda: self._add_lo_dep_to_group(group_idx)).pack(side="left", padx=(0, 8))
         ctk.CTkButton(header, text="Del Group", width=60, command=lambda: self._remove_lo_group(group_idx)).pack(side="left")
         list_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        list_frame.pack(fill="x", padx=8, pady=(0, 8))
         self.lo_group_frames.append({"frame": frame, "combo": combo, "list_frame": list_frame})
-        for name in group:
-            self._add_lo_dep_row_to_group(group_idx, name)
+        for ii, name in enumerate(group):
+            self._add_lo_dep_row_to_group(group_idx, name, item_idx=ii)
 
-    def _add_lo_dep_row_to_group(self, group_idx: int, name: str):
+    def _add_lo_dep_row_to_group(self, group_idx: int, name: str, item_idx: int | None = None):
+        if item_idx is None:
+            item_idx = len(self.dep_lo_groups[group_idx]) - 1
+        key = (group_idx, item_idx)
         display_name = "High" if name == DEP_HIGH else ("Low" if name == DEP_LOW else name)
         is_const = name in (DEP_HIGH, DEP_LOW)
         dep_rail = self.name_to_rail.get(name)
         can_use_hi_lo = dep_rail is not None and dep_rail.has_pseqcell
-        if name not in self.dep_lo_inv_vars:
-            self.dep_lo_inv_vars[name] = ctk.BooleanVar(value=False if is_const else self.rail.depends_on_lo_inv.get(name, False))
-        if name not in self.dep_lo_use_vars:
-            _use_display = {"self": "Node", "hi": "Hi Dep", "lo": "Lo Dep"}
-            self.dep_lo_use_vars[name] = ctk.StringVar(value=_use_display.get(self.rail.depends_on_lo_use.get(name, "self"), "Node"))
+        _use_display = {"self": "Node", "hi": "Hi Dep", "lo": "Lo Dep"}
+        inv_val = False if is_const else self.rail.get_lo_inv(group_idx, item_idx, name)
+        use_val = self.rail.get_lo_use(group_idx, item_idx, name)
+        self.dep_lo_inv_vars[key] = ctk.BooleanVar(value=inv_val)
+        self.dep_lo_use_vars[key] = ctk.StringVar(value=_use_display.get(use_val, "Node"))
         list_frame = self.lo_group_frames[group_idx]["list_frame"]
+        if not list_frame.winfo_ismapped():
+            list_frame.pack(fill="x", padx=4, pady=(0, 2))
         row = ctk.CTkFrame(list_frame, fg_color="transparent")
-        row.pack(fill="x", pady=2)
-        self.dep_lo_rows[(group_idx, name)] = row
+        row.pack(fill="x", pady=1)
+        self.dep_lo_rows[key] = row
         ctk.CTkLabel(row, text=display_name, width=100).pack(side="left", padx=(0, 4))
         if not is_const:
-            ctk.CTkCheckBox(row, text="Inv", variable=self.dep_lo_inv_vars[name], width=50).pack(side="left", padx=(0, 4))
+            ctk.CTkCheckBox(row, text="Inv", variable=self.dep_lo_inv_vars[key], width=50).pack(side="left", padx=(0, 4))
         if can_use_hi_lo:
-            ctk.CTkComboBox(row, values=["Node", "Hi Dep", "Lo Dep"], variable=self.dep_lo_use_vars[name], width=90).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(row, text="Del", width=50, command=lambda: self._remove_lo_dep_from_group(group_idx, name)).pack(side="left")
+            ctk.CTkComboBox(row, values=["Node", "Hi Dep", "Lo Dep"], variable=self.dep_lo_use_vars[key], width=90).pack(side="left", padx=(0, 4))
+        captured_key = key
+        ctk.CTkButton(row, text="Del", width=50, command=lambda: self._remove_lo_dep_by_key(captured_key)).pack(side="left")
 
     def _add_lo_dep_to_group(self, group_idx: int):
         gf = self.lo_group_frames[group_idx]
@@ -300,25 +319,20 @@ class RailEditorFrame(ctk.CTkFrame):
         self.dep_lo_groups[group_idx].append(dep_key)
         self._add_lo_dep_row_to_group(group_idx, dep_key)
 
-    def _remove_lo_dep_from_group(self, group_idx: int, name: str):
-        if group_idx < len(self.dep_lo_groups) and name in self.dep_lo_groups[group_idx]:
-            self.dep_lo_groups[group_idx].remove(name)
-            key = (group_idx, name)
+    def _remove_lo_dep_by_key(self, key: tuple[int, int]):
+        group_idx, item_idx = key
+        if group_idx < len(self.dep_lo_groups) and item_idx < len(self.dep_lo_groups[group_idx]):
+            del self.dep_lo_groups[group_idx][item_idx]
+            self.dep_lo_inv_vars.pop(key, None)
+            self.dep_lo_use_vars.pop(key, None)
             if key in self.dep_lo_rows:
                 self.dep_lo_rows[key].destroy()
                 del self.dep_lo_rows[key]
-            if not any(name in g for g in self.dep_lo_groups):
-                self.dep_lo_inv_vars.pop(name, None)
-                self.dep_lo_use_vars.pop(name, None)
+            self._rebuild_lo_groups_ui()
 
     def _remove_lo_group(self, group_idx: int):
         if group_idx < len(self.dep_lo_groups):
-            removed_names = set(self.dep_lo_groups[group_idx])
             del self.dep_lo_groups[group_idx]
-            for name in removed_names:
-                if not any(name in g for g in self.dep_lo_groups):
-                    self.dep_lo_inv_vars.pop(name, None)
-                    self.dep_lo_use_vars.pop(name, None)
             self._rebuild_lo_groups_ui()
 
     def _add_lo_group(self):
@@ -333,6 +347,12 @@ class RailEditorFrame(ctk.CTkFrame):
             new_type = self.var_type.get()
             self.on_apply_changes(old_name, new_name, old_type, new_type)
 
+    def _on_deb_toggle(self):
+        if self.var_deb_enable.get():
+            self.row_deb_params.pack(fill="x", pady=2)
+        else:
+            self.row_deb_params.pack_forget()
+
     def _on_type_change(self):
         is_input = self.var_type.get() == "input"
         if is_input:
@@ -340,6 +360,7 @@ class RailEditorFrame(ctk.CTkFrame):
             self.row2b.pack_forget()
             self.row3.pack_forget()
             self.row_deb.pack(fill="x", pady=2)
+            self._on_deb_toggle()
             self.dep_hi_groups = [[]]
             self.dep_lo_groups = [[]]
             self.dep_hi_inv_vars.clear()
@@ -353,6 +374,7 @@ class RailEditorFrame(ctk.CTkFrame):
             self.row2b.pack(fill="x", pady=2)
             self.row3.pack(fill="x", pady=2)
             self.row_deb.pack_forget()
+            self.row_deb_params.pack_forget()
             if not self.dep_hi_groups or self.dep_hi_groups == [[]]:
                 self.dep_hi_groups = [list(g) for g in self.rail.get_hi_groups()] if self.rail.get_hi_groups() else [[]]
                 if not self.dep_hi_groups:
@@ -378,11 +400,41 @@ class RailEditorFrame(ctk.CTkFrame):
         groups_lo = [list(g) for g in self.dep_lo_groups if g]
         flat_hi = [d for g in groups_hi for d in g]
         flat_lo = [d for g in groups_lo for d in g]
-        depends_on_hi_inv = {n: self.dep_hi_inv_vars[n].get() for n in flat_hi if n in self.dep_hi_inv_vars}
-        depends_on_lo_inv = {n: self.dep_lo_inv_vars[n].get() for n in flat_lo if n in self.dep_lo_inv_vars}
         _use_reverse = {"Node": "self", "Hi Dep": "hi", "Lo Dep": "lo"}
-        depends_on_hi_use = {n: _use_reverse.get(self.dep_hi_use_vars[n].get(), "self") for n in flat_hi if n in self.dep_hi_use_vars}
-        depends_on_lo_use = {n: _use_reverse.get(self.dep_lo_use_vars[n].get(), "self") for n in flat_lo if n in self.dep_lo_use_vars}
+        depends_on_hi_inv = {}
+        depends_on_hi_use = {}
+        hi_inv_groups = []
+        hi_use_groups = []
+        for gi, g in enumerate(groups_hi):
+            g_inv = []
+            g_use = []
+            for ii, n in enumerate(g):
+                key = (gi, ii)
+                inv = self.dep_hi_inv_vars[key].get() if key in self.dep_hi_inv_vars else False
+                use = _use_reverse.get(self.dep_hi_use_vars[key].get(), "self") if key in self.dep_hi_use_vars else "self"
+                depends_on_hi_inv[n] = inv
+                depends_on_hi_use[n] = use
+                g_inv.append(inv)
+                g_use.append(use)
+            hi_inv_groups.append(g_inv)
+            hi_use_groups.append(g_use)
+        depends_on_lo_inv = {}
+        depends_on_lo_use = {}
+        lo_inv_groups = []
+        lo_use_groups = []
+        for gi, g in enumerate(groups_lo):
+            g_inv = []
+            g_use = []
+            for ii, n in enumerate(g):
+                key = (gi, ii)
+                inv = self.dep_lo_inv_vars[key].get() if key in self.dep_lo_inv_vars else False
+                use = _use_reverse.get(self.dep_lo_use_vars[key].get(), "self") if key in self.dep_lo_use_vars else "self"
+                depends_on_lo_inv[n] = inv
+                depends_on_lo_use[n] = use
+                g_inv.append(inv)
+                g_use.append(use)
+            lo_inv_groups.append(g_inv)
+            lo_use_groups.append(g_use)
         seq_type = self.var_type.get()
         if seq_type == "input":
             cycle_hi, cycle_lo = 0, 0
@@ -400,6 +452,10 @@ class RailEditorFrame(ctk.CTkFrame):
             depends_on_lo_inv=depends_on_lo_inv if seq_type != "input" else {},
             depends_on_hi_use=depends_on_hi_use if seq_type != "input" else {},
             depends_on_lo_use=depends_on_lo_use if seq_type != "input" else {},
+            depends_on_hi_inv_groups=hi_inv_groups if seq_type != "input" else [],
+            depends_on_lo_inv_groups=lo_inv_groups if seq_type != "input" else [],
+            depends_on_hi_use_groups=hi_use_groups if seq_type != "input" else [],
+            depends_on_lo_use_groups=lo_use_groups if seq_type != "input" else [],
             pulse_hi=self.var_pulse_hi.get() if seq_type != "input" else "iPulse_1us",
             pulse_lo=self.var_pulse_lo.get() if seq_type != "input" else "iPulse_1us",
             pulse_force=self.var_pulse_force.get() if seq_type != "input" else "iPulse_1us",
@@ -420,6 +476,76 @@ class RailEditorFrame(ctk.CTkFrame):
         )
 
 
+class CollapsibleRailFrame(ctk.CTkFrame):
+    """Accordion wrapper: clickable header + collapsible RailEditorFrame."""
+
+    def __init__(self, master, rail: PowerRail, all_rails: list[PowerRail],
+                 config: PowerSeqConfig, get_pulses=None, on_apply_changes=None,
+                 expanded=False, **kwargs):
+        super().__init__(master, **kwargs)
+        self.rail = rail
+        self._expanded = expanded
+
+        self._header = ctk.CTkFrame(self, fg_color=("gray85", "gray25"), corner_radius=6)
+        self._header.pack(fill="x")
+        self._header.bind("<Button-1>", lambda _: self.toggle())
+
+        self._arrow = ctk.CTkLabel(self._header, text="", width=20, font=("", 12))
+        self._arrow.pack(side="left", padx=(8, 4))
+        self._arrow.bind("<Button-1>", lambda _: self.toggle())
+
+        type_label = SEQ_TYPE_LABELS.get(rail.seq_type, rail.seq_type)
+        summary = self._build_summary(rail, type_label)
+        self._title = ctk.CTkLabel(self._header, text=summary, font=("", 12, "bold"), anchor="w")
+        self._title.pack(side="left", fill="x", expand=True, padx=(0, 8), pady=6)
+        self._title.bind("<Button-1>", lambda _: self.toggle())
+
+        self._body = ctk.CTkFrame(self, fg_color="transparent")
+        self.editor = RailEditorFrame(
+            self._body, rail, all_rails, config,
+            get_pulses=get_pulses, on_apply_changes=on_apply_changes,
+        )
+        self.editor.pack(fill="x", padx=4, pady=(4, 0))
+
+        self._update_ui()
+
+    @staticmethod
+    def _build_summary(rail: PowerRail, type_label: str) -> str:
+        if rail.seq_type == "input":
+            if getattr(rail, "deb_enable", False):
+                hi = getattr(rail, "deb_cycle_hi", 2)
+                lo = getattr(rail, "deb_cycle_lo", 2)
+                init_val = getattr(rail, "deb_init", 0)
+                return f"{rail.name}  [{type_label}]  Deb:ON  HI:{hi}  LO:{lo}  INIT:{init_val}"
+            return f"{rail.name}  [{type_label}]  Deb:OFF"
+        init_val = getattr(rail, "init", 0)
+        return f"{rail.name}  [{type_label}]  HI:{rail.cycle_hi}  LO:{rail.cycle_lo}  INIT:{init_val}"
+
+    def _update_ui(self):
+        self._arrow.configure(text="\u25BC" if self._expanded else "\u25B6")
+        if self._expanded:
+            self._body.pack(fill="x", pady=(0, 4))
+        else:
+            self._body.pack_forget()
+
+    def toggle(self):
+        self._expanded = not self._expanded
+        self._update_ui()
+
+    def expand(self):
+        if not self._expanded:
+            self._expanded = True
+            self._update_ui()
+
+    def collapse(self):
+        if self._expanded:
+            self._expanded = False
+            self._update_ui()
+
+    def get_rail(self) -> PowerRail:
+        return self.editor.get_rail()
+
+
 class PowerSeqGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -437,6 +563,9 @@ class PowerSeqGUI(ctk.CTk):
         ctk.CTkButton(toolbar, text="Save JSON", command=self._save_json, width=100).pack(side="left", padx=(0, 8))
         ctk.CTkButton(toolbar, text="Generate Verilog", command=self._generate_verilog, width=120).pack(side="left", padx=(0, 8))
         ctk.CTkButton(toolbar, text="Export Draw.io", command=self._export_drawio, width=110).pack(side="left", padx=(0, 8))
+        self._topmost = False
+        self._pin_btn = ctk.CTkButton(toolbar, text="\U0001F4CC", width=36, command=self._toggle_topmost)
+        self._pin_btn.pack(side="right")
 
         main = ctk.CTkFrame(self, fg_color="transparent")
         main.pack(fill="both", expand=True, padx=10, pady=(0, 10))
@@ -447,15 +576,17 @@ class PowerSeqGUI(ctk.CTk):
         ctk.CTkLabel(left, text="Sequence Node", font=("", 14, "bold")).pack(pady=(10, 8))
         self.rail_listbox = tk.Listbox(left, font=("Consolas", 10), selectmode="single", height=14)
         self.rail_listbox.pack(fill="x", pady=(0, 4))
-        ctk.CTkLabel(left, text="Timing Pulse", font=("", 12, "bold")).pack(pady=(8, 4))
-        pulse_frame = ctk.CTkFrame(left, fg_color="transparent")
-        pulse_frame.pack(fill="x")
-        self.pulse_entry = ctk.CTkEntry(pulse_frame, width=100, placeholder_text="New pulse name")
-        self.pulse_entry.pack(side="left", padx=(0, 4))
-        ctk.CTkButton(pulse_frame, text="+ Add", width=60, command=self._add_pulse).pack(side="left")
+        ctk.CTkLabel(left, text="Timing Signals", font=("", 12, "bold")).pack(pady=(8, 4))
+        self.pulse_entry = ctk.CTkEntry(left, placeholder_text="New signal")
+        self.pulse_entry.pack(fill="x", pady=(0, 4))
         self.pulse_listbox = tk.Listbox(left, font=("Consolas", 9), selectmode="single", height=4)
         self.pulse_listbox.pack(fill="x", pady=(0, 4))
-        ctk.CTkButton(left, text="- Delete Pulse", width=140, command=self._delete_pulse).pack(pady=(0, 8))
+        pulse_btn_frame = ctk.CTkFrame(left, fg_color="transparent")
+        pulse_btn_frame.pack(fill="x", pady=(0, 8))
+        pulse_btn_frame.columnconfigure(0, weight=1)
+        pulse_btn_frame.columnconfigure(1, weight=1)
+        ctk.CTkButton(pulse_btn_frame, text="+ Add", command=self._add_pulse).grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        ctk.CTkButton(pulse_btn_frame, text="- Delete", command=self._delete_pulse).grid(row=0, column=1, sticky="ew", padx=(2, 0))
         self.rail_listbox.bind("<<ListboxSelect>>", self._on_rail_select)
         self._drag_start_index = None
         self._drag_current_index = None
@@ -529,16 +660,27 @@ class PowerSeqGUI(ctk.CTk):
         self._update_validation_msg()
 
     def _refresh_editors(self):
+        prev_expanded = set()
+        for cf in getattr(self, "collapsible_frames", []):
+            if cf._expanded:
+                prev_expanded.add(cf.rail.name)
+
         for w in self.editor_scroll.winfo_children():
             w.destroy()
         self.editor_frames.clear()
+        self.collapsible_frames: list[CollapsibleRailFrame] = []
         def get_pulses():
             return getattr(self.config, "pulses", None) or ["iPulse_1us"]
         for r in self.config.rails:
-            f = RailEditorFrame(self.editor_scroll, r, self.config.rails, self.config,
-                               get_pulses=get_pulses, on_apply_changes=self._apply_changes)
-            f.pack(fill="x", pady=8, padx=4)
-            self.editor_frames.append(f)
+            is_expanded = r.name in prev_expanded if prev_expanded else False
+            cf = CollapsibleRailFrame(
+                self.editor_scroll, r, self.config.rails, self.config,
+                get_pulses=get_pulses, on_apply_changes=self._apply_changes,
+                expanded=is_expanded,
+            )
+            cf.pack(fill="x", pady=4, padx=4)
+            self.collapsible_frames.append(cf)
+            self.editor_frames.append(cf.editor)
         self.rail_listbox.delete(0, tk.END)
         for r in self.config.rails:
             t = SEQ_TYPE_LABELS.get(r.seq_type, r.seq_type)[:16]
@@ -547,8 +689,30 @@ class PowerSeqGUI(ctk.CTk):
 
     def _on_rail_select(self, event):
         sel = self.rail_listbox.curselection()
-        if sel and sel[0] < len(self.editor_frames):
-            self.editor_frames[sel[0]].focus_set()
+        if not sel or sel[0] >= len(self.collapsible_frames):
+            return
+        idx = sel[0]
+        cf = self.collapsible_frames[idx]
+        cf.expand()
+        self.after(50, lambda: cf.winfo_toplevel().update_idletasks())
+        self.after(100, lambda: self._scroll_to_widget(cf))
+
+    def _scroll_to_widget(self, widget):
+        canvas = self.editor_scroll._parent_canvas
+        canvas.update_idletasks()
+        try:
+            widget_y = widget.winfo_y()
+            scroll_height = canvas.winfo_height()
+            canvas_scroll_region = canvas.bbox("all")
+            if canvas_scroll_region is None:
+                return
+            total_height = canvas_scroll_region[3]
+            if total_height <= scroll_height:
+                return
+            target = max(0.0, min(1.0, widget_y / total_height))
+            canvas.yview_moveto(target)
+        except Exception:
+            pass
 
     def _on_listbox_press(self, event):
         idx = self.rail_listbox.nearest(event.y)
@@ -599,6 +763,7 @@ class PowerSeqGUI(ctk.CTk):
             name = f"SIG_{n}"
         self.config.rails.append(PowerRail(name=name, seq_type="output"))
         self._refresh_editors()
+        self.collapsible_frames[-1].expand()
         self._update_validation_msg()
 
     def _delete_selected(self):
@@ -635,6 +800,10 @@ class PowerSeqGUI(ctk.CTk):
             applied_rail = self.editor_frames[target_idx].get_rail()
             self.config.rails[target_idx] = applied_rail
         if new_name != old_name or new_type != old_type:
+            for cf in self.collapsible_frames:
+                if cf.rail.name == old_name:
+                    cf.rail = self.config.rails[target_idx]
+                    break
             for r in self.config.rails:
                 r.depends_on_hi = [new_name if n == old_name else n for n in r.depends_on_hi]
                 r.depends_on_lo = [new_name if n == old_name else n for n in r.depends_on_lo]
@@ -704,6 +873,11 @@ class PowerSeqGUI(ctk.CTk):
                 messagebox.showinfo("Saved", f"Saved: {path}\nOpen in Draw.io (diagrams.net) to view.")
             except Exception as e:
                 messagebox.showerror("Error", str(e))
+
+    def _toggle_topmost(self):
+        self._topmost = not self._topmost
+        self.attributes("-topmost", self._topmost)
+        self._pin_btn.configure(fg_color=("green", "#2a8c2a") if self._topmost else ctk.ThemeManager.theme["CTkButton"]["fg_color"])
 
 def run_gui():
     app = PowerSeqGUI()

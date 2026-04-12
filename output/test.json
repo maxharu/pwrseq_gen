@@ -1,0 +1,316 @@
+{
+  "module_name": "PWRSEQ_TOP",
+  "clock_freq_mhz": 100.0,
+  "pulse_period_ns": 100.0,
+  "pulses": [
+    "iPulse_1us"
+  ],
+  "rails": [
+    {
+      "name": "IN1",
+      "seq_type": "Input",
+      "depends_on": [],
+      "depends_on_hi": [],
+      "depends_on_lo": [],
+      "depends_on_hi_inv": {},
+      "depends_on_lo_inv": {},
+      "depends_on_hi_use": {},
+      "depends_on_lo_use": {},
+      "depends_on_hi_inv_groups": null,
+      "depends_on_lo_inv_groups": null,
+      "depends_on_hi_use_groups": null,
+      "depends_on_lo_use_groups": null,
+      "depends_on_hi_groups": null,
+      "depends_on_lo_groups": null,
+      "pulse_hi": "iPulse_1us",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": true,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 0,
+      "cycle_lo": 0,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "OUT1",
+      "seq_type": "Output",
+      "depends_on": [
+        "IN1"
+      ],
+      "depends_on_hi": [
+        "IN1"
+      ],
+      "depends_on_lo": [
+        "OUT2"
+      ],
+      "depends_on_hi_inv": {
+        "IN1": false
+      },
+      "depends_on_lo_inv": {
+        "OUT2": true
+      },
+      "depends_on_hi_use": {
+        "IN1": "self"
+      },
+      "depends_on_lo_use": {
+        "OUT2": "self"
+      },
+      "depends_on_hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "depends_on_lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "depends_on_hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "depends_on_lo_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "depends_on_hi_groups": [
+        [
+          "IN1"
+        ]
+      ],
+      "depends_on_lo_groups": [
+        [
+          "OUT2"
+        ]
+      ],
+      "pulse_hi": "iPulse_1us",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": false,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 8,
+      "cycle_lo": 4,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "OUT2",
+      "seq_type": "Output",
+      "depends_on": [
+        "OUT1",
+        "OUT1"
+      ],
+      "depends_on_hi": [
+        "OUT1",
+        "OUT1"
+      ],
+      "depends_on_lo": [
+        "OUT3",
+        "IN2"
+      ],
+      "depends_on_hi_inv": {
+        "OUT1": false
+      },
+      "depends_on_lo_inv": {
+        "OUT3": true,
+        "IN2": true
+      },
+      "depends_on_hi_use": {
+        "OUT1": "hi"
+      },
+      "depends_on_lo_use": {
+        "OUT3": "self",
+        "IN2": "self"
+      },
+      "depends_on_hi_inv_groups": [
+        [
+          false,
+          false
+        ]
+      ],
+      "depends_on_lo_inv_groups": [
+        [
+          true
+        ],
+        [
+          true
+        ]
+      ],
+      "depends_on_hi_use_groups": [
+        [
+          "self",
+          "hi"
+        ]
+      ],
+      "depends_on_lo_use_groups": [
+        [
+          "self"
+        ],
+        [
+          "self"
+        ]
+      ],
+      "depends_on_hi_groups": [
+        [
+          "OUT1",
+          "OUT1"
+        ]
+      ],
+      "depends_on_lo_groups": [
+        [
+          "OUT3"
+        ],
+        [
+          "IN2"
+        ]
+      ],
+      "pulse_hi": "iPulse_1us",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": false,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 8,
+      "cycle_lo": 4,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "OUT3",
+      "seq_type": "Output",
+      "depends_on": [
+        "OUT2",
+        "OUT2"
+      ],
+      "depends_on_hi": [
+        "OUT2",
+        "OUT2"
+      ],
+      "depends_on_lo": [
+        "IN2"
+      ],
+      "depends_on_hi_inv": {
+        "OUT2": false
+      },
+      "depends_on_lo_inv": {
+        "IN2": true
+      },
+      "depends_on_hi_use": {
+        "OUT2": "self"
+      },
+      "depends_on_lo_use": {
+        "IN2": "self"
+      },
+      "depends_on_hi_inv_groups": [
+        [
+          false,
+          false
+        ]
+      ],
+      "depends_on_lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "depends_on_hi_use_groups": [
+        [
+          "hi",
+          "self"
+        ]
+      ],
+      "depends_on_lo_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "depends_on_hi_groups": [
+        [
+          "OUT2",
+          "OUT2"
+        ]
+      ],
+      "depends_on_lo_groups": [
+        [
+          "IN2"
+        ]
+      ],
+      "pulse_hi": "iPulse_1us",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": false,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 4,
+      "cycle_lo": 4,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "IN2",
+      "seq_type": "Input",
+      "depends_on": [],
+      "depends_on_hi": [],
+      "depends_on_lo": [],
+      "depends_on_hi_inv": {},
+      "depends_on_lo_inv": {},
+      "depends_on_hi_use": {},
+      "depends_on_lo_use": {},
+      "depends_on_hi_inv_groups": null,
+      "depends_on_lo_inv_groups": null,
+      "depends_on_hi_use_groups": null,
+      "depends_on_lo_use_groups": null,
+      "depends_on_hi_groups": null,
+      "depends_on_lo_groups": null,
+      "pulse_hi": "iPulse_1us",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": true,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 0,
+      "cycle_lo": 0,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    }
+  ]
+}
