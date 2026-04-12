@@ -3,11 +3,12 @@
   "clock_freq_mhz": 100.0,
   "pulse_period_ns": 100.0,
   "pulses": [
-    "iPulse_1us"
+    "iPulse_1us",
+    "iPulse_1ms"
   ],
   "rails": [
     {
-      "name": "IN1",
+      "name": "SIG_1",
       "seq_type": "Input",
       "depends_on": [],
       "depends_on_hi": [],
@@ -41,28 +42,31 @@
       "od": 0
     },
     {
-      "name": "OUT1",
+      "name": "SIG_2",
       "seq_type": "Output",
       "depends_on": [
-        "IN1"
+        "SIG_1"
       ],
       "depends_on_hi": [
-        "IN1"
+        "SIG_1"
       ],
       "depends_on_lo": [
-        "OUT2"
+        "SIG_3",
+        "SIG_4"
       ],
       "depends_on_hi_inv": {
-        "IN1": false
+        "SIG_1": false
       },
       "depends_on_lo_inv": {
-        "OUT2": true
+        "SIG_3": true,
+        "SIG_4": true
       },
       "depends_on_hi_use": {
-        "IN1": "self"
+        "SIG_1": "self"
       },
       "depends_on_lo_use": {
-        "OUT2": "self"
+        "SIG_3": "self",
+        "SIG_4": "self"
       },
       "depends_on_hi_inv_groups": [
         [
@@ -70,6 +74,9 @@
         ]
       ],
       "depends_on_lo_inv_groups": [
+        [
+          true
+        ],
         [
           true
         ]
@@ -82,19 +89,25 @@
       "depends_on_lo_use_groups": [
         [
           "self"
+        ],
+        [
+          "self"
         ]
       ],
       "depends_on_hi_groups": [
         [
-          "IN1"
+          "SIG_1"
         ]
       ],
       "depends_on_lo_groups": [
         [
-          "OUT2"
+          "SIG_3"
+        ],
+        [
+          "SIG_4"
         ]
       ],
-      "pulse_hi": "iPulse_1us",
+      "pulse_hi": "iPulse_1ms",
       "pulse_lo": "iPulse_1us",
       "pulse_force": "iPulse_1us",
       "deb_enable": false,
@@ -113,33 +126,32 @@
       "od": 0
     },
     {
-      "name": "OUT2",
+      "name": "SIG_3",
       "seq_type": "Output",
       "depends_on": [
-        "OUT1",
-        "OUT1"
+        "SIG_2",
+        "SIG_1"
       ],
       "depends_on_hi": [
-        "OUT1",
-        "OUT1"
+        "SIG_2",
+        "SIG_1"
       ],
       "depends_on_lo": [
-        "OUT3",
-        "IN2"
+        "SIG_4"
       ],
       "depends_on_hi_inv": {
-        "OUT1": false
+        "SIG_2": false,
+        "SIG_1": false
       },
       "depends_on_lo_inv": {
-        "OUT3": true,
-        "IN2": true
+        "SIG_4": true
       },
       "depends_on_hi_use": {
-        "OUT1": "hi"
+        "SIG_2": "self",
+        "SIG_1": "self"
       },
       "depends_on_lo_use": {
-        "OUT3": "self",
-        "IN2": "self"
+        "SIG_4": "self"
       },
       "depends_on_hi_inv_groups": [
         [
@@ -150,7 +162,90 @@
       "depends_on_lo_inv_groups": [
         [
           true
+        ]
+      ],
+      "depends_on_hi_use_groups": [
+        [
+          "self",
+          "self"
+        ]
+      ],
+      "depends_on_lo_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "depends_on_hi_groups": [
+        [
+          "SIG_2",
+          "SIG_1"
+        ]
+      ],
+      "depends_on_lo_groups": [
+        [
+          "SIG_4"
+        ]
+      ],
+      "pulse_hi": "iPulse_1ms",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": false,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 8,
+      "cycle_lo": 4,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "SIG_5",
+      "seq_type": "Output",
+      "depends_on": [
+        "SIG_1",
+        "SIG_2",
+        "SIG_3"
+      ],
+      "depends_on_hi": [
+        "SIG_1",
+        "SIG_2",
+        "SIG_3"
+      ],
+      "depends_on_lo": [
+        "SIG_4"
+      ],
+      "depends_on_hi_inv": {
+        "SIG_1": false,
+        "SIG_2": true,
+        "SIG_3": false
+      },
+      "depends_on_lo_inv": {
+        "SIG_4": true
+      },
+      "depends_on_hi_use": {
+        "SIG_1": "self",
+        "SIG_2": "hi",
+        "SIG_3": "self"
+      },
+      "depends_on_lo_use": {
+        "SIG_4": "self"
+      },
+      "depends_on_hi_inv_groups": [
+        [
+          false,
+          true
         ],
+        [
+          false
+        ]
+      ],
+      "depends_on_lo_inv_groups": [
         [
           true
         ]
@@ -159,31 +254,31 @@
         [
           "self",
           "hi"
+        ],
+        [
+          "self"
         ]
       ],
       "depends_on_lo_use_groups": [
-        [
-          "self"
-        ],
         [
           "self"
         ]
       ],
       "depends_on_hi_groups": [
         [
-          "OUT1",
-          "OUT1"
+          "SIG_1",
+          "SIG_2"
+        ],
+        [
+          "SIG_3"
         ]
       ],
       "depends_on_lo_groups": [
         [
-          "OUT3"
-        ],
-        [
-          "IN2"
+          "SIG_4"
         ]
       ],
-      "pulse_hi": "iPulse_1us",
+      "pulse_hi": "iPulse_1ms",
       "pulse_lo": "iPulse_1us",
       "pulse_force": "iPulse_1us",
       "deb_enable": false,
@@ -202,84 +297,7 @@
       "od": 0
     },
     {
-      "name": "OUT3",
-      "seq_type": "Output",
-      "depends_on": [
-        "OUT2",
-        "OUT2"
-      ],
-      "depends_on_hi": [
-        "OUT2",
-        "OUT2"
-      ],
-      "depends_on_lo": [
-        "IN2"
-      ],
-      "depends_on_hi_inv": {
-        "OUT2": false
-      },
-      "depends_on_lo_inv": {
-        "IN2": true
-      },
-      "depends_on_hi_use": {
-        "OUT2": "self"
-      },
-      "depends_on_lo_use": {
-        "IN2": "self"
-      },
-      "depends_on_hi_inv_groups": [
-        [
-          false,
-          false
-        ]
-      ],
-      "depends_on_lo_inv_groups": [
-        [
-          true
-        ]
-      ],
-      "depends_on_hi_use_groups": [
-        [
-          "hi",
-          "self"
-        ]
-      ],
-      "depends_on_lo_use_groups": [
-        [
-          "self"
-        ]
-      ],
-      "depends_on_hi_groups": [
-        [
-          "OUT2",
-          "OUT2"
-        ]
-      ],
-      "depends_on_lo_groups": [
-        [
-          "IN2"
-        ]
-      ],
-      "pulse_hi": "iPulse_1us",
-      "pulse_lo": "iPulse_1us",
-      "pulse_force": "iPulse_1us",
-      "deb_enable": false,
-      "deb_init": 0,
-      "deb_cycle_hi": 2,
-      "deb_cycle_lo": 2,
-      "deb_cycle_sync": 2,
-      "deb_pulse": "iPulse_1us",
-      "cycle_hi": 4,
-      "cycle_lo": 4,
-      "cycle_force": 2,
-      "recover": 3,
-      "init": 0,
-      "force_val": 0,
-      "cycle_sync": 0,
-      "od": 0
-    },
-    {
-      "name": "IN2",
+      "name": "SIG_4",
       "seq_type": "Input",
       "depends_on": [],
       "depends_on_hi": [],
@@ -297,7 +315,7 @@
       "pulse_hi": "iPulse_1us",
       "pulse_lo": "iPulse_1us",
       "pulse_force": "iPulse_1us",
-      "deb_enable": true,
+      "deb_enable": false,
       "deb_init": 0,
       "deb_cycle_hi": 2,
       "deb_cycle_lo": 2,
