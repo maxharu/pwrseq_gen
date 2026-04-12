@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
 from config_models import PowerSeqConfig, PowerRail
+from layout_engine import minimize_crossings
 
 DEP_HIGH = "__HIGH__"
 DEP_LOW = "__LOW__"
@@ -67,6 +68,8 @@ AND_GATE_W = 80
 AND_GATE_H = 40
 OR_GATE_W = 80
 OR_GATE_H = 40
+NOT_GATE_W = 40
+NOT_GATE_H = 20
 # 由欄位推算的相對偏移（AND 在左、OR 在右，generate_drawio 內動態計算 and_col_x / or_col_x）
 AND_GATE_DY = GAP               # 多個 AND 垂直間距 80pt
 # OR 閘與該行 Cell 同高，放在左側（不放到 Cell 下方）
@@ -104,9 +107,96 @@ def _topological_order_outputs(outputs: list[PowerRail], name_to_rail: dict) -> 
     return result
 
 
+def _barycenter_order_outputs(
+    outputs: list[PowerRail],
+    name_to_rail: dict,
+    valid: set[str],
+) -> list[PowerRail]:
+    """拓撲排序 + 重心法微調：依賴關係緊密的 output 盡量相鄰，減少跨行走線交叉。
+
+    1. 先做拓撲排序，確保被依賴者在前。
+    2. 對每個 output 計算「重心」= 其所有 output 類型依賴在拓撲序中的平均位置。
+    3. 在不違反拓撲約束的前提下，按重心由小到大排序。
+    4. 迭代多次收斂（經典 Sugiyama 重心啟發式）。
+    """
+    topo = _topological_order_outputs(outputs, name_to_rail)
+    if len(topo) <= 2:
+        return topo
+
+    out_names = {r.name for r in topo}
+    name_to_idx: dict[str, int] = {r.name: i for i, r in enumerate(topo)}
+
+    def _deps_of(r: PowerRail) -> list[str]:
+        return [
+            d for d in r.get_depends_on_hi_flat() + r.get_depends_on_lo_flat()
+            if d not in CONST_DEPS and d in valid and d in out_names
+        ]
+
+    order = list(topo)
+    for _ in range(4):
+        pos = {r.name: i for i, r in enumerate(order)}
+        bary: dict[str, float] = {}
+        for r in order:
+            deps = _deps_of(r)
+            if deps:
+                bary[r.name] = sum(pos[d] for d in deps) / len(deps)
+            else:
+                bary[r.name] = float(pos[r.name])
+
+        new_order = sorted(order, key=lambda r: bary[r.name])
+
+        topo_pos = {r.name: i for i, r in enumerate(new_order)}
+        violated = False
+        for r in new_order:
+            for d in _deps_of(r):
+                if topo_pos[d] > topo_pos[r.name]:
+                    violated = True
+                    break
+            if violated:
+                break
+        if violated:
+            break
+        if [r.name for r in new_order] == [r.name for r in order]:
+            break
+        order = new_order
+
+    return order
+
+
 # 走線通道 x（規則五／六：線經通道轉向、繞開元件、避免交叉與線段重疊；generate_drawio 內依 and_col_x 重算 channel_x_left）
 CHANNEL_X_LEFT = (INPUT_COL_X + INPUT_LABEL_W + GATE_COL_X) // 2
 CHANNEL_X_RIGHT = (GATE_COL_X + AND_GATE_W + CELL_START_X) // 2
+
+
+class _ChannelAllocator:
+    """為垂直走線分配不重疊的 x 通道。
+
+    每條走線以 (y_min, y_max) 表示其垂直佔用範圍。y 範圍重疊的走線
+    會被分配到不同的 x 通道（間隔 GRID pt），y 範圍不重疊的可共用同一通道。
+    """
+
+    def __init__(self, base_x: int, step: int = GRID):
+        self._base_x = base_x
+        self._step = step
+        self._channels: list[list[tuple[float, float]]] = []
+
+    def allocate(self, y_min: float, y_max: float) -> int:
+        """分配一個 x 通道給 y 範圍 [y_min, y_max]，回傳 x 座標。"""
+        if y_min > y_max:
+            y_min, y_max = y_max, y_min
+        for i, spans in enumerate(self._channels):
+            if all(y_max <= s[0] or y_min >= s[1] for s in spans):
+                spans.append((y_min, y_max))
+                return self._base_x + i * self._step
+        self._channels.append([(y_min, y_max)])
+        return self._base_x + (len(self._channels) - 1) * self._step
+
+    @property
+    def width(self) -> int:
+        """已使用的通道總寬度。"""
+        if not self._channels:
+            return 0
+        return (len(self._channels) - 1) * self._step
 
 
 def _orthogonalize_points(
@@ -216,23 +306,44 @@ def _row_height_for_output(r: PowerRail) -> int:
     return max(CELL_GROUP_H, and_stack + or_span + 16)
 
 
-def generate_drawio(config: PowerSeqConfig) -> str:
+def generate_drawio(config: PowerSeqConfig, *, optimize_layout: bool = False) -> str:
     """
     Generate Draw.io XML per node_example.xml:
     - Only output rails become nodes (Power Sequence Cell: group + edge O + inner + H_Deb + L_Deb).
     - Input rails are text labels only; edges go from cell inner to input label (H/L) or to another output cell.
+
+    optimize_layout: 啟用拓撲排序 + 重心法列排序，使依賴關係緊密的 output 相鄰，減少走線交叉。
     """
     name_to_rail = {r.name: r for r in config.rails}
     valid = set(name_to_rail.keys())
     inputs = [r for r in config.rails if r.seq_type == "input"]
     outputs_raw = [r for r in config.rails if r.seq_type == "output"]
-    # Cell 依 config 順序由上而下擺放（不改成拓撲序，方便使用者對應表格）
-    outputs = list(outputs_raw)
+    if optimize_layout:
+        outputs = _barycenter_order_outputs(outputs_raw, name_to_rail, valid)
+    else:
+        outputs = list(outputs_raw)
+
+    # 偵測是否有 inv + use_mode="hi"/"lo"（需要 NOT 閘，佔用 AND 欄左側空間）
+    _has_not_gate = False
+    for r in outputs:
+        for hl, groups in [("hi", r.get_hi_groups()), ("lo", r.get_lo_groups())]:
+            for gi, g in enumerate(groups):
+                for ii, d in enumerate(g):
+                    if d not in valid or d in CONST_DEPS:
+                        continue
+                    if name_to_rail[d].seq_type != "input":
+                        inv = r.get_hi_inv(gi, ii, d) if hl == "hi" else r.get_lo_inv(gi, ii, d)
+                        use = r.get_hi_use(gi, ii, d) if hl == "hi" else r.get_lo_use(gi, ii, d)
+                        if inv and use in ("hi", "lo"):
+                            _has_not_gate = True
 
     # 規則二：層級間距 80pt（GAP）。間隔基礎 80pt，走線多時每條加 40pt；閘↔Cell 固定 80pt
     n_ig, _, n_co = _count_edges_in_column_gaps(outputs, name_to_rail, valid)
     gap_ig = _align40(_gap_for_lines(n_ig))
-    gap_ig = max(gap_ig, _align40(GAP + AND_GATE_W))  # AND 欄在 OR 左 80pt，預留空間
+    _min_gate_width = GAP + AND_GATE_W
+    if _has_not_gate:
+        _min_gate_width += GAP + NOT_GATE_W
+    gap_ig = max(gap_ig, _align40(_min_gate_width))
     gap_gc = _align40(GAP)
     gap_co = _align40(_gap_for_lines(n_co))
     input_right = INPUT_COL_X + INPUT_LABEL_W
@@ -370,6 +481,62 @@ def generate_drawio(config: PowerSeqConfig) -> str:
         # 標籤垂直置中對齊連接點
         label_y = _align10(conn_y - INPUT_LABEL_H // 2)
         positions_in[name] = (INPUT_COL_X, label_y)
+
+    # --- Channel Assignment (Phase B) ---
+    # 為左側通道（input→gate, cell→input）和右側通道（跨行 output→gate）分配不重疊的 x
+    ch_left = _ChannelAllocator(channel_x_left, step=GRID)
+    ch_right = _ChannelAllocator(channel_x_right, step=GRID)
+    # wire key -> allocated x; key = (dep_name, rail_name, "hi"|"lo", group_index)
+    wire_channel_left: dict[tuple, int] = {}
+    wire_channel_right: dict[tuple, int] = {}
+
+    for j, r in enumerate(outputs):
+        _py = row_y_base[j]
+        hi_groups = r.get_hi_groups()
+        lo_groups = r.get_lo_groups()
+        for hl, groups in [("hi", hi_groups), ("lo", lo_groups)]:
+            for gi, group in enumerate(groups):
+                for ii, d in enumerate(group):
+                    if d not in valid or d in CONST_DEPS:
+                        continue
+                    if name_to_rail[d].seq_type == "input":
+                        lab = positions_in.get(d)
+                        if lab:
+                            lab_y = lab[1] + INPUT_LABEL_H // 2
+                            key_and = and_index_per_key.get((r.name, hl, gi))
+                            if key_and and len(group) >= 2:
+                                gy = _and_gate_center_y(key_and[0], key_and[1])
+                            elif hl == "hi":
+                                gy = _py + OR_GATE_OFFSET_HI_Y + OR_GATE_H // 2
+                            else:
+                                gy = _py + OR_GATE_OFFSET_LO_Y + OR_GATE_H // 2
+                            wkey = (d, r.name, hl, gi)
+                            wire_channel_left[wkey] = ch_left.allocate(min(lab_y, gy), max(lab_y, gy))
+                    else:
+                        src_row = output_to_row.get(d)
+                        if src_row is not None and src_row != j:
+                            src_cy = row_y_base[src_row] + CELL_GROUP_H // 2
+                            if hl == "hi":
+                                tgt_y = _py + OR_GATE_OFFSET_HI_Y + OR_GATE_H // 2
+                            else:
+                                tgt_y = _py + OR_GATE_OFFSET_LO_Y + OR_GATE_H // 2
+                            wkey = (d, r.name, hl, gi)
+                            wire_channel_right[wkey] = ch_right.allocate(min(src_cy, tgt_y), max(src_cy, tgt_y))
+
+    def _ch_left_x(dep_name: str, rail_name: str, hl: str, gi: int) -> int:
+        return wire_channel_left.get((dep_name, rail_name, hl, gi), channel_x_left)
+
+    def _ch_right_x(dep_name: str, rail_name: str, hl: str, gi: int) -> int:
+        return wire_channel_right.get((dep_name, rail_name, hl, gi), channel_x_right)
+
+    # 記錄每個 rail 的 Hi/Lo 邏輯輸出 cell id（AND/OR 閘或直連來源），
+    # 供 use_mode="hi"/"lo" 時作為出發點（而非 H_Deb/L_Deb 本身）。
+    # 邊生成迴圈依拓撲序處理，確保被依賴者的 ID 在被引用前已記錄。
+    hi_logic_out_id: dict[str, int] = {}
+    lo_logic_out_id: dict[str, int] = {}
+    # 記錄 inv=true + use_mode="hi"/"lo" 的邊，post-fix 時需插入 NOT 閘。
+    # key = edge cell id (str), value = source rail name
+    _inv_use_mode_edges: dict[str, str] = {}
 
     cell_id = 2
     out_group_id: dict[str, int] = {}
@@ -595,6 +762,11 @@ def generate_drawio(config: PowerSeqConfig) -> str:
     and_idx_by_rail: dict[str, int] = {}
     and_gate_y: dict[int, int] = {}  # AND gate id -> y 中心，供排序用
 
+    # 記錄每個 rail 的 Hi/Lo 邏輯輸出 cell id（AND/OR 閘或直連來源），
+    # 供 use_mode="hi"/"lo" 時作為出發點（而非 H_Deb/L_Deb 本身）。
+    hi_logic_out_id: dict[str, int] = {}  # rail name -> 最後一個閘 id（OR > AND > 直連來源）
+    lo_logic_out_id: dict[str, int] = {}
+
     # 3) 依賴邊：依 group 繪製；單一訊號直連 H/L，兩訊號以上經 AND 閘。規則五：走線經 waypoint 繞開元件、不重疊；Hi 綠、Lo 虛線紅。
     style_hi_to_cell = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;strokeColor=%s;" % STROKE_HI
     style_lo_to_cell = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;dashed=1;strokeColor=%s;" % STROKE_LO
@@ -602,18 +774,28 @@ def generate_drawio(config: PowerSeqConfig) -> str:
     style_lo_to_cell_left = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;dashed=1;strokeColor=%s;" % STROKE_LO
 
     def _source_id(d: str, inv: bool, is_hi: bool, use_mode: str = "self") -> int | None:
-        """依賴來源的 cell id。use_mode: 'self'=Node輸出, 'hi'=該節點iHi, 'lo'=該節點iLo"""
+        """依賴來源的 cell id。
+
+        use_mode:
+          'self' = Node 自身輸出 (inner)
+          'hi'   = 該節點 Hi 依賴邏輯的輸出（AND/OR 閘），而非 H_Deb
+          'lo'   = 該節點 Lo 依賴邏輯的輸出（AND/OR 閘），而非 L_Deb
+
+        use_mode="hi"/"lo" 時回傳 H_Deb/L_Deb 作為佔位符，
+        邊生成結束後由 post-fix pass 替換為正確的邏輯輸出 ID。
+        inv=true + use_mode="hi"/"lo" 時同樣回傳佔位符，post-fix 會插入 NOT 閘。
+        """
         if name_to_rail[d].seq_type == "input":
             return (inv_in_label_id if inv else in_label_id).get(d)
-        if inv:
+        if inv and use_mode not in ("hi", "lo"):
             return inv_out_label_id.get(d)
         gid = out_group_id.get(d)
         if gid is None:
             return out_inner_id.get(d)
         if use_mode == "hi":
-            return gid + 4
+            return gid + 4  # H_Deb placeholder, post-fix will correct (+ NOT if inv)
         if use_mode == "lo":
-            return gid + 5
+            return gid + 5  # L_Deb placeholder, post-fix will correct (+ NOT if inv)
         return out_inner_id.get(d)
 
     for r in outputs:
@@ -667,6 +849,8 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                     for i, (from_id, d, inv, _um) in enumerate(and_srcs):
                         sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs)), exit_left=_um in ("hi", "lo"))
                         cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(and_gate_id[key_hi])})
+                        if inv and _um in ("hi", "lo"):
+                            _inv_use_mode_edges[str(cell_id)] = d
                         cell_id += 1
                         geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
                         if name_to_rail[d].seq_type == "input":
@@ -674,9 +858,9 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                             if lab:
                                 gy = _py + (and_idx_by_rail[r.name] - 1) * AND_GATE_DY + AND_GATE_H // 2
                                 lab_y = lab[1] + INPUT_LABEL_H // 2
-                                _add_edge_points(geo, [(channel_x_left, lab_y), (channel_x_left, gy)], align=[False, True])
+                                _cx = _ch_left_x(d, r.name, "hi", gi)
+                                _add_edge_points(geo, [(_cx, lab_y), (_cx, gy)], align=[False, True])
                         else:
-                            # inner→AND：依 golden 原則，矩形走線 (cell_right, cy)→(cell_right, turn_y)→(and_col_x, turn_y)→(and_col_x, and_y)
                             out_name = inner_id_to_output.get(from_id)
                             if out_name:
                                 cell_x, cell_y = positions_out.get(out_name, (0, 0))
@@ -718,10 +902,11 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                     else:
                         src_row = inner_id_to_row.get(src_id)
                         tgt_row = output_to_row[r.name]
+                        _src_out = inner_id_to_output.get(src_id, "")
                         if src_row is not None and src_row != tgt_row:
+                            _crx = _ch_right_x(_src_out, r.name, "hi", 0)
                             if src_row < tgt_row:
-                                # 來源在上方：先右再下，避免「先上再下」的曲折
-                                _add_edge_points(geo, [(or_col_x + OR_GATE_W, id_to_y_center[src_id]), (channel_x_right, id_to_y_center[src_id]), (channel_x_right, _oy)], align=[False, True, True])
+                                _add_edge_points(geo, [(or_col_x + OR_GATE_W, id_to_y_center[src_id]), (_crx, id_to_y_center[src_id]), (_crx, _oy)], align=[False, True, True])
                             else:
                                 bypass_y = _align40(row_y_base[src_row] + row_heights[src_row] + GRID)
                                 _add_edge_points(geo, [(or_col_x + OR_GATE_W, id_to_y_center[src_id]), (or_col_x + OR_GATE_W, bypass_y), (or_col_x + OR_GATE_W, _oy)], align=[False, True, True])
@@ -732,6 +917,7 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                 cell_id += 1
                 geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
                 geo.text = "\n            "
+                hi_logic_out_id[r.name] = or_id
         else:
             for gi, group in enumerate(hi_groups):
                 if not group:
@@ -745,6 +931,7 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                     from_id = _source_id(d, inv_list[0], True, use_list[0])
                     if from_id is None:
                         continue
+                    hi_logic_out_id.setdefault(r.name, from_id)
                     _px, _py = positions_out.get(r.name, (cell_start_x, MARGIN))
                     _use = use_list[0]
                     if name_to_rail[d].seq_type == "input":
@@ -757,14 +944,15 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                     if name_to_rail[d].seq_type == "input":
                         label_pos = positions_in.get(d)
                         if label_pos:
-                            _add_edge_waypoint(geo, positions_out[r.name], label_pos, waypoint_x=channel_x_left, gate_right_x=or_col_x + OR_GATE_W, row_py=_py)
+                            _add_edge_waypoint(geo, positions_out[r.name], label_pos, waypoint_x=_ch_left_x(d, r.name, "hi", gi), gate_right_x=or_col_x + OR_GATE_W, row_py=_py)
                     else:
                         deb_y = _py + CELL_H_DEB_Y + CELL_H_DEB_H // 2
                         src_row = inner_id_to_row.get(from_id)
                         tgt_row = output_to_row[r.name]
                         if src_row is not None and src_row != tgt_row:
+                            _crx = _ch_right_x(d, r.name, "hi", gi)
                             if src_row < tgt_row:
-                                _add_edge_points(geo, [(or_col_x + OR_GATE_W, id_to_y_center.get(from_id, _py + 40)), (channel_x_right, id_to_y_center.get(from_id, _py + 40)), (channel_x_right, deb_y), (cell_start_x + CELL_INNER_X, deb_y)], align=[False, True, True, True])
+                                _add_edge_points(geo, [(or_col_x + OR_GATE_W, id_to_y_center.get(from_id, _py + 40)), (_crx, id_to_y_center.get(from_id, _py + 40)), (_crx, deb_y), (cell_start_x + CELL_INNER_X, deb_y)], align=[False, True, True, True])
                             else:
                                 bypass_y = _align40(row_y_base[src_row] + row_heights[src_row] + GRID)
                                 _add_edge_points(geo, [(or_col_x + OR_GATE_W, id_to_y_center.get(from_id, _py + 40)), (or_col_x + OR_GATE_W, bypass_y), (or_col_x + OR_GATE_W, deb_y), (cell_start_x + CELL_INNER_X, deb_y)], align=[False, True, True, True])
@@ -793,12 +981,14 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                         and_gate_y[aid] = _ay
                         id_to_y_center[aid] = _ay
                     and_id = and_gate_id[key_hi]
-                    and_srcs = [( _source_id(d, inv_list[i], True, use_list[i]), d, use_list[i]) for i, d in enumerate(group) if d in valid and d not in CONST_DEPS and _source_id(d, inv_list[i], True, use_list[i]) is not None]
-                    and_srcs = [(fid, d, um) for (fid, d, um) in and_srcs if fid is not None]
+                    and_srcs = [(_source_id(d, inv_list[i], True, use_list[i]), d, use_list[i], inv_list[i]) for i, d in enumerate(group) if d in valid and d not in CONST_DEPS and _source_id(d, inv_list[i], True, use_list[i]) is not None]
+                    and_srcs = [(fid, d, um, iv) for (fid, d, um, iv) in and_srcs if fid is not None]
                     and_srcs.sort(key=lambda t: id_to_y_center.get(t[0], 0))
-                    for i, (from_id, d, _um) in enumerate(and_srcs):
+                    for i, (from_id, d, _um, _iv) in enumerate(and_srcs):
                         sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs)), exit_left=_um in ("hi", "lo"))
                         cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(and_id)})
+                        if _iv and _um in ("hi", "lo"):
+                            _inv_use_mode_edges[str(cell_id)] = d
                         cell_id += 1
                         geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
                         if name_to_rail[d].seq_type == "input":
@@ -806,7 +996,8 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                             if lab:
                                 gy = _py + (and_idx_by_rail[r.name] - 1) * AND_GATE_DY + AND_GATE_H // 2
                                 lab_y = lab[1] + INPUT_LABEL_H // 2
-                                _add_edge_points(geo, [(channel_x_left, lab_y), (channel_x_left, gy)], align=[False, True])
+                                _cx = _ch_left_x(d, r.name, "hi", gi)
+                                _add_edge_points(geo, [(_cx, lab_y), (_cx, gy)], align=[False, True])
                         else:
                             out_name = inner_id_to_output.get(from_id)
                             if out_name:
@@ -821,6 +1012,7 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                     cell_id += 1
                     geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
                     geo.text = "\n            "
+                    hi_logic_out_id.setdefault(r.name, and_id)
 
         lo_groups = r.get_lo_groups()
         if len(lo_groups) >= 2:
@@ -867,6 +1059,8 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                     for i, (from_id, d, inv, _um) in enumerate(and_srcs_lo):
                         sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs_lo)), exit_left=_um in ("hi", "lo"))
                         cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(and_gate_id[key_lo])})
+                        if inv and _um in ("hi", "lo"):
+                            _inv_use_mode_edges[str(cell_id)] = d
                         cell_id += 1
                         geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
                         if name_to_rail[d].seq_type == "input":
@@ -874,7 +1068,8 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                             if lab:
                                 gy = _py + (and_idx_by_rail[r.name] - 1) * AND_GATE_DY + AND_GATE_H // 2
                                 lab_y = lab[1] + INPUT_LABEL_H // 2
-                                _add_edge_points(geo, [(channel_x_left, lab_y), (channel_x_left, gy)], align=[False, True])
+                                _cx = _ch_left_x(d, r.name, "lo", gi)
+                                _add_edge_points(geo, [(_cx, lab_y), (_cx, gy)], align=[False, True])
                         else:
                             out_name = inner_id_to_output.get(from_id)
                             if out_name:
@@ -917,9 +1112,11 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                     else:
                         src_row = inner_id_to_row.get(src_id)
                         tgt_row = output_to_row[r.name]
+                        _src_out = inner_id_to_output.get(src_id, "")
                         if src_row is not None and src_row != tgt_row:
+                            _crx = _ch_right_x(_src_out, r.name, "lo", 0)
                             if src_row < tgt_row:
-                                _add_edge_points(geo, [(or_col_x + OR_GATE_W, id_to_y_center[src_id]), (channel_x_right, id_to_y_center[src_id]), (channel_x_right, _oy)], align=[False, True, True])
+                                _add_edge_points(geo, [(or_col_x + OR_GATE_W, id_to_y_center[src_id]), (_crx, id_to_y_center[src_id]), (_crx, _oy)], align=[False, True, True])
                             else:
                                 bypass_y = _align40(row_y_base[src_row] + row_heights[src_row] + GRID)
                                 _add_edge_points(geo, [(or_col_x + OR_GATE_W, id_to_y_center[src_id]), (or_col_x + OR_GATE_W, bypass_y), (or_col_x + OR_GATE_W, _oy)], align=[False, True, True])
@@ -930,6 +1127,7 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                 cell_id += 1
                 geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
                 geo.text = "\n            "
+                lo_logic_out_id[r.name] = or_id
         else:
             for gi, group in enumerate(lo_groups):
                 if not group:
@@ -943,6 +1141,7 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                     from_id = _source_id(d, inv_list[0], False, use_list[0])
                     if from_id is None:
                         continue
+                    lo_logic_out_id.setdefault(r.name, from_id)
                     _px, _py = positions_out.get(r.name, (cell_start_x, MARGIN))
                     _use = use_list[0]
                     if name_to_rail[d].seq_type == "input":
@@ -955,14 +1154,15 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                     if name_to_rail[d].seq_type == "input":
                         label_pos = positions_in.get(d)
                         if label_pos:
-                            _add_edge_waypoint(geo, positions_out[r.name], label_pos, waypoint_x=channel_x_left, gate_right_x=or_col_x + OR_GATE_W, row_py=_py)
+                            _add_edge_waypoint(geo, positions_out[r.name], label_pos, waypoint_x=_ch_left_x(d, r.name, "lo", gi), gate_right_x=or_col_x + OR_GATE_W, row_py=_py)
                     else:
                         deb_y = _py + CELL_L_DEB_Y + CELL_L_DEB_H // 2
                         src_row = inner_id_to_row.get(from_id)
                         tgt_row = output_to_row[r.name]
                         if src_row is not None and src_row != tgt_row:
+                            _crx = _ch_right_x(d, r.name, "lo", gi)
                             if src_row < tgt_row:
-                                _add_edge_points(geo, [(or_col_x + OR_GATE_W, id_to_y_center.get(from_id, _py + 40)), (channel_x_right, id_to_y_center.get(from_id, _py + 40)), (channel_x_right, deb_y), (cell_start_x + CELL_INNER_X, deb_y)], align=[False, True, True, True])
+                                _add_edge_points(geo, [(or_col_x + OR_GATE_W, id_to_y_center.get(from_id, _py + 40)), (_crx, id_to_y_center.get(from_id, _py + 40)), (_crx, deb_y), (cell_start_x + CELL_INNER_X, deb_y)], align=[False, True, True, True])
                             else:
                                 bypass_y = _align40(row_y_base[src_row] + row_heights[src_row] + GRID)
                                 _add_edge_points(geo, [(or_col_x + OR_GATE_W, id_to_y_center.get(from_id, _py + 40)), (or_col_x + OR_GATE_W, bypass_y), (or_col_x + OR_GATE_W, deb_y), (cell_start_x + CELL_INNER_X, deb_y)], align=[False, True, True, True])
@@ -991,12 +1191,14 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                         and_gate_y[aid] = _ay
                         id_to_y_center[aid] = _ay
                     and_id = and_gate_id[key_lo]
-                    and_srcs_lo2 = [( _source_id(d, inv_list[i], False, use_list[i]), d, use_list[i]) for i, d in enumerate(group) if d in valid and d not in CONST_DEPS and _source_id(d, inv_list[i], False, use_list[i]) is not None]
-                    and_srcs_lo2 = [(fid, d, um) for (fid, d, um) in and_srcs_lo2 if fid is not None]
+                    and_srcs_lo2 = [(_source_id(d, inv_list[i], False, use_list[i]), d, use_list[i], inv_list[i]) for i, d in enumerate(group) if d in valid and d not in CONST_DEPS and _source_id(d, inv_list[i], False, use_list[i]) is not None]
+                    and_srcs_lo2 = [(fid, d, um, iv) for (fid, d, um, iv) in and_srcs_lo2 if fid is not None]
                     and_srcs_lo2.sort(key=lambda t: id_to_y_center.get(t[0], 0))
-                    for i, (from_id, d, _um) in enumerate(and_srcs_lo2):
+                    for i, (from_id, d, _um, _iv) in enumerate(and_srcs_lo2):
                         sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs_lo2)), exit_left=_um in ("hi", "lo"))
                         cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(and_id)})
+                        if _iv and _um in ("hi", "lo"):
+                            _inv_use_mode_edges[str(cell_id)] = d
                         cell_id += 1
                         geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
                         if name_to_rail[d].seq_type == "input":
@@ -1004,7 +1206,8 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                             if lab:
                                 gy = _py + (and_idx_by_rail[r.name] - 1) * AND_GATE_DY + AND_GATE_H // 2
                                 lab_y = lab[1] + INPUT_LABEL_H // 2
-                                _add_edge_points(geo, [(channel_x_left, lab_y), (channel_x_left, gy)], align=[False, True])
+                                _cx = _ch_left_x(d, r.name, "lo", gi)
+                                _add_edge_points(geo, [(_cx, lab_y), (_cx, gy)], align=[False, True])
                         else:
                             out_name = inner_id_to_output.get(from_id)
                             if out_name:
@@ -1019,6 +1222,158 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                     cell_id += 1
                     geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
                     geo.text = "\n            "
+                    lo_logic_out_id.setdefault(r.name, and_id)
+
+    # --- Post-fix: 將 use_mode="hi"/"lo" 的邊 source 從 H_Deb/L_Deb 替換為邏輯輸出 ---
+    # 同時修正 style：exitX=0（H_Deb 左側）→ exitX=1（AND/OR 閘右側輸出端）
+    # 若 inv=true，在邏輯輸出與目標之間插入 NOT 閘。
+    style_not_gate = "verticalLabelPosition=bottom;shadow=0;dashed=0;align=center;html=1;verticalAlign=top;shape=mxgraph.electrical.logic_gates.inverter_2"
+    style_not_to_target = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=%s;entryDx=0;entryDy=0;entryPerimeter=0;strokeColor=%s;endArrow=classic;endFill=1;"
+    style_logic_to_not = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;strokeColor=%s;endArrow=classic;endFill=1;"
+
+    h_deb_ids: dict[int, str] = {}  # H_Deb cell id -> rail name
+    l_deb_ids: dict[int, str] = {}  # L_Deb cell id -> rail name
+    for rname, gid in out_group_id.items():
+        h_deb_ids[gid + 4] = rname
+        l_deb_ids[gid + 5] = rname
+
+    edges_to_fix = []
+    for edge_cell in root.iter("mxCell"):
+        if edge_cell.get("edge") != "1":
+            continue
+        src_str = edge_cell.get("source")
+        if src_str is None:
+            continue
+        src_id = int(src_str)
+        sty = edge_cell.get("style", "")
+        if "exitX=0" not in sty:
+            continue
+        real_id = None
+        rname = None
+        if src_id in h_deb_ids:
+            rname = h_deb_ids[src_id]
+            real_id = hi_logic_out_id.get(rname)
+        elif src_id in l_deb_ids:
+            rname = l_deb_ids[src_id]
+            real_id = lo_logic_out_id.get(rname)
+        if real_id is not None and real_id != src_id:
+            edges_to_fix.append((edge_cell, real_id, rname))
+
+    # 收集所有已放置的元件 bbox，用於避免 NOT 閘重疊
+    _placed_boxes: list[tuple[int, int, int, int]] = []  # (x, y, x2, y2)
+    for v_cell in root.iter("mxCell"):
+        if v_cell.get("vertex") != "1":
+            continue
+        geo = v_cell.find("mxGeometry")
+        if geo is None:
+            continue
+        vx = geo.get("x")
+        vy = geo.get("y")
+        vw = geo.get("width")
+        vh = geo.get("height")
+        if vx is None or vy is None:
+            continue
+        try:
+            bx, by = int(float(vx)), int(float(vy))
+            bw = int(float(vw)) if vw else 0
+            bh = int(float(vh)) if vh else 0
+            # 子元件（parent != "1"）的座標是相對於 group 的，需加上 group 座標
+            pid = v_cell.get("parent", "1")
+            if pid != "1":
+                pg = root.find(f".//mxCell[@id='{pid}']")
+                if pg is not None:
+                    pgeo = pg.find("mxGeometry")
+                    if pgeo is not None:
+                        bx += int(float(pgeo.get("x", "0")))
+                        by += int(float(pgeo.get("y", "0")))
+            _placed_boxes.append((bx, by, bx + bw, by + bh))
+        except (ValueError, TypeError):
+            pass
+
+    def _find_non_overlapping_y(nx: int, ny_preferred: int, nw: int, nh: int) -> int:
+        """從 ny_preferred 開始，往下找到不與任何已放置元件重疊的 y（對齊 GRID）。"""
+        ny = _align40(ny_preferred)
+        for _ in range(50):
+            box = (nx, ny, nx + nw, ny + nh)
+            overlap = False
+            for b in _placed_boxes:
+                if not (box[2] <= b[0] or b[2] <= box[0] or box[3] <= b[1] or b[3] <= box[1]):
+                    overlap = True
+                    break
+            if not overlap:
+                return ny
+            ny += GRID
+        return ny
+
+    for edge_cell, real_id, rname in edges_to_fix:
+        edge_id_str = edge_cell.get("id")
+        needs_not = edge_id_str in _inv_use_mode_edges
+        tgt_str = edge_cell.get("target")
+        sty = edge_cell.get("style", "")
+        entry_y_match = "0.5"
+        for frag in sty.split(";"):
+            if frag.startswith("entryY="):
+                entry_y_match = frag.split("=")[1]
+
+        if needs_not:
+            dep_rail = _inv_use_mode_edges[edge_id_str]
+            tgt_cell = root.find(f".//mxCell[@id='{tgt_str}']")
+            tgt_geo = tgt_cell.find("mxGeometry") if tgt_cell is not None else None
+            real_cell = root.find(f".//mxCell[@id='{real_id}']")
+            real_geo = real_cell.find("mxGeometry") if real_cell is not None else None
+
+            # NOT 閘 x：放在目標 AND/OR 閘輸入端的左側，留出輸入訊號空間
+            if tgt_geo is not None:
+                tx = int(float(tgt_geo.get("x", "0")))
+                ty = int(float(tgt_geo.get("y", "0")))
+                th = int(float(tgt_geo.get("height", str(AND_GATE_H))))
+                entry_frac = float(entry_y_match)
+                tgt_pin_y = ty + int(th * entry_frac)
+                not_x = _align40(tx - GAP - NOT_GATE_W)
+                not_y_preferred = _align40(tgt_pin_y - NOT_GATE_H // 2)
+            else:
+                not_x = _align40(and_col_x - GAP - NOT_GATE_W)
+                not_y_preferred = _align40(MARGIN)
+
+            not_y = _find_non_overlapping_y(not_x, not_y_preferred, NOT_GATE_W, NOT_GATE_H)
+
+            not_id = cell_id
+            cell_id += 1
+            not_cell = ET.SubElement(root, "mxCell", {
+                "id": str(not_id), "parent": "1", "style": style_not_gate, "value": "", "vertex": "1"
+            })
+            ET.SubElement(not_cell, "mxGeometry", {
+                "height": str(NOT_GATE_H), "width": str(NOT_GATE_W),
+                "x": str(not_x), "y": str(not_y), "as": "geometry"
+            })
+            _placed_boxes.append((not_x, not_y, not_x + NOT_GATE_W, not_y + NOT_GATE_H))
+
+            # 邊 1: 邏輯輸出 → NOT
+            e1 = ET.SubElement(root, "mxCell", {
+                "id": str(cell_id), "style": style_logic_to_not % STROKE_DEFAULT,
+                "edge": "1", "parent": "1", "source": str(real_id), "target": str(not_id)
+            })
+            cell_id += 1
+            ET.SubElement(e1, "mxGeometry", {"relative": "1", "as": "geometry"})
+
+            # 邊 2: NOT → 目標閘（沿用原邊的 entryY）
+            e2_sty = style_not_to_target % (entry_y_match, STROKE_DEFAULT)
+            e2 = ET.SubElement(root, "mxCell", {
+                "id": str(cell_id), "style": e2_sty,
+                "edge": "1", "parent": "1", "source": str(not_id), "target": tgt_str
+            })
+            cell_id += 1
+            ET.SubElement(e2, "mxGeometry", {"relative": "1", "as": "geometry"})
+
+            root.remove(edge_cell)
+        else:
+            edge_cell.set("source", str(real_id))
+            sty = sty.replace("exitX=0", "exitX=1")
+            sty = sty.replace("exitY=0.25", "exitY=0.5").replace("exitY=0.75", "exitY=0.5")
+            edge_cell.set("style", sty)
+
+    if optimize_layout:
+        minimize_crossings(root, grid=GRID)
 
     rough = ET.tostring(mxfile, encoding="unicode", default_namespace="")
     dom = minidom.parseString(rough)

@@ -1,6 +1,6 @@
 """
 Power Sequence Config GUI
-Per 需求表: seq_type output | input, Hi/Lo Dep, Debounce, Pulse
+Per 需求表: seq_type output | input, Hi/Lo Cond, Debounce, Pulse
 """
 import json
 import tkinter as tk
@@ -116,7 +116,7 @@ class RailEditorFrame(ctk.CTkFrame):
 
         row3a = ctk.CTkFrame(self.row3, fg_color="transparent")
         row3a.pack(fill="x", pady=2)
-        ctk.CTkLabel(row3a, text="Hi Dep:", width=80).pack(side="left", padx=(0, 4), anchor="n")
+        ctk.CTkLabel(row3a, text="Hi Cond:", width=80).pack(side="left", padx=(0, 4), anchor="n")
         ctk.CTkLabel(row3a, text="(group &, groups |)", font=("", 10), text_color="gray").pack(side="left", padx=(0, 8))
         ctk.CTkButton(row3a, text="+ Add Group", width=70, command=self._add_hi_group).pack(side="left", padx=(0, 8))
         self.hi_groups_frame = ctk.CTkFrame(row3a, fg_color="transparent")
@@ -125,7 +125,7 @@ class RailEditorFrame(ctk.CTkFrame):
 
         row3b = ctk.CTkFrame(self.row3, fg_color="transparent")
         row3b.pack(fill="x", pady=2)
-        ctk.CTkLabel(row3b, text="Lo Dep:", width=80).pack(side="left", padx=(0, 4), anchor="n")
+        ctk.CTkLabel(row3b, text="Lo Cond:", width=80).pack(side="left", padx=(0, 4), anchor="n")
         ctk.CTkLabel(row3b, text="(group &, groups |)", font=("", 10), text_color="gray").pack(side="left", padx=(0, 8))
         ctk.CTkButton(row3b, text="+ Add Group", width=70, command=self._add_lo_group).pack(side="left", padx=(0, 8))
         self.lo_groups_frame = ctk.CTkFrame(row3b, fg_color="transparent")
@@ -191,14 +191,14 @@ class RailEditorFrame(ctk.CTkFrame):
         combo.pack(side="left", padx=(0, 8))
         if combo_vals:
             combo.set(combo_vals[0])
-        ctk.CTkButton(header, text="+ Add", width=60, command=lambda: self._add_hi_dep_to_group(group_idx)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(header, text="+ Add", width=60, command=lambda: self._add_hi_cond_to_group(group_idx)).pack(side="left", padx=(0, 8))
         ctk.CTkButton(header, text="Del Group", width=60, command=lambda: self._remove_hi_group(group_idx)).pack(side="left")
         list_frame = ctk.CTkFrame(frame, fg_color="transparent")
         self.hi_group_frames.append({"frame": frame, "combo": combo, "list_frame": list_frame})
         for ii, name in enumerate(group):
-            self._add_hi_dep_row_to_group(group_idx, name, item_idx=ii)
+            self._add_hi_cond_row_to_group(group_idx, name, item_idx=ii)
 
-    def _add_hi_dep_row_to_group(self, group_idx: int, name: str, item_idx: int | None = None):
+    def _add_hi_cond_row_to_group(self, group_idx: int, name: str, item_idx: int | None = None):
         if item_idx is None:
             item_idx = len(self.dep_hi_groups[group_idx]) - 1
         key = (group_idx, item_idx)
@@ -206,7 +206,7 @@ class RailEditorFrame(ctk.CTkFrame):
         is_const = name in (DEP_HIGH, DEP_LOW)
         dep_rail = self.name_to_rail.get(name)
         can_use_hi_lo = dep_rail is not None and dep_rail.has_pseqcell
-        _use_display = {"self": "Node", "hi": "Hi Dep", "lo": "Lo Dep"}
+        _use_display = {"self": "Node", "hi": "Hi Cond", "lo": "Lo Cond"}
         inv_val = False if is_const else self.rail.get_hi_inv(group_idx, item_idx, name)
         use_val = self.rail.get_hi_use(group_idx, item_idx, name)
         self.dep_hi_inv_vars[key] = ctk.BooleanVar(value=inv_val)
@@ -221,20 +221,20 @@ class RailEditorFrame(ctk.CTkFrame):
         if not is_const:
             ctk.CTkCheckBox(row, text="Inv", variable=self.dep_hi_inv_vars[key], width=50).pack(side="left", padx=(0, 4))
         if can_use_hi_lo:
-            ctk.CTkComboBox(row, values=["Node", "Hi Dep", "Lo Dep"], variable=self.dep_hi_use_vars[key], width=90).pack(side="left", padx=(0, 4))
+            ctk.CTkComboBox(row, values=["Node", "Hi Cond", "Lo Cond"], variable=self.dep_hi_use_vars[key], width=90).pack(side="left", padx=(0, 4))
         captured_key = key
-        ctk.CTkButton(row, text="Del", width=50, command=lambda: self._remove_hi_dep_by_key(captured_key)).pack(side="left")
+        ctk.CTkButton(row, text="Del", width=50, command=lambda: self._remove_hi_cond_by_key(captured_key)).pack(side="left")
 
-    def _add_hi_dep_to_group(self, group_idx: int):
+    def _add_hi_cond_to_group(self, group_idx: int):
         gf = self.hi_group_frames[group_idx]
         sel = gf["combo"].get()
         if not sel:
             return
         dep_key = DEP_HIGH if sel == "High" else (DEP_LOW if sel == "Low" else sel)
         self.dep_hi_groups[group_idx].append(dep_key)
-        self._add_hi_dep_row_to_group(group_idx, dep_key)
+        self._add_hi_cond_row_to_group(group_idx, dep_key)
 
-    def _remove_hi_dep_by_key(self, key: tuple[int, int]):
+    def _remove_hi_cond_by_key(self, key: tuple[int, int]):
         group_idx, item_idx = key
         if group_idx < len(self.dep_hi_groups) and item_idx < len(self.dep_hi_groups[group_idx]):
             del self.dep_hi_groups[group_idx][item_idx]
@@ -276,14 +276,14 @@ class RailEditorFrame(ctk.CTkFrame):
         combo.pack(side="left", padx=(0, 8))
         if combo_vals:
             combo.set(combo_vals[0])
-        ctk.CTkButton(header, text="+ Add", width=60, command=lambda: self._add_lo_dep_to_group(group_idx)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(header, text="+ Add", width=60, command=lambda: self._add_lo_cond_to_group(group_idx)).pack(side="left", padx=(0, 8))
         ctk.CTkButton(header, text="Del Group", width=60, command=lambda: self._remove_lo_group(group_idx)).pack(side="left")
         list_frame = ctk.CTkFrame(frame, fg_color="transparent")
         self.lo_group_frames.append({"frame": frame, "combo": combo, "list_frame": list_frame})
         for ii, name in enumerate(group):
-            self._add_lo_dep_row_to_group(group_idx, name, item_idx=ii)
+            self._add_lo_cond_row_to_group(group_idx, name, item_idx=ii)
 
-    def _add_lo_dep_row_to_group(self, group_idx: int, name: str, item_idx: int | None = None):
+    def _add_lo_cond_row_to_group(self, group_idx: int, name: str, item_idx: int | None = None):
         if item_idx is None:
             item_idx = len(self.dep_lo_groups[group_idx]) - 1
         key = (group_idx, item_idx)
@@ -291,7 +291,7 @@ class RailEditorFrame(ctk.CTkFrame):
         is_const = name in (DEP_HIGH, DEP_LOW)
         dep_rail = self.name_to_rail.get(name)
         can_use_hi_lo = dep_rail is not None and dep_rail.has_pseqcell
-        _use_display = {"self": "Node", "hi": "Hi Dep", "lo": "Lo Dep"}
+        _use_display = {"self": "Node", "hi": "Hi Cond", "lo": "Lo Cond"}
         inv_val = False if is_const else self.rail.get_lo_inv(group_idx, item_idx, name)
         use_val = self.rail.get_lo_use(group_idx, item_idx, name)
         self.dep_lo_inv_vars[key] = ctk.BooleanVar(value=inv_val)
@@ -306,20 +306,20 @@ class RailEditorFrame(ctk.CTkFrame):
         if not is_const:
             ctk.CTkCheckBox(row, text="Inv", variable=self.dep_lo_inv_vars[key], width=50).pack(side="left", padx=(0, 4))
         if can_use_hi_lo:
-            ctk.CTkComboBox(row, values=["Node", "Hi Dep", "Lo Dep"], variable=self.dep_lo_use_vars[key], width=90).pack(side="left", padx=(0, 4))
+            ctk.CTkComboBox(row, values=["Node", "Hi Cond", "Lo Cond"], variable=self.dep_lo_use_vars[key], width=90).pack(side="left", padx=(0, 4))
         captured_key = key
-        ctk.CTkButton(row, text="Del", width=50, command=lambda: self._remove_lo_dep_by_key(captured_key)).pack(side="left")
+        ctk.CTkButton(row, text="Del", width=50, command=lambda: self._remove_lo_cond_by_key(captured_key)).pack(side="left")
 
-    def _add_lo_dep_to_group(self, group_idx: int):
+    def _add_lo_cond_to_group(self, group_idx: int):
         gf = self.lo_group_frames[group_idx]
         sel = gf["combo"].get()
         if not sel:
             return
         dep_key = DEP_HIGH if sel == "High" else (DEP_LOW if sel == "Low" else sel)
         self.dep_lo_groups[group_idx].append(dep_key)
-        self._add_lo_dep_row_to_group(group_idx, dep_key)
+        self._add_lo_cond_row_to_group(group_idx, dep_key)
 
-    def _remove_lo_dep_by_key(self, key: tuple[int, int]):
+    def _remove_lo_cond_by_key(self, key: tuple[int, int]):
         group_idx, item_idx = key
         if group_idx < len(self.dep_lo_groups) and item_idx < len(self.dep_lo_groups[group_idx]):
             del self.dep_lo_groups[group_idx][item_idx]
@@ -400,7 +400,7 @@ class RailEditorFrame(ctk.CTkFrame):
         groups_lo = [list(g) for g in self.dep_lo_groups if g]
         flat_hi = [d for g in groups_hi for d in g]
         flat_lo = [d for g in groups_lo for d in g]
-        _use_reverse = {"Node": "self", "Hi Dep": "hi", "Lo Dep": "lo"}
+        _use_reverse = {"Node": "self", "Hi Cond": "hi", "Lo Cond": "lo"}
         depends_on_hi_inv = {}
         depends_on_hi_use = {}
         hi_inv_groups = []
@@ -563,6 +563,8 @@ class PowerSeqGUI(ctk.CTk):
         ctk.CTkButton(toolbar, text="Save JSON", command=self._save_json, width=100).pack(side="left", padx=(0, 8))
         ctk.CTkButton(toolbar, text="Generate Verilog", command=self._generate_verilog, width=120).pack(side="left", padx=(0, 8))
         ctk.CTkButton(toolbar, text="Export Draw.io", command=self._export_drawio, width=110).pack(side="left", padx=(0, 8))
+        self._optimize_layout_var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(toolbar, text="Optimize Layout", variable=self._optimize_layout_var, width=130).pack(side="left", padx=(0, 8))
         self._topmost = False
         self._pin_btn = ctk.CTkButton(toolbar, text="\U0001F4CC", width=36, command=self._toggle_topmost)
         self._pin_btn.pack(side="right")
@@ -868,7 +870,7 @@ class PowerSeqGUI(ctk.CTk):
         )
         if path:
             try:
-                xml = generate_drawio(config)
+                xml = generate_drawio(config, optimize_layout=self._optimize_layout_var.get())
                 open(path, "w", encoding="utf-8").write(xml)
                 messagebox.showinfo("Saved", f"Saved: {path}\nOpen in Draw.io (diagrams.net) to view.")
             except Exception as e:

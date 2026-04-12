@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from layout_engine import layout_drawio, align_vertices_to_grid, align_edge_waypoints_to_grid
+from layout_engine import layout_drawio, align_vertices_to_grid, align_edge_waypoints_to_grid, minimize_crossings
 
 
 SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
@@ -79,6 +79,62 @@ class TestLayoutDrawio:
         out = layout_drawio(SAMPLE_XML, align_to_grid=40, nudge_overlap=False)
         root = ET.fromstring(out)
         assert root.tag == "mxfile"
+
+    def test_reduce_crossings_returns_valid_xml(self):
+        out = layout_drawio(SAMPLE_XML, align_to_grid=40, reduce_crossings=True)
+        root = ET.fromstring(out)
+        assert root.tag == "mxfile"
+
+
+CROSSING_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" version="29.6.1">
+  <diagram name="Test" id="test">
+    <mxGraphModel dx="120" dy="40" grid="1" gridSize="10">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="10" parent="1" edge="1" source="2" target="3">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="300" y="40" />
+              <mxPoint x="300" y="200" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="11" parent="1" edge="1" source="4" target="5">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="340" y="100" />
+              <mxPoint x="340" y="160" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
+"""
+
+
+class TestMinimizeCrossings:
+    """minimize_crossings 單元測試"""
+
+    def test_no_crash_on_empty(self):
+        root = ET.fromstring(SAMPLE_XML)
+        result = minimize_crossings(root, grid=40)
+        assert result >= 0
+
+    def test_no_crash_on_crossing_xml(self):
+        root = ET.fromstring(CROSSING_XML)
+        result = minimize_crossings(root, grid=40)
+        assert result >= 0
+
+    def test_returns_valid_xml_after_minimize(self):
+        root = ET.fromstring(CROSSING_XML)
+        minimize_crossings(root, grid=40)
+        out = ET.tostring(root, encoding="unicode")
+        reparsed = ET.fromstring(out)
+        assert reparsed.tag == "mxfile"
 
 
 class TestModuleFunctions:

@@ -284,7 +284,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
                     group_exprs.append(f"({' & '.join(terms)})")
                 lines.append(f"    assign {s}_hi = {' || '.join(group_exprs)};")
             else:
-                lines.append(f"    assign {s}_hi = 1'b1;  // No Hi dependency")
+                lines.append(f"    assign {s}_hi = 1'b1;  // No Hi condition")
             lo_groups = r.get_lo_groups()
             if lo_groups:
                 group_exprs = []
@@ -300,7 +300,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
                     group_exprs.append(f"({' & '.join(terms)})")
                 lines.append(f"    assign {s}_lo = {' || '.join(group_exprs)};")
             else:
-                lines.append(f"    assign {s}_lo = 1'b0;  // No Lo dependency (F-DEP-06)")
+                lines.append(f"    assign {s}_lo = 1'b0;  // No Lo condition (F-DEP-06)")
         lines.append("")
 
         # PSEQCELL instances (per-rail pulse selection)

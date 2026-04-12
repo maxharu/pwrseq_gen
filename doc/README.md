@@ -7,7 +7,8 @@
 - **GUI 配置**：使用 CustomTkinter 建立依賴關係與參數，Accordion 折疊式編輯器
 - **驗證**：循環依賴、名稱重複、依賴存在性檢查
 - **Verilog 產生**：自動產生 PSEQCELL / DEB 實例與 iHi/iLo 連接
-- **Draw.io 匯出**：產生依賴關係圖 XML，可於 diagrams.net 開啟檢視
+- **Draw.io 匯出**：產生依賴關係圖 XML，可於 diagrams.net 開啟檢視；支援佈局優化（拓撲排序、走線通道分配、交叉最小化）
+- **CLI 批次轉換**：`json2drawio.bat` 不開 GUI 即可將 JSON 轉 Draw.io XML
 - **匯出格式**：JSON 設定檔、Verilog 模組、Draw.io XML
 
 ## 安裝
@@ -39,7 +40,7 @@ python src/main.py
 
 1. **新增 Node**：點擊「+ Add」加入 Sequence Node
 2. **編輯**：點擊標題列展開 Node，設定名稱、類型、CYCLE、依賴關係
-3. **依賴**：在 Hi Dep / Lo Dep 中加入依賴項，支援分組（組內 AND、組間 OR）、反相、Hi Dep / Lo Dep use mode
+3. **依賴**：在 Hi Cond / Lo Cond 中加入依賴項，支援分組（組內 AND、組間 OR）、反相、Hi Cond / Lo Cond use mode
 4. **儲存/載入**：以 JSON 格式儲存或載入設定
 5. **產生 Verilog**：驗證通過後產生 Verilog 檔
 6. **匯出 Draw.io**：產生依賴關係圖 XML，以 diagrams.net 開啟
@@ -56,7 +57,8 @@ pwrseq_gen/
 │   ├── validator.py         # 驗證邏輯
 │   ├── verilog_generator.py # Verilog 產生器
 │   ├── drawio_export.py     # Draw.io XML 匯出
-│   ├── layout_engine.py     # Draw.io 版面引擎
+│   ├── layout_engine.py     # Draw.io 版面引擎（格點對齊、交叉最小化）
+│   ├── json2drawio.py       # CLI 批次轉換工具
 │   ├── build.py             # PyInstaller 打包腳本
 │   └── PSEQCELL.v           # 單階 power sequence 控制元件
 ├── tests/                   # 自動化測試
@@ -67,6 +69,7 @@ pwrseq_gen/
 │   ├── 需求表.md
 │   └── DRAWIO_RULES.md
 ├── run.bat                  # 啟動腳本
+├── json2drawio.bat          # CLI 批次轉換（JSON → Draw.io XML）
 ├── build.bat                # 打包腳本
 ├── git_push.bat             # Git 推送腳本
 ├── requirements.txt         # 執行依賴
@@ -80,7 +83,7 @@ pwrseq_gen/
 
 ## 依賴邏輯
 
-- **iHi**：無依賴接 `1'b1`；有依賴時支援 Node / Hi Dep / Lo Dep use mode
+- **iHi**：無依賴接 `1'b1`；有依賴時支援 Node / Hi Cond / Lo Cond use mode
 - **iLo**：無依賴接 `1'b0`；有依賴時依設定
 - **分組**：Group 內 AND、Group 間 OR
 - **Timing**：支援 "High" 選項，Verilog 中轉換為 `1'b1`
