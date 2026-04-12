@@ -407,11 +407,12 @@ def generate_drawio(config: PowerSeqConfig) -> str:
     style_and_gate = "verticalLabelPosition=bottom;shadow=0;dashed=0;align=center;html=1;verticalAlign=top;shape=mxgraph.electrical.logic_gates.logic_gate;operation=and;"
     style_or_gate = "verticalLabelPosition=bottom;shadow=0;dashed=0;align=center;html=1;verticalAlign=top;shape=mxgraph.electrical.logic_gates.logic_gate;operation=or;"
     # 邏輯閘左側輸入 pin：2 輸入用 0.25/0.75，3+ 輸入均分 (對齊 mxgraph logic_gate)
-    def _style_edge_to_gate_entry(entry_y: float) -> str:
+    def _style_edge_to_gate_entry(entry_y: float, exit_left: bool = False) -> str:
+        ex = 0 if exit_left else 1
         return (
             "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;"
-            "exitX=1;exitY=0.5;exitDx=0;exitDy=0;"
-            "entryX=0;entryY=%.2f;entryDx=0;entryDy=0;entryPerimeter=0;strokeColor=%s;endArrow=classic;endFill=1;" % (entry_y, STROKE_DEFAULT)
+            "exitX=%d;exitY=0.5;exitDx=0;exitDy=0;"
+            "entryX=0;entryY=%.2f;entryDx=0;entryDy=0;entryPerimeter=0;strokeColor=%s;endArrow=classic;endFill=1;" % (ex, entry_y, STROKE_DEFAULT)
         )
     def _gate_entry_y(index: int, total: int) -> float:
         if total <= 1:
@@ -597,14 +598,23 @@ def generate_drawio(config: PowerSeqConfig) -> str:
     # 3) 依賴邊：依 group 繪製；單一訊號直連 H/L，兩訊號以上經 AND 閘。規則五：走線經 waypoint 繞開元件、不重疊；Hi 綠、Lo 虛線紅。
     style_hi_to_cell = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;strokeColor=%s;" % STROKE_HI
     style_lo_to_cell = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;dashed=1;strokeColor=%s;" % STROKE_LO
+    style_hi_to_cell_left = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;strokeColor=%s;" % STROKE_HI
+    style_lo_to_cell_left = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;dashed=1;strokeColor=%s;" % STROKE_LO
 
-    def _source_id(d: str, inv: bool, is_hi: bool) -> int | None:
-        """依賴來源的 cell id。輸出節點用 inner id，使線起點與 O 線相同（exitX=1, exitY=0.5）。"""
+    def _source_id(d: str, inv: bool, is_hi: bool, use_mode: str = "self") -> int | None:
+        """依賴來源的 cell id。use_mode: 'self'=Node輸出, 'hi'=該節點iHi, 'lo'=該節點iLo"""
         if name_to_rail[d].seq_type == "input":
             return (inv_in_label_id if inv else in_label_id).get(d)
         if inv:
             return inv_out_label_id.get(d)
-        return out_inner_id.get(d)  # 輸出→他節點：用 inner，與 O 線起點相同
+        gid = out_group_id.get(d)
+        if gid is None:
+            return out_inner_id.get(d)
+        if use_mode == "hi":
+            return gid + 4
+        if use_mode == "lo":
+            return gid + 5
+        return out_inner_id.get(d)
 
     for r in outputs:
         to_gid = out_group_id.get(r.name)
@@ -618,11 +628,12 @@ def generate_drawio(config: PowerSeqConfig) -> str:
             for gi, group in enumerate(hi_groups):
                 if not group:
                     continue
-                inv_list = [r.depends_on_hi_inv.get(d, False) for d in group]
+                inv_list = [r.get_hi_inv(gi, ii, d) for ii, d in enumerate(group)]
+                use_list = [r.get_hi_use(gi, ii, d) for ii, d in enumerate(group)]
                 if len(group) == 1:
                     d = group[0]
                     if d in valid and d not in CONST_DEPS:
-                        from_id = _source_id(d, inv_list[0], True)
+                        from_id = _source_id(d, inv_list[0], True, use_list[0])
                         if from_id is not None:
                             group_outputs_hi.append(from_id)
                 else:
@@ -645,17 +656,16 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                         _ay = _py + (and_idx_by_rail[r.name] - 1) * AND_GATE_DY + AND_GATE_H // 2
                         and_gate_y[aid] = _ay
                         id_to_y_center[aid] = _ay
-                    # 依來源垂直位置排序，由上而下接 AND 的 input pin，減少走線交叉
                     and_srcs = []
                     for i, d in enumerate(group):
                         if d not in valid or d in CONST_DEPS:
                             continue
-                        from_id = _source_id(d, inv_list[i], True)
+                        from_id = _source_id(d, inv_list[i], True, use_list[i])
                         if from_id is not None:
-                            and_srcs.append((from_id, d, inv_list[i]))
+                            and_srcs.append((from_id, d, inv_list[i], use_list[i]))
                     and_srcs.sort(key=lambda t: id_to_y_center.get(t[0], 0))
-                    for i, (from_id, d, inv) in enumerate(and_srcs):
-                        sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs)))
+                    for i, (from_id, d, inv, _um) in enumerate(and_srcs):
+                        sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs)), exit_left=_um in ("hi", "lo"))
                         cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(and_gate_id[key_hi])})
                         cell_id += 1
                         geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
@@ -726,19 +736,22 @@ def generate_drawio(config: PowerSeqConfig) -> str:
             for gi, group in enumerate(hi_groups):
                 if not group:
                     continue
-                inv_list = [r.depends_on_hi_inv.get(d, False) for d in group]
+                inv_list = [r.get_hi_inv(gi, ii, d) for ii, d in enumerate(group)]
+                use_list = [r.get_hi_use(gi, ii, d) for ii, d in enumerate(group)]
                 if len(group) == 1:
                     d = group[0]
                     if d not in valid or d in CONST_DEPS:
                         continue
-                    from_id = _source_id(d, inv_list[0], True)
+                    from_id = _source_id(d, inv_list[0], True, use_list[0])
                     if from_id is None:
                         continue
                     _px, _py = positions_out.get(r.name, (cell_start_x, MARGIN))
+                    _use = use_list[0]
                     if name_to_rail[d].seq_type == "input":
                         cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": style_edge_h_to_label, "edge": "1", "parent": "1", "source": str(to_inner), "target": str(from_id)})
                     else:
-                        cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": style_hi_to_cell, "edge": "1", "parent": "1", "source": str(from_id), "target": str(to_gid + 4)})
+                        _sty = style_hi_to_cell_left if _use in ("hi", "lo") else style_hi_to_cell
+                        cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": _sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(to_gid + 4)})
                     cell_id += 1
                     geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
                     if name_to_rail[d].seq_type == "input":
@@ -780,11 +793,11 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                         and_gate_y[aid] = _ay
                         id_to_y_center[aid] = _ay
                     and_id = and_gate_id[key_hi]
-                    and_srcs = [( _source_id(d, inv_list[i], True), d) for i, d in enumerate(group) if d in valid and d not in CONST_DEPS and _source_id(d, inv_list[i], True) is not None]
-                    and_srcs = [(fid, d) for (fid, d) in and_srcs if fid is not None]
+                    and_srcs = [( _source_id(d, inv_list[i], True, use_list[i]), d, use_list[i]) for i, d in enumerate(group) if d in valid and d not in CONST_DEPS and _source_id(d, inv_list[i], True, use_list[i]) is not None]
+                    and_srcs = [(fid, d, um) for (fid, d, um) in and_srcs if fid is not None]
                     and_srcs.sort(key=lambda t: id_to_y_center.get(t[0], 0))
-                    for i, (from_id, d) in enumerate(and_srcs):
-                        sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs)))
+                    for i, (from_id, d, _um) in enumerate(and_srcs):
+                        sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs)), exit_left=_um in ("hi", "lo"))
                         cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(and_id)})
                         cell_id += 1
                         geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
@@ -815,11 +828,12 @@ def generate_drawio(config: PowerSeqConfig) -> str:
             for gi, group in enumerate(lo_groups):
                 if not group:
                     continue
-                inv_list = [r.depends_on_lo_inv.get(d, False) for d in group]
+                inv_list = [r.get_lo_inv(gi, ii, d) for ii, d in enumerate(group)]
+                use_list = [r.get_lo_use(gi, ii, d) for ii, d in enumerate(group)]
                 if len(group) == 1:
                     d = group[0]
                     if d in valid and d not in CONST_DEPS:
-                        from_id = _source_id(d, inv_list[0], False)
+                        from_id = _source_id(d, inv_list[0], False, use_list[0])
                         if from_id is not None:
                             group_outputs_lo.append(from_id)
                 else:
@@ -846,12 +860,12 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                     for i, d in enumerate(group):
                         if d not in valid or d in CONST_DEPS:
                             continue
-                        from_id = _source_id(d, inv_list[i], False)
+                        from_id = _source_id(d, inv_list[i], False, use_list[i])
                         if from_id is not None:
-                            and_srcs_lo.append((from_id, d, inv_list[i]))
+                            and_srcs_lo.append((from_id, d, inv_list[i], use_list[i]))
                     and_srcs_lo.sort(key=lambda t: id_to_y_center.get(t[0], 0))
-                    for i, (from_id, d, inv) in enumerate(and_srcs_lo):
-                        sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs_lo)))
+                    for i, (from_id, d, inv, _um) in enumerate(and_srcs_lo):
+                        sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs_lo)), exit_left=_um in ("hi", "lo"))
                         cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(and_gate_id[key_lo])})
                         cell_id += 1
                         geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
@@ -920,19 +934,22 @@ def generate_drawio(config: PowerSeqConfig) -> str:
             for gi, group in enumerate(lo_groups):
                 if not group:
                     continue
-                inv_list = [r.depends_on_lo_inv.get(d, False) for d in group]
+                inv_list = [r.get_lo_inv(gi, ii, d) for ii, d in enumerate(group)]
+                use_list = [r.get_lo_use(gi, ii, d) for ii, d in enumerate(group)]
                 if len(group) == 1:
                     d = group[0]
                     if d not in valid or d in CONST_DEPS:
                         continue
-                    from_id = _source_id(d, inv_list[0], False)
+                    from_id = _source_id(d, inv_list[0], False, use_list[0])
                     if from_id is None:
                         continue
                     _px, _py = positions_out.get(r.name, (cell_start_x, MARGIN))
+                    _use = use_list[0]
                     if name_to_rail[d].seq_type == "input":
                         cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": style_edge_l_to_label, "edge": "1", "parent": "1", "source": str(to_inner), "target": str(from_id)})
                     else:
-                        cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": style_lo_to_cell, "edge": "1", "parent": "1", "source": str(from_id), "target": str(to_gid + 5)})
+                        _sty = style_lo_to_cell_left if _use in ("hi", "lo") else style_lo_to_cell
+                        cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": _sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(to_gid + 5)})
                     cell_id += 1
                     geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
                     if name_to_rail[d].seq_type == "input":
@@ -974,11 +991,11 @@ def generate_drawio(config: PowerSeqConfig) -> str:
                         and_gate_y[aid] = _ay
                         id_to_y_center[aid] = _ay
                     and_id = and_gate_id[key_lo]
-                    and_srcs_lo2 = [( _source_id(d, inv_list[i], False), d) for i, d in enumerate(group) if d in valid and d not in CONST_DEPS and _source_id(d, inv_list[i], False) is not None]
-                    and_srcs_lo2 = [(fid, d) for (fid, d) in and_srcs_lo2 if fid is not None]
+                    and_srcs_lo2 = [( _source_id(d, inv_list[i], False, use_list[i]), d, use_list[i]) for i, d in enumerate(group) if d in valid and d not in CONST_DEPS and _source_id(d, inv_list[i], False, use_list[i]) is not None]
+                    and_srcs_lo2 = [(fid, d, um) for (fid, d, um) in and_srcs_lo2 if fid is not None]
                     and_srcs_lo2.sort(key=lambda t: id_to_y_center.get(t[0], 0))
-                    for i, (from_id, d) in enumerate(and_srcs_lo2):
-                        sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs_lo2)))
+                    for i, (from_id, d, _um) in enumerate(and_srcs_lo2):
+                        sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs_lo2)), exit_left=_um in ("hi", "lo"))
                         cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(and_id)})
                         cell_id += 1
                         geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})

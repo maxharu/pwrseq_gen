@@ -16,16 +16,20 @@ class PowerRail:
     depends_on: list[str] = field(default_factory=list)  # 舊版相容，對應 depends_on_hi
     depends_on_hi: list[str] = field(default_factory=list)  # iHi 依賴
     depends_on_lo: list[str] = field(default_factory=list)  # iLo 依賴（空則 wLo=1）
-    depends_on_hi_inv: dict[str, bool] = field(default_factory=dict)  # dep_name -> 是否反相
+    depends_on_hi_inv: dict[str, bool] = field(default_factory=dict)  # dep_name -> 是否反相 (flat fallback)
     depends_on_lo_inv: dict[str, bool] = field(default_factory=dict)
-    depends_on_hi_use: dict[str, str] = field(default_factory=dict)  # dep_name -> "self"|"hi"|"lo" (F-DEP-07)
+    depends_on_hi_use: dict[str, str] = field(default_factory=dict)  # dep_name -> "self"|"hi"|"lo" (flat fallback)
     depends_on_lo_use: dict[str, str] = field(default_factory=dict)
+    depends_on_hi_inv_groups: list[list[bool]] = field(default_factory=list)  # per-group per-item inv
+    depends_on_lo_inv_groups: list[list[bool]] = field(default_factory=list)
+    depends_on_hi_use_groups: list[list[str]] = field(default_factory=list)  # per-group per-item use
+    depends_on_lo_use_groups: list[list[str]] = field(default_factory=list)
     depends_on_hi_groups: list[list[str]] = field(default_factory=list)  # F-DEP-08: group 內 &，group 間 |
     depends_on_lo_groups: list[list[str]] = field(default_factory=list)
     pulse_hi: str = "iPulse_1us"  # Hi 週期使用的 pulse（單一訊號）
     pulse_lo: str = "iPulse_1us"  # Lo 週期使用的 pulse
     pulse_force: str = "iPulse_1us"  # Force 使用的 pulse
-    deb_enable: bool = False  # input 專用：是否啟用 Debounce
+    deb_enable: bool = True  # input 專用：是否啟用 Debounce
     deb_init: int = 0  # DEB INIT
     deb_cycle_hi: int = 2  # DEB CYCLE_HI
     deb_cycle_lo: int = 2  # DEB CYCLE_LO
@@ -56,6 +60,38 @@ class PowerRail:
         if self.depends_on_lo_groups:
             return self.depends_on_lo_groups
         return [self.depends_on_lo] if self.depends_on_lo else []
+
+    def get_hi_inv(self, group_idx: int, item_idx: int, name: str) -> bool:
+        if self.depends_on_hi_inv_groups:
+            try:
+                return self.depends_on_hi_inv_groups[group_idx][item_idx]
+            except IndexError:
+                pass
+        return self.depends_on_hi_inv.get(name, False)
+
+    def get_lo_inv(self, group_idx: int, item_idx: int, name: str) -> bool:
+        if self.depends_on_lo_inv_groups:
+            try:
+                return self.depends_on_lo_inv_groups[group_idx][item_idx]
+            except IndexError:
+                pass
+        return self.depends_on_lo_inv.get(name, False)
+
+    def get_hi_use(self, group_idx: int, item_idx: int, name: str) -> str:
+        if self.depends_on_hi_use_groups:
+            try:
+                return self.depends_on_hi_use_groups[group_idx][item_idx]
+            except IndexError:
+                pass
+        return self.depends_on_hi_use.get(name, "self")
+
+    def get_lo_use(self, group_idx: int, item_idx: int, name: str) -> str:
+        if self.depends_on_lo_use_groups:
+            try:
+                return self.depends_on_lo_use_groups[group_idx][item_idx]
+            except IndexError:
+                pass
+        return self.depends_on_lo_use.get(name, "self")
 
     def get_depends_on_hi_flat(self) -> list[str]:
         """取得 Hi 依賴扁平列表（供驗證、拓撲用）"""
@@ -95,6 +131,10 @@ class PowerSeqConfig:
                     "depends_on_lo_inv": r.depends_on_lo_inv,
                     "depends_on_hi_use": r.depends_on_hi_use,
                     "depends_on_lo_use": r.depends_on_lo_use,
+                    "depends_on_hi_inv_groups": r.depends_on_hi_inv_groups if r.depends_on_hi_inv_groups else None,
+                    "depends_on_lo_inv_groups": r.depends_on_lo_inv_groups if r.depends_on_lo_inv_groups else None,
+                    "depends_on_hi_use_groups": r.depends_on_hi_use_groups if r.depends_on_hi_use_groups else None,
+                    "depends_on_lo_use_groups": r.depends_on_lo_use_groups if r.depends_on_lo_use_groups else None,
                     "depends_on_hi_groups": r.depends_on_hi_groups if r.depends_on_hi_groups else None,
                     "depends_on_lo_groups": r.depends_on_lo_groups if r.depends_on_lo_groups else None,
                     "pulse_hi": r.pulse_hi,
@@ -146,6 +186,10 @@ class PowerSeqConfig:
                     depends_on_lo_inv=r.get("depends_on_lo_inv", {}),
                     depends_on_hi_use=r.get("depends_on_hi_use", {}),
                     depends_on_lo_use=r.get("depends_on_lo_use", {}),
+                    depends_on_hi_inv_groups=r.get("depends_on_hi_inv_groups") or [],
+                    depends_on_lo_inv_groups=r.get("depends_on_lo_inv_groups") or [],
+                    depends_on_hi_use_groups=r.get("depends_on_hi_use_groups") or [],
+                    depends_on_lo_use_groups=r.get("depends_on_lo_use_groups") or [],
                     depends_on_hi_groups=r.get("depends_on_hi_groups") or [],
                     depends_on_lo_groups=r.get("depends_on_lo_groups") or [],
                     pulse_hi=r.get("pulse_hi", "iPulse_1us"),

@@ -79,7 +79,9 @@ def _port_name(name: str, prefix: str) -> str:
 def _pulse_signal(pulse_name: str) -> str:
     """取得 pulse 的 Verilog 訊號名稱。每個 pulse 為單一訊號，無 _Hi/_Lo/_Force 後綴。"""
     if pulse_name == "default" or not pulse_name:
-        return "iPulse_1us"  # 預設 pulse
+        return "iPulse_1us"
+    if pulse_name == "High":
+        return "1'b1"
     return _verilog_safe_name(pulse_name)
 
 
@@ -201,9 +203,10 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
         pulse_sigs = []
         for p in pulses:
             sig = _pulse_signal(p)
-            if sig not in seen:
-                seen.add(sig)
-                pulse_sigs.append(sig)
+            if sig.startswith("1'b") or sig in seen:
+                continue
+            seen.add(sig)
+            pulse_sigs.append(sig)
         if pulse_sigs:
             lines.append("    input  " + ", ".join(pulse_sigs) + ",")
     # Ports 依節點順序 (config.rails)：input 用 iXXX，output 用 oXXX
@@ -269,14 +272,14 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
             hi_groups = r.get_hi_groups()
             if hi_groups:
                 group_exprs = []
-                for group in hi_groups:
+                for gi, group in enumerate(hi_groups):
                     terms = [
                         _dep_expr(
                             d, name_to_rail,
-                            r.depends_on_hi_inv.get(d, False),
-                            r.depends_on_hi_use.get(d, "self"),
+                            r.get_hi_inv(gi, ii, d),
+                            r.get_hi_use(gi, ii, d),
                         )
-                        for d in group
+                        for ii, d in enumerate(group)
                     ]
                     group_exprs.append(f"({' & '.join(terms)})")
                 lines.append(f"    assign {s}_hi = {' || '.join(group_exprs)};")
@@ -285,14 +288,14 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
             lo_groups = r.get_lo_groups()
             if lo_groups:
                 group_exprs = []
-                for group in lo_groups:
+                for gi, group in enumerate(lo_groups):
                     terms = [
                         _dep_expr(
                             d, name_to_rail,
-                            r.depends_on_lo_inv.get(d, False),
-                            r.depends_on_lo_use.get(d, "self"),
+                            r.get_lo_inv(gi, ii, d),
+                            r.get_lo_use(gi, ii, d),
                         )
-                        for d in group
+                        for ii, d in enumerate(group)
                     ]
                     group_exprs.append(f"({' & '.join(terms)})")
                 lines.append(f"    assign {s}_lo = {' || '.join(group_exprs)};")
