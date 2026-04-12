@@ -83,10 +83,11 @@ pwrseq_gen/
 - **iHi**：無依賴接 `1'b1`；有依賴時支援 Node / Hi Dep / Lo Dep use mode
 - **iLo**：無依賴接 `1'b0`；有依賴時依設定
 - **分組**：Group 內 AND、Group 間 OR
-- **Pulse**：支援 "High" 選項，Verilog 中轉換為 `1'b1`
+- **Timing**：支援 "High" 選項，Verilog 中轉換為 `1'b1`
 
 ## 注意事項
 
-- 產生的 Verilog 需與 `PSEQCELL.v` 一起編譯
+- 產生的 Verilog 需與 `PSEQCELL.v和 DEB.v` 一起編譯
 - `iPulse` 訊號由 IO 輸入，需由外部提供
 - Draw.io XML 以 [diagrams.net](https://app.diagrams.net) 開啟
+
