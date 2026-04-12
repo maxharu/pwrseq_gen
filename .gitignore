@@ -1,0 +1,17 @@
+# Large files
+*.mp4
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# pytest
+.pytest_cache/
+
+# PyInstaller
+*.spec
+dist/
+build/
+v1.1/dist/
+v1.1/build/

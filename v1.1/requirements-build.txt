@@ -1,0 +1,2 @@
+# 打包 Windows EXE 所需套件（在 requirements.txt 之外額外安裝）
+pyinstaller>=6.0.0

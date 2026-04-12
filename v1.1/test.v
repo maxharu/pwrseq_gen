@@ -1,0 +1,98 @@
+`timescale 1ns / 1ps
+////////////////////////////////////////////////////////////////////////////////
+// Module                : test                                               //
+// Author                : pwrseq_gen (Auto-generated)                        //
+// Date Simulation Tested:                                                    //
+//                                                                            //
+// Function Description  :                                                    //
+//   Power Sequence. output: oXXX, input: iXXX.                               //
+//   iHi from depends_on (output: out, input: in). iLo default 1'b0.          //
+// Change Log            :                                                    //
+//   Auto-generated.                                                           //
+////////////////////////////////////////////////////////////////////////////////
+`ifndef TEST_V
+`define TEST_V
+
+////////////////////////////////////////////////////////////////////////////////
+// Define                                                                     //
+////////////////////////////////////////////////////////////////////////////////
+//`define DEFINE_NAME    0
+
+////////////////////////////////////////////////////////////////////////////////
+// Library Include                                                            //
+////////////////////////////////////////////////////////////////////////////////
+//`include "PSEQCELL.v"
+
+////////////////////////////////////////////////////////////////////////////////
+// Module Declare                                                             //
+////////////////////////////////////////////////////////////////////////////////
+module test
+////////////////////////////////////////////////////////////////////////////////
+// Parameter Declare                                                          //
+////////////////////////////////////////////////////////////////////////////////
+#(
+    // No parameters
+)
+////////////////////////////////////////////////////////////////////////////////
+// Input/Output Port Declare                                                  //
+////////////////////////////////////////////////////////////////////////////////
+(
+    input  iRst,
+    input  iClk_Core,
+    input  iPulse_1us, iPulse_1ms,
+    input  iSIG_1,
+    output oSIG_2,
+    output oSIG_3,
+    input  iSIG_4,
+    input  iForce  // Optional: tie to 0 if not used
+);
+
+////////////////////////////////////////////////////////////////////////////////
+// Function Include                                                           //
+////////////////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////////////////////////
+// Local Parameter Declare                                                    //
+////////////////////////////////////////////////////////////////////////////////
+// None
+
+////////////////////////////////////////////////////////////////////////////////
+// Internal Signal Declare                                                    //
+////////////////////////////////////////////////////////////////////////////////
+wire sig_3;
+wire sig_2;
+wire sig_1_deb;
+
+// Condition signals (iHi, iLo) for PSEQCELL
+wire sig_3_hi;
+wire sig_3_lo;
+wire sig_2_hi;
+wire sig_2_lo;
+
+////////////////////////////////////////////////////////////////////////////////
+// Task Define                                                                //
+////////////////////////////////////////////////////////////////////////////////
+// None
+
+////////////////////////////////////////////////////////////////////////////////
+// Design                                                                     //
+////////////////////////////////////////////////////////////////////////////////
+///// Instance /////////////////////////////////////////////////////////////////
+    DEB #(.WIDTH(1), .INIT(0), .CYCLE_SYNC(2), .CYCLE_HI(2), .CYCLE_LO(2)) u_deb_sig_1 (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Sample(iPulse_1us), .i(iSIG_1), .o(sig_1_deb));
+
+    assign sig_3_hi = (sig_2 & sig_1_deb);
+    assign sig_3_lo = (~(iSIG_4));
+    assign sig_2_hi = (sig_1_deb);
+    assign sig_2_lo = (~(sig_3)) || (~(iSIG_4));
+
+    PSEQCELL #(.INIT(0), .WIDTH(1), .CYCLE_HI(8), .CYCLE_LO(4), .CYCLE_FORCE(2), .OD(0)) u_sig_3 (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Hi(iPulse_1ms), .iPulse_Lo(iPulse_1us), .iPulse_Force(iPulse_1us), .iHi(sig_3_hi), .iLo(sig_3_lo), .iForce(iForce), .o(sig_3));
+    PSEQCELL #(.INIT(0), .WIDTH(1), .CYCLE_HI(8), .CYCLE_LO(4), .CYCLE_FORCE(2), .OD(0)) u_sig_2 (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Hi(iPulse_1ms), .iPulse_Lo(iPulse_1us), .iPulse_Force(iPulse_1us), .iHi(sig_2_hi), .iLo(sig_2_lo), .iForce(iForce), .o(sig_2));
+///// Always Block /////////////////////////////////////////////////////////////
+    // None
+
+///// Continuous Assignment ////////////////////////////////////////////////////
+    assign oSIG_3 = sig_3;
+    assign oSIG_2 = sig_2;
+
+endmodule //test
+`endif  //TEST_V

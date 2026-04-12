@@ -1,0 +1,68 @@
+{
+  "module_name": "PWRSEQ_TOP",
+  "clock_freq_mhz": 100.0,
+  "pulse_period_ns": 100.0,
+  "rails": [
+    {
+      "name": "SIG_1",
+      "seq_type": "Input",
+      "depends_on": [],
+      "depends_on_hi": [],
+      "depends_on_lo": [],
+      "depends_on_hi_inv": {},
+      "depends_on_lo_inv": {},
+      "cycle_hi": 0,
+      "cycle_lo": 0,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "SIG_2",
+      "seq_type": "Output",
+      "depends_on": [
+        "SIG_1"
+      ],
+      "depends_on_hi": [
+        "SIG_1"
+      ],
+      "depends_on_lo": [
+        "SIG_3"
+      ],
+      "depends_on_hi_inv": {
+        "SIG_1": false
+      },
+      "depends_on_lo_inv": {
+        "SIG_3": true
+      },
+      "cycle_hi": 8,
+      "cycle_lo": 4,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "SIG_3",
+      "seq_type": "Input",
+      "depends_on": [],
+      "depends_on_hi": [],
+      "depends_on_lo": [],
+      "depends_on_hi_inv": {},
+      "depends_on_lo_inv": {},
+      "cycle_hi": 0,
+      "cycle_lo": 0,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    }
+  ]
+}
