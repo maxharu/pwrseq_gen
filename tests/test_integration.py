@@ -4,7 +4,7 @@ import os
 import sys
 import xml.etree.ElementTree as ET
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 import pytest
 from config_models import PowerSeqConfig
@@ -14,13 +14,14 @@ from drawio_export import generate_drawio
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 
 
 class TestLoadSampleConfigs:
     """載入專案內 JSON 設定檔"""
 
     def test_load_sample_config(self):
-        path = os.path.join(PROJECT_ROOT, "sample_config.json")
+        path = os.path.join(OUTPUT_DIR, "sample_config.json")
         if not os.path.exists(path):
             pytest.skip("sample_config.json not found")
         with open(path, encoding="utf-8") as f:
@@ -31,7 +32,7 @@ class TestLoadSampleConfigs:
         assert ok, "sample_config should be valid"
 
     def test_load_debug_config(self):
-        path = os.path.join(PROJECT_ROOT, "debug.json")
+        path = os.path.join(OUTPUT_DIR, "debug.json")
         if not os.path.exists(path):
             pytest.skip("debug.json not found")
         with open(path, encoding="utf-8") as f:
@@ -42,7 +43,7 @@ class TestLoadSampleConfigs:
         assert ok, f"debug.json should be valid: {errs}"
 
     def test_load_test_deb_config(self):
-        path = os.path.join(PROJECT_ROOT, "test_deb.json")
+        path = os.path.join(OUTPUT_DIR, "test_deb.json")
         if not os.path.exists(path):
             pytest.skip("test_deb.json not found")
         with open(path, encoding="utf-8") as f:
@@ -56,7 +57,7 @@ class TestFullPipeline:
     """完整流程：JSON -> Config -> Validate -> Verilog"""
 
     def test_sample_config_to_verilog(self):
-        path = os.path.join(PROJECT_ROOT, "sample_config.json")
+        path = os.path.join(OUTPUT_DIR, "sample_config.json")
         if not os.path.exists(path):
             pytest.skip("sample_config.json not found")
         with open(path, encoding="utf-8") as f:
@@ -70,7 +71,7 @@ class TestFullPipeline:
         assert "endmodule" in out
 
     def test_debug_config_to_verilog(self):
-        path = os.path.join(PROJECT_ROOT, "debug.json")
+        path = os.path.join(OUTPUT_DIR, "debug.json")
         if not os.path.exists(path):
             pytest.skip("debug.json not found")
         with open(path, encoding="utf-8") as f:
@@ -87,8 +88,8 @@ class TestFullPipeline:
 
     def test_debug_config_to_drawio_matches_golden_structure(self):
         """用 debug.json 產生 Draw.io，與 debug_golden.xml 比對：有 waypoints 的邊 (source,target) 一致"""
-        json_path = os.path.join(PROJECT_ROOT, "debug.json")
-        golden_path = os.path.join(PROJECT_ROOT, "debug_golden.xml")
+        json_path = os.path.join(OUTPUT_DIR, "debug.json")
+        golden_path = os.path.join(OUTPUT_DIR, "debug_golden.xml")
         if not os.path.exists(json_path) or not os.path.exists(golden_path):
             pytest.skip("debug.json or debug_golden.xml not found")
         with open(json_path, encoding="utf-8") as f:

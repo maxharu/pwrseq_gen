@@ -23,7 +23,7 @@ python -c "import PyInstaller" 2>nul || (
 )
 
 echo 開始打包...
-python build.py
+python src\build.py
 
 echo.
 pause

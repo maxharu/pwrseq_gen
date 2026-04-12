@@ -23,7 +23,7 @@ if errorlevel 1 (
 )
 
 echo 啟動 Power Sequence Generator...
-python main.py
+python src\main.py
 if errorlevel 1 (
     echo.
     echo [ERROR] 程式異常結束 (exit code: %errorlevel%)

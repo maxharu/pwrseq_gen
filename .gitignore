@@ -13,5 +13,3 @@ __pycache__/
 *.spec
 dist/
 build/
-v1.1/dist/
-v1.1/build/
