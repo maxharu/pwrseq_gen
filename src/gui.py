@@ -101,18 +101,25 @@ class RailEditorFrame(ctk.CTkFrame):
         self.row3 = ctk.CTkFrame(self, fg_color="transparent")
         self.dep_hi_groups = [list(g) for g in self.rail.get_hi_groups()] if self.rail.get_hi_groups() else [[]]
         self.dep_lo_groups = [list(g) for g in self.rail.get_lo_groups()] if self.rail.get_lo_groups() else [[]]
+        self.dep_force_groups = [list(g) for g in self.rail.get_force_groups()] if self.rail.get_force_groups() else [[]]
         if not self.dep_hi_groups:
             self.dep_hi_groups = [[]]
         if not self.dep_lo_groups:
             self.dep_lo_groups = [[]]
+        if not self.dep_force_groups:
+            self.dep_force_groups = [[]]
         self.dep_hi_inv_vars = {}
         self.dep_lo_inv_vars = {}
+        self.dep_force_inv_vars = {}
         self.dep_hi_use_vars = {}
         self.dep_lo_use_vars = {}
+        self.dep_force_use_vars = {}
         self.dep_hi_rows = {}
         self.dep_lo_rows = {}
+        self.dep_force_rows = {}
         self.hi_group_frames = []
         self.lo_group_frames = []
+        self.force_group_frames = []
 
         row3a = ctk.CTkFrame(self.row3, fg_color="transparent")
         row3a.pack(fill="x", pady=2)
@@ -131,6 +138,15 @@ class RailEditorFrame(ctk.CTkFrame):
         self.lo_groups_frame = ctk.CTkFrame(row3b, fg_color="transparent")
         self.lo_groups_frame.pack(fill="x", pady=(4, 0))
         self._rebuild_lo_groups_ui()
+
+        row3c = ctk.CTkFrame(self.row3, fg_color="transparent")
+        row3c.pack(fill="x", pady=2)
+        ctk.CTkLabel(row3c, text="Force Cond:", width=80).pack(side="left", padx=(0, 4), anchor="n")
+        ctk.CTkLabel(row3c, text="(group &, groups |)", font=("", 10), text_color="gray").pack(side="left", padx=(0, 8))
+        ctk.CTkButton(row3c, text="+ Add Group", width=70, command=self._add_force_group).pack(side="left", padx=(0, 8))
+        self.force_groups_frame = ctk.CTkFrame(row3c, fg_color="transparent")
+        self.force_groups_frame.pack(fill="x", pady=(4, 0))
+        self._rebuild_force_groups_ui()
 
         self.row_deb = ctk.CTkFrame(self, fg_color="transparent")
         self.row_deb.pack(fill="x", pady=2)
@@ -339,6 +355,91 @@ class RailEditorFrame(ctk.CTkFrame):
         self.dep_lo_groups.append([])
         self._rebuild_lo_groups_ui()
 
+    def _rebuild_force_groups_ui(self):
+        for w in self.force_groups_frame.winfo_children():
+            w.destroy()
+        self.force_group_frames.clear()
+        self.dep_force_inv_vars.clear()
+        self.dep_force_use_vars.clear()
+        self.dep_force_rows.clear()
+        for gi, group in enumerate(self.dep_force_groups):
+            self._add_force_group_ui(gi)
+
+    def _add_force_group_ui(self, group_idx: int):
+        group = self.dep_force_groups[group_idx]
+        frame = ctk.CTkFrame(self.force_groups_frame, fg_color=("gray95", "gray20"), corner_radius=4)
+        frame.pack(fill="x", pady=2, padx=(20, 0))
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.pack(fill="x", padx=4, pady=2)
+        ctk.CTkLabel(header, text=f"Group {group_idx + 1}", width=50).pack(side="left", padx=(0, 8))
+        combo_vals = self._get_dep_combo_values()
+        combo = ctk.CTkComboBox(header, values=combo_vals, width=120)
+        combo.pack(side="left", padx=(0, 8))
+        if combo_vals:
+            combo.set(combo_vals[0])
+        ctk.CTkButton(header, text="+ Add", width=60, command=lambda: self._add_force_cond_to_group(group_idx)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(header, text="Del Group", width=60, command=lambda: self._remove_force_group(group_idx)).pack(side="left")
+        list_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        self.force_group_frames.append({"frame": frame, "combo": combo, "list_frame": list_frame})
+        for ii, name in enumerate(group):
+            self._add_force_cond_row_to_group(group_idx, name, item_idx=ii)
+
+    def _add_force_cond_row_to_group(self, group_idx: int, name: str, item_idx: int | None = None):
+        if item_idx is None:
+            item_idx = len(self.dep_force_groups[group_idx]) - 1
+        key = (group_idx, item_idx)
+        display_name = "High" if name == DEP_HIGH else ("Low" if name == DEP_LOW else name)
+        is_const = name in (DEP_HIGH, DEP_LOW)
+        dep_rail = self.name_to_rail.get(name)
+        can_use_hi_lo = dep_rail is not None and dep_rail.has_pseqcell
+        _use_display = {"self": "Node", "hi": "Hi Cond", "lo": "Lo Cond"}
+        inv_val = False if is_const else self.rail.get_force_inv(group_idx, item_idx, name)
+        use_val = self.rail.get_force_use(group_idx, item_idx, name)
+        self.dep_force_inv_vars[key] = ctk.BooleanVar(value=inv_val)
+        self.dep_force_use_vars[key] = ctk.StringVar(value=_use_display.get(use_val, "Node"))
+        list_frame = self.force_group_frames[group_idx]["list_frame"]
+        if not list_frame.winfo_ismapped():
+            list_frame.pack(fill="x", padx=4, pady=(0, 2))
+        row = ctk.CTkFrame(list_frame, fg_color="transparent")
+        row.pack(fill="x", pady=1)
+        self.dep_force_rows[key] = row
+        ctk.CTkLabel(row, text=display_name, width=100).pack(side="left", padx=(0, 4))
+        if not is_const:
+            ctk.CTkCheckBox(row, text="Inv", variable=self.dep_force_inv_vars[key], width=50).pack(side="left", padx=(0, 4))
+        if can_use_hi_lo:
+            ctk.CTkComboBox(row, values=["Node", "Hi Cond", "Lo Cond"], variable=self.dep_force_use_vars[key], width=90).pack(side="left", padx=(0, 4))
+        captured_key = key
+        ctk.CTkButton(row, text="Del", width=50, command=lambda: self._remove_force_cond_by_key(captured_key)).pack(side="left")
+
+    def _add_force_cond_to_group(self, group_idx: int):
+        gf = self.force_group_frames[group_idx]
+        sel = gf["combo"].get()
+        if not sel:
+            return
+        dep_key = DEP_HIGH if sel == "High" else (DEP_LOW if sel == "Low" else sel)
+        self.dep_force_groups[group_idx].append(dep_key)
+        self._add_force_cond_row_to_group(group_idx, dep_key)
+
+    def _remove_force_cond_by_key(self, key: tuple[int, int]):
+        group_idx, item_idx = key
+        if group_idx < len(self.dep_force_groups) and item_idx < len(self.dep_force_groups[group_idx]):
+            del self.dep_force_groups[group_idx][item_idx]
+            self.dep_force_inv_vars.pop(key, None)
+            self.dep_force_use_vars.pop(key, None)
+            if key in self.dep_force_rows:
+                self.dep_force_rows[key].destroy()
+                del self.dep_force_rows[key]
+            self._rebuild_force_groups_ui()
+
+    def _remove_force_group(self, group_idx: int):
+        if group_idx < len(self.dep_force_groups):
+            del self.dep_force_groups[group_idx]
+            self._rebuild_force_groups_ui()
+
+    def _add_force_group(self):
+        self.dep_force_groups.append([])
+        self._rebuild_force_groups_ui()
+
     def _on_apply_changes(self):
         if self.on_apply_changes:
             old_name = self.rail.name
@@ -363,12 +464,16 @@ class RailEditorFrame(ctk.CTkFrame):
             self._on_deb_toggle()
             self.dep_hi_groups = [[]]
             self.dep_lo_groups = [[]]
+            self.dep_force_groups = [[]]
             self.dep_hi_inv_vars.clear()
             self.dep_lo_inv_vars.clear()
+            self.dep_force_inv_vars.clear()
             self.dep_hi_use_vars.clear()
             self.dep_lo_use_vars.clear()
+            self.dep_force_use_vars.clear()
             self.dep_hi_rows.clear()
             self.dep_lo_rows.clear()
+            self.dep_force_rows.clear()
         else:
             self.row2.pack(fill="x", pady=2)
             self.row2b.pack(fill="x", pady=2)
@@ -385,6 +490,11 @@ class RailEditorFrame(ctk.CTkFrame):
                 if not self.dep_lo_groups:
                     self.dep_lo_groups = [[]]
                 self._rebuild_lo_groups_ui()
+            if not self.dep_force_groups or self.dep_force_groups == [[]]:
+                self.dep_force_groups = [list(g) for g in self.rail.get_force_groups()] if self.rail.get_force_groups() else [[]]
+                if not self.dep_force_groups:
+                    self.dep_force_groups = [[]]
+                self._rebuild_force_groups_ui()
 
     def get_rail(self) -> PowerRail:
         rail_name = self.entry_name.get().strip()
@@ -398,8 +508,10 @@ class RailEditorFrame(ctk.CTkFrame):
             cycle_lo = self.rail.cycle_lo
         groups_hi = [list(g) for g in self.dep_hi_groups if g]
         groups_lo = [list(g) for g in self.dep_lo_groups if g]
+        groups_force = [list(g) for g in self.dep_force_groups if g]
         flat_hi = [d for g in groups_hi for d in g]
         flat_lo = [d for g in groups_lo for d in g]
+        flat_force = [d for g in groups_force for d in g]
         _use_reverse = {"Node": "self", "Hi Cond": "hi", "Lo Cond": "lo"}
         depends_on_hi_inv = {}
         depends_on_hi_use = {}
@@ -435,11 +547,28 @@ class RailEditorFrame(ctk.CTkFrame):
                 g_use.append(use)
             lo_inv_groups.append(g_inv)
             lo_use_groups.append(g_use)
+        depends_on_force_inv = {}
+        depends_on_force_use = {}
+        force_inv_groups = []
+        force_use_groups = []
+        for gi, g in enumerate(groups_force):
+            g_inv = []
+            g_use = []
+            for ii, n in enumerate(g):
+                key = (gi, ii)
+                inv = self.dep_force_inv_vars[key].get() if key in self.dep_force_inv_vars else False
+                use = _use_reverse.get(self.dep_force_use_vars[key].get(), "self") if key in self.dep_force_use_vars else "self"
+                depends_on_force_inv[n] = inv
+                depends_on_force_use[n] = use
+                g_inv.append(inv)
+                g_use.append(use)
+            force_inv_groups.append(g_inv)
+            force_use_groups.append(g_use)
         seq_type = self.var_type.get()
         if seq_type == "input":
             cycle_hi, cycle_lo = 0, 0
-            groups_hi, groups_lo = [], []
-            flat_hi, flat_lo = [], []
+            groups_hi, groups_lo, groups_force = [], [], []
+            flat_hi, flat_lo, flat_force = [], [], []
         return PowerRail(
             name=rail_name or self.rail.name,
             seq_type=seq_type,
@@ -456,6 +585,12 @@ class RailEditorFrame(ctk.CTkFrame):
             depends_on_lo_inv_groups=lo_inv_groups if seq_type != "input" else [],
             depends_on_hi_use_groups=hi_use_groups if seq_type != "input" else [],
             depends_on_lo_use_groups=lo_use_groups if seq_type != "input" else [],
+            depends_on_force=flat_force if seq_type != "input" else [],
+            depends_on_force_groups=groups_force if seq_type != "input" else [],
+            depends_on_force_inv=depends_on_force_inv if seq_type != "input" else {},
+            depends_on_force_use=depends_on_force_use if seq_type != "input" else {},
+            depends_on_force_inv_groups=force_inv_groups if seq_type != "input" else [],
+            depends_on_force_use_groups=force_use_groups if seq_type != "input" else [],
             pulse_hi=self.var_pulse_hi.get() if seq_type != "input" else "iPulse_1us",
             pulse_lo=self.var_pulse_lo.get() if seq_type != "input" else "iPulse_1us",
             pulse_force=self.var_pulse_force.get() if seq_type != "input" else "iPulse_1us",
@@ -809,12 +944,16 @@ class PowerSeqGUI(ctk.CTk):
             for r in self.config.rails:
                 r.depends_on_hi = [new_name if n == old_name else n for n in r.depends_on_hi]
                 r.depends_on_lo = [new_name if n == old_name else n for n in r.depends_on_lo]
+                r.depends_on_force = [new_name if n == old_name else n for n in r.depends_on_force]
                 r.depends_on_hi_groups = [[new_name if n == old_name else n for n in g] for g in r.depends_on_hi_groups]
                 r.depends_on_lo_groups = [[new_name if n == old_name else n for n in g] for g in r.depends_on_lo_groups]
+                r.depends_on_force_groups = [[new_name if n == old_name else n for n in g] for g in r.depends_on_force_groups]
                 r.depends_on_hi_inv = {new_name if k == old_name else k: v for k, v in r.depends_on_hi_inv.items()}
                 r.depends_on_lo_inv = {new_name if k == old_name else k: v for k, v in r.depends_on_lo_inv.items()}
+                r.depends_on_force_inv = {new_name if k == old_name else k: v for k, v in r.depends_on_force_inv.items()}
                 r.depends_on_hi_use = {new_name if k == old_name else k: v for k, v in r.depends_on_hi_use.items()}
                 r.depends_on_lo_use = {new_name if k == old_name else k: v for k, v in r.depends_on_lo_use.items()}
+                r.depends_on_force_use = {new_name if k == old_name else k: v for k, v in r.depends_on_force_use.items()}
         self._refresh_editors()
         self._update_validation_msg()
 
