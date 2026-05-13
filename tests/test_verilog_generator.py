@@ -85,7 +85,7 @@ class TestGenerateVerilog:
         assert "input  iClk_Core" in out
         assert "input  iA" in out
         assert "output oB" in out
-        assert "input  iForce" in out
+        assert "input  iForce" not in out
 
     def test_has_pseqcell_for_output(self):
         cfg = PowerSeqConfig(rails=[
@@ -140,3 +140,62 @@ class TestGenerateVerilogPulse:
         out = generate_verilog(cfg)
         assert "iPulse_1us" in out
         assert "iPulse_1ms" in out
+
+
+class TestForceCondition:
+    """iForce 依賴條件相關"""
+
+    def test_force_wire_declared(self):
+        cfg = PowerSeqConfig(rails=[PowerRail("A", depends_on_hi=["__HIGH__"])])
+        out = generate_verilog(cfg)
+        assert "wire a_force;" in out
+
+    def test_force_fallback_to_zero_when_empty(self):
+        """無 force 條件時，wXXX_force 接 1'b0（不強制），PSEQCELL.iForce 接 wXXX_force"""
+        cfg = PowerSeqConfig(rails=[PowerRail("A", depends_on_hi=["__HIGH__"])])
+        out = generate_verilog(cfg)
+        assert "assign a_force = 1'b0;" in out
+        assert ".iForce(a_force)" in out
+        assert "input  iForce" not in out
+
+    def test_force_with_dependency(self):
+        """設定 force 條件 → assign 由依賴項組成，PSEQCELL 接 wXXX_force"""
+        cfg = PowerSeqConfig(rails=[
+            PowerRail("A", seq_type="input", deb_enable=False),
+            PowerRail("B", depends_on_hi=["__HIGH__"], depends_on_force=["A"]),
+        ])
+        out = generate_verilog(cfg)
+        assert "assign b_force = (iA);" in out
+        assert ".iForce(b_force)" in out
+
+    def test_force_groups_and_or(self):
+        """group 內 &，group 間 |"""
+        cfg = PowerSeqConfig(rails=[
+            PowerRail("A", seq_type="input", deb_enable=False),
+            PowerRail("B", seq_type="input", deb_enable=False),
+            PowerRail("C", seq_type="input", deb_enable=False),
+            PowerRail("D",
+                     depends_on_hi=["__HIGH__"],
+                     depends_on_force_groups=[["A", "B"], ["C"]]),
+        ])
+        out = generate_verilog(cfg)
+        assert "assign d_force = (iA & iB) || (iC);" in out
+
+    def test_force_inverted(self):
+        cfg = PowerSeqConfig(rails=[
+            PowerRail("A", seq_type="input", deb_enable=False),
+            PowerRail("B",
+                     depends_on_hi=["__HIGH__"],
+                     depends_on_force=["A"],
+                     depends_on_force_inv={"A": True}),
+        ])
+        out = generate_verilog(cfg)
+        assert "assign b_force = (~(iA));" in out
+
+    def test_force_constants(self):
+        """High/Low 常數應展開為 1'b1 / 1'b0"""
+        cfg = PowerSeqConfig(rails=[
+            PowerRail("A", depends_on_hi=["__HIGH__"], depends_on_force=["__LOW__"]),
+        ])
+        out = generate_verilog(cfg)
+        assert "assign a_force = (1'b0);" in out

@@ -39,7 +39,12 @@ def _get_successors(config: PowerSeqConfig) -> dict[str, list[str]]:
     """取得每個節點的後繼（依賴它的節點，不含 external），排除 __HIGH__/__LOW__"""
     succ = {r.name: [] for r in config.rails}
     for r in config.rails:
-        for dep in r.get_depends_on_hi_flat() + r.get_depends_on_lo_flat():
+        deps = (
+            r.get_depends_on_hi_flat()
+            + r.get_depends_on_lo_flat()
+            + r.get_depends_on_force_flat()
+        )
+        for dep in deps:
             if dep not in (DEP_HIGH, DEP_LOW) and dep in succ:
                 succ[dep].append(r.name)
     return succ
@@ -57,7 +62,12 @@ def _topological_sort(rails: list) -> list:
         visited.add(name)
         rail = name_to_rail.get(name)
         if rail:
-            for dep in rail.get_depends_on_hi_flat() + rail.get_depends_on_lo_flat():
+            deps = (
+                rail.get_depends_on_hi_flat()
+                + rail.get_depends_on_lo_flat()
+                + rail.get_depends_on_force_flat()
+            )
+            for dep in deps:
                 if dep not in (DEP_HIGH, DEP_LOW) and dep in name_to_rail:
                     visit(dep)
             result.append(rail)
@@ -215,7 +225,8 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
             lines.append(f"    input  {_port_name(r.name, 'i')},")
         else:
             lines.append(f"    output {_port_name(r.name, 'o')},")
-    lines.append("    input  iForce  // Optional: tie to 0 if not used")
+    if lines[-1].endswith(","):
+        lines[-1] = lines[-1].rstrip(",")
     lines.append(");")
     lines.append("")
 
@@ -235,13 +246,14 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
     lines.append("")
 
     if sequenced:
-        lines.append("// Condition signals (iHi, iLo) for PSEQCELL")
+        lines.append("// Condition signals (iHi, iLo, iForce) for PSEQCELL")
         for r in node_order_rails:
             if not r.has_pseqcell:
                 continue
             s = _internal_sig(r.name)
             lines.append(f"wire {s}_hi;")
             lines.append(f"wire {s}_lo;")
+            lines.append(f"wire {s}_force;")
         lines.append("")
 
     lines.extend(_section("Task Define"))
@@ -301,6 +313,22 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
                 lines.append(f"    assign {s}_lo = {' || '.join(group_exprs)};")
             else:
                 lines.append(f"    assign {s}_lo = 1'b0;  // No Lo condition (F-DEP-06)")
+            force_groups = r.get_force_groups()
+            if force_groups:
+                group_exprs = []
+                for gi, group in enumerate(force_groups):
+                    terms = [
+                        _dep_expr(
+                            d, name_to_rail,
+                            r.get_force_inv(gi, ii, d),
+                            r.get_force_use(gi, ii, d),
+                        )
+                        for ii, d in enumerate(group)
+                    ]
+                    group_exprs.append(f"({' & '.join(terms)})")
+                lines.append(f"    assign {s}_force = {' || '.join(group_exprs)};")
+            else:
+                lines.append(f"    assign {s}_force = 1'b0;  // No Force condition")
         lines.append("")
 
         # PSEQCELL instances (per-rail pulse selection)
@@ -315,7 +343,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
                 f".CYCLE_LO({r.cycle_lo}), .CYCLE_FORCE({r.cycle_force}), .OD({r.od})) "
                 f"u_{s} (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Hi({ph}), "
                 f".iPulse_Lo({pl}), .iPulse_Force({pf}), .iHi({s}_hi), "
-                f".iLo({s}_lo), .iForce(iForce), .o({s}));"
+                f".iLo({s}_lo), .iForce({s}_force), .o({s}));"
             )
             lines.append(inst)
 

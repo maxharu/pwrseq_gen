@@ -1,0 +1,434 @@
+{
+  "module_name": "PWRSEQ_TOP",
+  "clock_freq_mhz": 100.0,
+  "pulse_period_ns": 100.0,
+  "pulses": [
+    "iPulse_1us"
+  ],
+  "rails": [
+    {
+      "name": "PS_PWOK",
+      "seq_type": "Input",
+      "depends_on": [],
+      "depends_on_hi": [],
+      "depends_on_lo": [],
+      "depends_on_hi_inv": {},
+      "depends_on_lo_inv": {},
+      "depends_on_hi_use": {},
+      "depends_on_lo_use": {},
+      "depends_on_hi_inv_groups": null,
+      "depends_on_lo_inv_groups": null,
+      "depends_on_hi_use_groups": null,
+      "depends_on_lo_use_groups": null,
+      "depends_on_hi_groups": null,
+      "depends_on_lo_groups": null,
+      "pulse_hi": "iPulse_1us",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": true,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 0,
+      "cycle_lo": 0,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "P5V_PG",
+      "seq_type": "Input",
+      "depends_on": [],
+      "depends_on_hi": [],
+      "depends_on_lo": [],
+      "depends_on_hi_inv": {},
+      "depends_on_lo_inv": {},
+      "depends_on_hi_use": {},
+      "depends_on_lo_use": {},
+      "depends_on_hi_inv_groups": null,
+      "depends_on_lo_inv_groups": null,
+      "depends_on_hi_use_groups": null,
+      "depends_on_lo_use_groups": null,
+      "depends_on_hi_groups": null,
+      "depends_on_lo_groups": null,
+      "pulse_hi": "iPulse_1us",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": true,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 0,
+      "cycle_lo": 0,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "P3V3_PG",
+      "seq_type": "Input",
+      "depends_on": [],
+      "depends_on_hi": [],
+      "depends_on_lo": [],
+      "depends_on_hi_inv": {},
+      "depends_on_lo_inv": {},
+      "depends_on_hi_use": {},
+      "depends_on_lo_use": {},
+      "depends_on_hi_inv_groups": null,
+      "depends_on_lo_inv_groups": null,
+      "depends_on_hi_use_groups": null,
+      "depends_on_lo_use_groups": null,
+      "depends_on_hi_groups": null,
+      "depends_on_lo_groups": null,
+      "pulse_hi": "iPulse_1us",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": true,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 0,
+      "cycle_lo": 0,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "P1V8_PG",
+      "seq_type": "Input",
+      "depends_on": [],
+      "depends_on_hi": [],
+      "depends_on_lo": [],
+      "depends_on_hi_inv": {},
+      "depends_on_lo_inv": {},
+      "depends_on_hi_use": {},
+      "depends_on_lo_use": {},
+      "depends_on_hi_inv_groups": null,
+      "depends_on_lo_inv_groups": null,
+      "depends_on_hi_use_groups": null,
+      "depends_on_lo_use_groups": null,
+      "depends_on_hi_groups": null,
+      "depends_on_lo_groups": null,
+      "pulse_hi": "iPulse_1us",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": true,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 0,
+      "cycle_lo": 0,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "P5V_EN",
+      "seq_type": "Output",
+      "depends_on": [
+        "PS_PWOK"
+      ],
+      "depends_on_hi": [
+        "PS_PWOK"
+      ],
+      "depends_on_lo": [
+        "PS_PWOK"
+      ],
+      "depends_on_hi_inv": {
+        "PS_PWOK": false
+      },
+      "depends_on_lo_inv": {
+        "PS_PWOK": true
+      },
+      "depends_on_hi_use": {
+        "PS_PWOK": "self"
+      },
+      "depends_on_lo_use": {
+        "PS_PWOK": "self"
+      },
+      "depends_on_hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "depends_on_lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "depends_on_hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "depends_on_lo_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "depends_on_hi_groups": [
+        [
+          "PS_PWOK"
+        ]
+      ],
+      "depends_on_lo_groups": [
+        [
+          "PS_PWOK"
+        ]
+      ],
+      "pulse_hi": "iPulse_1us",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": false,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 8,
+      "cycle_lo": 4,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "P3V3_EN",
+      "seq_type": "Output",
+      "depends_on": [
+        "P5V_PG"
+      ],
+      "depends_on_hi": [
+        "P5V_PG"
+      ],
+      "depends_on_lo": [
+        "P5V_PG"
+      ],
+      "depends_on_hi_inv": {
+        "P5V_PG": false
+      },
+      "depends_on_lo_inv": {
+        "P5V_PG": true
+      },
+      "depends_on_hi_use": {
+        "P5V_PG": "self"
+      },
+      "depends_on_lo_use": {
+        "P5V_PG": "self"
+      },
+      "depends_on_hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "depends_on_lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "depends_on_hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "depends_on_lo_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "depends_on_hi_groups": [
+        [
+          "P5V_PG"
+        ]
+      ],
+      "depends_on_lo_groups": [
+        [
+          "P5V_PG"
+        ]
+      ],
+      "pulse_hi": "iPulse_1us",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": false,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 8,
+      "cycle_lo": 4,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "P1V8_EN",
+      "seq_type": "Output",
+      "depends_on": [
+        "P3V3_PG"
+      ],
+      "depends_on_hi": [
+        "P3V3_PG"
+      ],
+      "depends_on_lo": [
+        "P3V3_PG"
+      ],
+      "depends_on_hi_inv": {
+        "P3V3_PG": false
+      },
+      "depends_on_lo_inv": {
+        "P3V3_PG": true
+      },
+      "depends_on_hi_use": {
+        "P3V3_PG": "self"
+      },
+      "depends_on_lo_use": {
+        "P3V3_PG": "self"
+      },
+      "depends_on_hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "depends_on_lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "depends_on_hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "depends_on_lo_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "depends_on_hi_groups": [
+        [
+          "P3V3_PG"
+        ]
+      ],
+      "depends_on_lo_groups": [
+        [
+          "P3V3_PG"
+        ]
+      ],
+      "pulse_hi": "iPulse_1us",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": false,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 8,
+      "cycle_lo": 4,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    },
+    {
+      "name": "P1V1_HUB_EN",
+      "seq_type": "Output",
+      "depends_on": [
+        "P1V8_PG"
+      ],
+      "depends_on_hi": [
+        "P1V8_PG"
+      ],
+      "depends_on_lo": [
+        "P1V8_PG"
+      ],
+      "depends_on_hi_inv": {
+        "P1V8_PG": false
+      },
+      "depends_on_lo_inv": {
+        "P1V8_PG": true
+      },
+      "depends_on_hi_use": {
+        "P1V8_PG": "self"
+      },
+      "depends_on_lo_use": {
+        "P1V8_PG": "self"
+      },
+      "depends_on_hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "depends_on_lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "depends_on_hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "depends_on_lo_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "depends_on_hi_groups": [
+        [
+          "P1V8_PG"
+        ]
+      ],
+      "depends_on_lo_groups": [
+        [
+          "P1V8_PG"
+        ]
+      ],
+      "pulse_hi": "iPulse_1us",
+      "pulse_lo": "iPulse_1us",
+      "pulse_force": "iPulse_1us",
+      "deb_enable": false,
+      "deb_init": 0,
+      "deb_cycle_hi": 2,
+      "deb_cycle_lo": 2,
+      "deb_cycle_sync": 2,
+      "deb_pulse": "iPulse_1us",
+      "cycle_hi": 8,
+      "cycle_lo": 4,
+      "cycle_force": 2,
+      "recover": 3,
+      "init": 0,
+      "force_val": 0,
+      "cycle_sync": 0,
+      "od": 0
+    }
+  ]
+}

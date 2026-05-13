@@ -25,7 +25,12 @@ def check_missing_deps(config: PowerSeqConfig) -> list[tuple[str, str]]:
     const_deps = {"__HIGH__", "__LOW__"}
     missing = []
     for rail in config.rails:
-        for dep in rail.get_depends_on_hi_flat() + rail.get_depends_on_lo_flat():
+        deps = (
+            rail.get_depends_on_hi_flat()
+            + rail.get_depends_on_lo_flat()
+            + rail.get_depends_on_force_flat()
+        )
+        for dep in deps:
             if dep not in const_deps and dep not in valid_names:
                 missing.append((rail.name, dep))
     return missing
@@ -75,7 +80,15 @@ def check_circular_dependency(config: PowerSeqConfig) -> bool:
         r.name: [d for d in r.get_depends_on_lo_flat() if d not in const_deps]
         for r in config.rails
     }
-    return _has_cycle_in_graph(graph_hi) or _has_cycle_in_graph(graph_lo)
+    graph_force = {
+        r.name: [d for d in r.get_depends_on_force_flat() if d not in const_deps]
+        for r in config.rails
+    }
+    return (
+        _has_cycle_in_graph(graph_hi)
+        or _has_cycle_in_graph(graph_lo)
+        or _has_cycle_in_graph(graph_force)
+    )
 
 
 def validate(config: PowerSeqConfig) -> tuple[bool, list[str]]:
