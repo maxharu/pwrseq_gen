@@ -115,9 +115,9 @@ def _dep_expr(
     取得依賴項的條件表示式
     - __HIGH__: 1'b1
     - __LOW__: 1'b0
-    - output: wOut (輸出) / wHi (iHi) / wLo (iLo) 依 use_mode
+    - output: wOut (輸出) / wHi (iHi) / wLo (iLo) / wForce (iForce) 依 use_mode
     - input: iXXX 或 xxx_deb（有 Debounce 時）
-    - use_mode: "self"=節點本身, "hi"=該節點iHi, "lo"=該節點iLo (F-DEP-07)
+    - use_mode: "self"=節點本身, "hi"=該節點iHi, "lo"=該節點iLo, "force"=該節點iForce (F-DEP-07)
     - inverted: True 時回傳 ~expr
     """
     if dep_name == DEP_HIGH:
@@ -134,11 +134,13 @@ def _dep_expr(
                 base = f"{s}_hi"
             elif use_mode == "lo" and dep.has_pseqcell:
                 base = f"{s}_lo"
+            elif use_mode == "force" and dep.has_pseqcell:
+                base = f"{s}_force"
             else:
                 base = s
         else:  # input
             base = _get_input_signal(dep_name, name_to_rail)
-    return f"~({base})" if inverted else base
+    return f"(~{base})" if inverted else base
 
 
 def _sep() -> str:
@@ -251,9 +253,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
             if not r.has_pseqcell:
                 continue
             s = _internal_sig(r.name)
-            lines.append(f"wire {s}_hi;")
-            lines.append(f"wire {s}_lo;")
-            lines.append(f"wire {s}_force;")
+            lines.append(f"wire {s}_hi, {s}_lo, {s}_force;")
         lines.append("")
 
     lines.extend(_section("Task Define"))
@@ -264,17 +264,34 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
     lines.append("///// Instance /////////////////////////////////////////////////////////////////")
 
     # DEB instances (input debounce, each on one line)
-    for r in inputs_with_deb:
-        s = _internal_sig(r.name)
-        init = getattr(r, "deb_init", 0)
-        cyc_hi = getattr(r, "deb_cycle_hi", 2)
-        cyc_lo = getattr(r, "deb_cycle_lo", 2)
-        cyc_sync = getattr(r, "deb_cycle_sync", 2)
-        pulse_sig = _pulse_signal(getattr(r, "deb_pulse", "iPulse_1us") or "iPulse_1us")
-        inp = _port_name(r.name, "i")
-        inst = f"    DEB #(.WIDTH(1), .INIT({init}), .CYCLE_SYNC({cyc_sync}), .CYCLE_HI({cyc_hi}), .CYCLE_LO({cyc_lo})) u_deb_{s} (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Sample({pulse_sig}), .i({inp}), .o({s}_deb));"
-        lines.append(inst)
     if inputs_with_deb:
+        deb_specs = []
+        for r in inputs_with_deb:
+            s = _internal_sig(r.name)
+            deb_specs.append({
+                "rail": r,
+                "u": f"u_deb_{s}",
+                "inp": _port_name(r.name, "i"),
+                "out": f"{s}_deb",
+            })
+        w_u = max(len(d["u"]) for d in deb_specs)
+        w_inp = max(len(d["inp"]) for d in deb_specs)
+        w_out = max(len(d["out"]) for d in deb_specs)
+        for d in deb_specs:
+            r = d["rail"]
+            init = getattr(r, "deb_init", 0)
+            cyc_hi = getattr(r, "deb_cycle_hi", 2)
+            cyc_lo = getattr(r, "deb_cycle_lo", 2)
+            cyc_sync = getattr(r, "deb_cycle_sync", 2)
+            pulse_sig = _pulse_signal(getattr(r, "deb_pulse", "iPulse_1us") or "iPulse_1us")
+            inst = (
+                f"    DEB #(.WIDTH(1), .INIT({init}), .CYCLE_SYNC({cyc_sync}), "
+                f".CYCLE_HI({cyc_hi}), .CYCLE_LO({cyc_lo})) "
+                f"{d['u'].ljust(w_u)} (.iRst(iRst), .iClk_Core(iClk_Core), "
+                f".iPulse_Sample({pulse_sig}), .i({d['inp'].ljust(w_inp)}), "
+                f".o({d['out'].ljust(w_out)}));"
+            )
+            lines.append(inst)
         lines.append("")
 
     if sequenced:
@@ -329,21 +346,39 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
                 lines.append(f"    assign {s}_force = {' || '.join(group_exprs)};")
             else:
                 lines.append(f"    assign {s}_force = 1'b0;  // No Force condition")
-        lines.append("")
+            lines.append("")
 
         # PSEQCELL instances (per-rail pulse selection)
         # Parameter order: INIT, WIDTH, CYCLE_HI, CYCLE_LO, CYCLE_FORCE, OD
+        ps_specs = []
         for r in sequenced:
             s = _internal_sig(r.name)
+            ps_specs.append({
+                "rail": r,
+                "s": s,
+                "u": f"u_{s}",
+                "hi": f"{s}_hi",
+                "lo": f"{s}_lo",
+                "force": f"{s}_force",
+                "out": s,
+            })
+        w_u = max(len(p["u"]) for p in ps_specs)
+        w_hi = max(len(p["hi"]) for p in ps_specs)
+        w_lo = max(len(p["lo"]) for p in ps_specs)
+        w_fc = max(len(p["force"]) for p in ps_specs)
+        w_out = max(len(p["out"]) for p in ps_specs)
+        for p in ps_specs:
+            r = p["rail"]
             ph = _pulse_signal(getattr(r, "pulse_hi", "default") or "default")
             pl = _pulse_signal(getattr(r, "pulse_lo", "default") or "default")
             pf = _pulse_signal(getattr(r, "pulse_force", "default") or "default")
             inst = (
                 f"    PSEQCELL #(.INIT({r.init}), .WIDTH(1), .CYCLE_HI({r.cycle_hi}), "
                 f".CYCLE_LO({r.cycle_lo}), .CYCLE_FORCE({r.cycle_force}), .OD({r.od})) "
-                f"u_{s} (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Hi({ph}), "
-                f".iPulse_Lo({pl}), .iPulse_Force({pf}), .iHi({s}_hi), "
-                f".iLo({s}_lo), .iForce({s}_force), .o({s}));"
+                f"{p['u'].ljust(w_u)} (.iRst(iRst), .iClk_Core(iClk_Core), "
+                f".iPulse_Hi({ph}), .iPulse_Lo({pl}), .iPulse_Force({pf}), "
+                f".iHi({p['hi'].ljust(w_hi)}), .iLo({p['lo'].ljust(w_lo)}), "
+                f".iForce({p['force'].ljust(w_fc)}), .o({p['out'].ljust(w_out)}));"
             )
             lines.append(inst)
 
@@ -352,11 +387,14 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
     lines.append("")
 
     lines.append("///// Continuous Assignment ////////////////////////////////////////////////////")
-    for r in node_order_rails:
-        if r.seq_type == "input":
-            continue
-        s = _internal_sig(r.name)
-        lines.append(f"    assign {_port_name(r.name, 'o')} = {s};")
+    out_specs = [
+        (_port_name(r.name, "o"), _internal_sig(r.name))
+        for r in node_order_rails if r.seq_type != "input"
+    ]
+    if out_specs:
+        w_p = max(len(p) for p, _ in out_specs)
+        for p, s in out_specs:
+            lines.append(f"    assign {p.ljust(w_p)} = {s};")
     lines.append("")
 
     lines.append(f"endmodule //{module_name}")

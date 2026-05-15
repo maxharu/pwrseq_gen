@@ -31,22 +31,23 @@ module mg204_pseq
 // Parameter Declare                                                          //
 ////////////////////////////////////////////////////////////////////////////////
 #(
-    // No parameters
+    parameter P5V_HI_CYCLE      = 4, P5V_LO_CYCLE      = 4,
+    parameter P3V3_HI_CYCLE     = 4, P3V3_LO_CYCLE     = 4,
+    parameter P1V8_HI_CYCLE     = 4, P1V8_LO_CYCLE     = 4,
+    parameter P1V1_HUB_HI_CYCLE = 4, P1V1_HUB_LO_CYCLE = 4
 )
 ////////////////////////////////////////////////////////////////////////////////
 // Input/Output Port Declare                                                  //
 ////////////////////////////////////////////////////////////////////////////////
 (
-    input  iRst,
-    input  iClk_Core,
-    input  iPulse_1us,
+    input  iRst,    iClk_Core,  iPulse_1us,
     input  iPS_PWOK,
-    input  iP5V_PG,
-    input  iP3V3_PG,
-    input  iP1V8_PG,
     output oP5V_EN,
+    input  iP5V_PG,
     output oP3V3_EN,
+    input  iP3V3_PG,
     output oP1V8_EN,
+    input  iP1V8_PG,
     output oP1V1_HUB_EN
 );
 
@@ -63,12 +64,12 @@ module mg204_pseq
 // Internal Signal Declare                                                    //
 ////////////////////////////////////////////////////////////////////////////////
 wire ps_pwok_deb;
-wire p5v_pg_deb;
-wire p3v3_pg_deb;
-wire p1v8_pg_deb;
 wire p5v_en;
+wire p5v_pg_deb;
 wire p3v3_en;
+wire p3v3_pg_deb;
 wire p1v8_en;
+wire p1v8_pg_deb;
 wire p1v1_hub_en;
 
 // Condition signals (iHi, iLo, iForce) for PSEQCELL
@@ -95,7 +96,7 @@ wire p1v1_hub_en_force;
 ////////////////////////////////////////////////////////////////////////////////
 ///// Instance /////////////////////////////////////////////////////////////////
     DEB #(.WIDTH(1), .INIT(0), .CYCLE_SYNC(2), .CYCLE_HI(2), .CYCLE_LO(2)) u_deb_ps_pwok (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Sample(iPulse_1us), .i(iPS_PWOK), .o(ps_pwok_deb));
-    DEB #(.WIDTH(1), .INIT(0), .CYCLE_SYNC(2), .CYCLE_HI(2), .CYCLE_LO(2)) u_deb_p5v_pg (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Sample(iPulse_1us), .i(iP5V_PG), .o(p5v_pg_deb));
+    DEB #(.WIDTH(1), .INIT(0), .CYCLE_SYNC(2), .CYCLE_HI(2), .CYCLE_LO(2)) u_deb_p5v_pg  (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Sample(iPulse_1us), .i(iP5V_PG),  .o(p5v_pg_deb ));
     DEB #(.WIDTH(1), .INIT(0), .CYCLE_SYNC(2), .CYCLE_HI(2), .CYCLE_LO(2)) u_deb_p3v3_pg (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Sample(iPulse_1us), .i(iP3V3_PG), .o(p3v3_pg_deb));
     DEB #(.WIDTH(1), .INIT(0), .CYCLE_SYNC(2), .CYCLE_HI(2), .CYCLE_LO(2)) u_deb_p1v8_pg (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Sample(iPulse_1us), .i(iP1V8_PG), .o(p1v8_pg_deb));
 
@@ -112,9 +113,9 @@ wire p1v1_hub_en_force;
     assign p1v1_hub_en_lo = (~(p1v8_pg_deb));
     assign p1v1_hub_en_force = 1'b0;  // No Force condition
 
-    PSEQCELL #(.INIT(0), .WIDTH(1), .CYCLE_HI(8), .CYCLE_LO(4), .CYCLE_FORCE(2), .OD(0)) u_p5v_en (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Hi(iPulse_1us), .iPulse_Lo(iPulse_1us), .iPulse_Force(iPulse_1us), .iHi(p5v_en_hi), .iLo(p5v_en_lo), .iForce(p5v_en_force), .o(p5v_en));
-    PSEQCELL #(.INIT(0), .WIDTH(1), .CYCLE_HI(8), .CYCLE_LO(4), .CYCLE_FORCE(2), .OD(0)) u_p3v3_en (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Hi(iPulse_1us), .iPulse_Lo(iPulse_1us), .iPulse_Force(iPulse_1us), .iHi(p3v3_en_hi), .iLo(p3v3_en_lo), .iForce(p3v3_en_force), .o(p3v3_en));
-    PSEQCELL #(.INIT(0), .WIDTH(1), .CYCLE_HI(8), .CYCLE_LO(4), .CYCLE_FORCE(2), .OD(0)) u_p1v8_en (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Hi(iPulse_1us), .iPulse_Lo(iPulse_1us), .iPulse_Force(iPulse_1us), .iHi(p1v8_en_hi), .iLo(p1v8_en_lo), .iForce(p1v8_en_force), .o(p1v8_en));
+    PSEQCELL #(.INIT(0), .WIDTH(1), .CYCLE_HI(8), .CYCLE_LO(4), .CYCLE_FORCE(2), .OD(0)) u_p5v_en  (.iRst(iRst),     .iClk_Core(iClk_Core), .iPulse_Hi(iPulse_1us), .iPulse_Lo(iPulse_1us), .iPulse_Force(iPulse_1us), .iHi(p5v_en_hi),      .iLo(p5v_en_lo),      .iForce(p5v_en_force),      .o(p5v_en     ));
+    PSEQCELL #(.INIT(0), .WIDTH(1), .CYCLE_HI(8), .CYCLE_LO(4), .CYCLE_FORCE(2), .OD(0)) u_p3v3_en (.iRst(iRst),     .iClk_Core(iClk_Core), .iPulse_Hi(iPulse_1us), .iPulse_Lo(iPulse_1us), .iPulse_Force(iPulse_1us), .iHi(p3v3_en_hi),     .iLo(p3v3_en_lo),     .iForce(p3v3_en_force),     .o(p3v3_en    ));
+    PSEQCELL #(.INIT(0), .WIDTH(1), .CYCLE_HI(8), .CYCLE_LO(4), .CYCLE_FORCE(2), .OD(0)) u_p1v8_en (.iRst(iRst),     .iClk_Core(iClk_Core), .iPulse_Hi(iPulse_1us), .iPulse_Lo(iPulse_1us), .iPulse_Force(iPulse_1us), .iHi(p1v8_en_hi),     .iLo(p1v8_en_lo),     .iForce(p1v8_en_force),     .o(p1v8_en    ));
     PSEQCELL #(.INIT(0), .WIDTH(1), .CYCLE_HI(8), .CYCLE_LO(4), .CYCLE_FORCE(2), .OD(0)) u_p1v1_hub_en (.iRst(iRst), .iClk_Core(iClk_Core), .iPulse_Hi(iPulse_1us), .iPulse_Lo(iPulse_1us), .iPulse_Force(iPulse_1us), .iHi(p1v1_hub_en_hi), .iLo(p1v1_hub_en_lo), .iForce(p1v1_hub_en_force), .o(p1v1_hub_en));
 ///// Always Block /////////////////////////////////////////////////////////////
     // None

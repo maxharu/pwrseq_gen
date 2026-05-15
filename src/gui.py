@@ -222,7 +222,7 @@ class RailEditorFrame(ctk.CTkFrame):
         is_const = name in (DEP_HIGH, DEP_LOW)
         dep_rail = self.name_to_rail.get(name)
         can_use_hi_lo = dep_rail is not None and dep_rail.has_pseqcell
-        _use_display = {"self": "Node", "hi": "Hi Cond", "lo": "Lo Cond"}
+        _use_display = {"self": "Node", "hi": "Hi Cond", "lo": "Lo Cond", "force": "Force Cond"}
         inv_val = False if is_const else self.rail.get_hi_inv(group_idx, item_idx, name)
         use_val = self.rail.get_hi_use(group_idx, item_idx, name)
         self.dep_hi_inv_vars[key] = ctk.BooleanVar(value=inv_val)
@@ -237,7 +237,7 @@ class RailEditorFrame(ctk.CTkFrame):
         if not is_const:
             ctk.CTkCheckBox(row, text="Inv", variable=self.dep_hi_inv_vars[key], width=50).pack(side="left", padx=(0, 4))
         if can_use_hi_lo:
-            ctk.CTkComboBox(row, values=["Node", "Hi Cond", "Lo Cond"], variable=self.dep_hi_use_vars[key], width=90).pack(side="left", padx=(0, 4))
+            ctk.CTkComboBox(row, values=["Node", "Hi Cond", "Lo Cond", "Force Cond"], variable=self.dep_hi_use_vars[key], width=100).pack(side="left", padx=(0, 4))
         captured_key = key
         ctk.CTkButton(row, text="Del", width=50, command=lambda: self._remove_hi_cond_by_key(captured_key)).pack(side="left")
 
@@ -307,7 +307,7 @@ class RailEditorFrame(ctk.CTkFrame):
         is_const = name in (DEP_HIGH, DEP_LOW)
         dep_rail = self.name_to_rail.get(name)
         can_use_hi_lo = dep_rail is not None and dep_rail.has_pseqcell
-        _use_display = {"self": "Node", "hi": "Hi Cond", "lo": "Lo Cond"}
+        _use_display = {"self": "Node", "hi": "Hi Cond", "lo": "Lo Cond", "force": "Force Cond"}
         inv_val = False if is_const else self.rail.get_lo_inv(group_idx, item_idx, name)
         use_val = self.rail.get_lo_use(group_idx, item_idx, name)
         self.dep_lo_inv_vars[key] = ctk.BooleanVar(value=inv_val)
@@ -322,7 +322,7 @@ class RailEditorFrame(ctk.CTkFrame):
         if not is_const:
             ctk.CTkCheckBox(row, text="Inv", variable=self.dep_lo_inv_vars[key], width=50).pack(side="left", padx=(0, 4))
         if can_use_hi_lo:
-            ctk.CTkComboBox(row, values=["Node", "Hi Cond", "Lo Cond"], variable=self.dep_lo_use_vars[key], width=90).pack(side="left", padx=(0, 4))
+            ctk.CTkComboBox(row, values=["Node", "Hi Cond", "Lo Cond", "Force Cond"], variable=self.dep_lo_use_vars[key], width=100).pack(side="left", padx=(0, 4))
         captured_key = key
         ctk.CTkButton(row, text="Del", width=50, command=lambda: self._remove_lo_cond_by_key(captured_key)).pack(side="left")
 
@@ -392,7 +392,7 @@ class RailEditorFrame(ctk.CTkFrame):
         is_const = name in (DEP_HIGH, DEP_LOW)
         dep_rail = self.name_to_rail.get(name)
         can_use_hi_lo = dep_rail is not None and dep_rail.has_pseqcell
-        _use_display = {"self": "Node", "hi": "Hi Cond", "lo": "Lo Cond"}
+        _use_display = {"self": "Node", "hi": "Hi Cond", "lo": "Lo Cond", "force": "Force Cond"}
         inv_val = False if is_const else self.rail.get_force_inv(group_idx, item_idx, name)
         use_val = self.rail.get_force_use(group_idx, item_idx, name)
         self.dep_force_inv_vars[key] = ctk.BooleanVar(value=inv_val)
@@ -407,7 +407,7 @@ class RailEditorFrame(ctk.CTkFrame):
         if not is_const:
             ctk.CTkCheckBox(row, text="Inv", variable=self.dep_force_inv_vars[key], width=50).pack(side="left", padx=(0, 4))
         if can_use_hi_lo:
-            ctk.CTkComboBox(row, values=["Node", "Hi Cond", "Lo Cond"], variable=self.dep_force_use_vars[key], width=90).pack(side="left", padx=(0, 4))
+            ctk.CTkComboBox(row, values=["Node", "Hi Cond", "Lo Cond", "Force Cond"], variable=self.dep_force_use_vars[key], width=100).pack(side="left", padx=(0, 4))
         captured_key = key
         ctk.CTkButton(row, text="Del", width=50, command=lambda: self._remove_force_cond_by_key(captured_key)).pack(side="left")
 
@@ -512,7 +512,7 @@ class RailEditorFrame(ctk.CTkFrame):
         flat_hi = [d for g in groups_hi for d in g]
         flat_lo = [d for g in groups_lo for d in g]
         flat_force = [d for g in groups_force for d in g]
-        _use_reverse = {"Node": "self", "Hi Cond": "hi", "Lo Cond": "lo"}
+        _use_reverse = {"Node": "self", "Hi Cond": "hi", "Lo Cond": "lo", "Force Cond": "force"}
         depends_on_hi_inv = {}
         depends_on_hi_use = {}
         hi_inv_groups = []
@@ -620,6 +620,12 @@ class CollapsibleRailFrame(ctk.CTkFrame):
         super().__init__(master, **kwargs)
         self.rail = rail
         self._expanded = expanded
+        # Lazy build：摺疊時不建立 RailEditorFrame，展開時才建。建構參數先存著。
+        self._all_rails = all_rails
+        self._config = config
+        self._get_pulses = get_pulses
+        self._on_apply_changes = on_apply_changes
+        self.editor: RailEditorFrame | None = None
 
         self._header = ctk.CTkFrame(self, fg_color=("gray85", "gray25"), corner_radius=6)
         self._header.pack(fill="x")
@@ -636,13 +642,21 @@ class CollapsibleRailFrame(ctk.CTkFrame):
         self._title.bind("<Button-1>", lambda _: self.toggle())
 
         self._body = ctk.CTkFrame(self, fg_color="transparent")
+
+        self._update_ui()
+
+    def _ensure_body(self):
+        if self.editor is not None:
+            return
         self.editor = RailEditorFrame(
-            self._body, rail, all_rails, config,
-            get_pulses=get_pulses, on_apply_changes=on_apply_changes,
+            self._body, self.rail, self._all_rails, self._config,
+            get_pulses=self._get_pulses, on_apply_changes=self._on_apply_changes,
         )
         self.editor.pack(fill="x", padx=4, pady=(4, 0))
 
-        self._update_ui()
+    def update_summary(self):
+        type_label = SEQ_TYPE_LABELS.get(self.rail.seq_type, self.rail.seq_type)
+        self._title.configure(text=self._build_summary(self.rail, type_label))
 
     @staticmethod
     def _build_summary(rail: PowerRail, type_label: str) -> str:
@@ -659,6 +673,7 @@ class CollapsibleRailFrame(ctk.CTkFrame):
     def _update_ui(self):
         self._arrow.configure(text="\u25BC" if self._expanded else "\u25B6")
         if self._expanded:
+            self._ensure_body()
             self._body.pack(fill="x", pady=(0, 4))
         else:
             self._body.pack_forget()
@@ -678,6 +693,9 @@ class CollapsibleRailFrame(ctk.CTkFrame):
             self._update_ui()
 
     def get_rail(self) -> PowerRail:
+        # 摺疊狀態下沒建 editor，直接回傳目前 rail（不做任何 widget 讀取）
+        if self.editor is None:
+            return self.rail
         return self.editor.get_rail()
 
 
@@ -736,7 +754,7 @@ class PowerSeqGUI(ctk.CTk):
         right.pack(side="left", fill="both", expand=True)
         self.editor_scroll = ctk.CTkScrollableFrame(right, fg_color="transparent")
         self.editor_scroll.pack(fill="both", expand=True)
-        self.editor_frames = []
+        self.collapsible_frames: list[CollapsibleRailFrame] = []
         self._refresh_editors()
 
         self.msg_frame = ctk.CTkFrame(right, fg_color=("gray90", "gray17"))
@@ -804,8 +822,7 @@ class PowerSeqGUI(ctk.CTk):
 
         for w in self.editor_scroll.winfo_children():
             w.destroy()
-        self.editor_frames.clear()
-        self.collapsible_frames: list[CollapsibleRailFrame] = []
+        self.collapsible_frames = []
         def get_pulses():
             return getattr(self.config, "pulses", None) or ["iPulse_1us"]
         for r in self.config.rails:
@@ -817,7 +834,6 @@ class PowerSeqGUI(ctk.CTk):
             )
             cf.pack(fill="x", pady=4, padx=4)
             self.collapsible_frames.append(cf)
-            self.editor_frames.append(cf.editor)
         self.rail_listbox.delete(0, tk.END)
         for r in self.config.rails:
             t = SEQ_TYPE_LABELS.get(r.seq_type, r.seq_type)[:16]
@@ -917,7 +933,7 @@ class PowerSeqGUI(ctk.CTk):
 
     def _collect_config(self) -> PowerSeqConfig:
         return PowerSeqConfig(
-            rails=[f.get_rail() for f in self.editor_frames],
+            rails=[cf.get_rail() for cf in self.collapsible_frames],
             module_name=self.config.module_name,
             clock_freq_mhz=self.config.clock_freq_mhz,
             pulse_period_ns=self.config.pulse_period_ns,
@@ -933,14 +949,15 @@ class PowerSeqGUI(ctk.CTk):
             messagebox.showerror("Error", f"Name '{new_name}' already exists")
             return
         target_idx = next((i for i, r in enumerate(self.config.rails) if r.name == old_name), None)
-        if target_idx is not None:
-            applied_rail = self.editor_frames[target_idx].get_rail()
-            self.config.rails[target_idx] = applied_rail
-        if new_name != old_name or new_type != old_type:
-            for cf in self.collapsible_frames:
-                if cf.rail.name == old_name:
-                    cf.rail = self.config.rails[target_idx]
-                    break
+        if target_idx is None:
+            return
+
+        applied_rail = self.collapsible_frames[target_idx].get_rail()
+        self.config.rails[target_idx] = applied_rail
+
+        name_or_type_changed = (new_name != old_name) or (new_type != old_type)
+        if name_or_type_changed:
+            # 改名或改類型：其他節點的依賴下拉選項都會變，必須全量重建
             for r in self.config.rails:
                 r.depends_on_hi = [new_name if n == old_name else n for n in r.depends_on_hi]
                 r.depends_on_lo = [new_name if n == old_name else n for n in r.depends_on_lo]
@@ -954,7 +971,16 @@ class PowerSeqGUI(ctk.CTk):
                 r.depends_on_hi_use = {new_name if k == old_name else k: v for k, v in r.depends_on_hi_use.items()}
                 r.depends_on_lo_use = {new_name if k == old_name else k: v for k, v in r.depends_on_lo_use.items()}
                 r.depends_on_force_use = {new_name if k == old_name else k: v for k, v in r.depends_on_force_use.items()}
-        self._refresh_editors()
+            self._refresh_editors()
+        else:
+            # 只改了自己節點屬性（cycle/dep/timing/...）：僅更新自己的 summary 與背景 rail，
+            # 不動其他節點的 widget
+            cf = self.collapsible_frames[target_idx]
+            cf.rail = applied_rail
+            if cf.editor is not None:
+                cf.editor.rail = applied_rail
+            cf.update_summary()
+
         self._update_validation_msg()
 
     def _update_validation_msg(self):
