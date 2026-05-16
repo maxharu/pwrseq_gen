@@ -184,7 +184,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
     lines.append("//   Power Sequence. output: oXXX, input: iXXX.                               //")
     lines.append("//   iHi from depends_on (output: out, input: in). iLo default 1'b0.          //")
     lines.append("// Change Log            :                                                    //")
-    lines.append("//   Auto-generated.                                                           //")
+    lines.append("//   Auto-generated.                                                          //")
     lines.append(_sep())
     lines.append(f"`ifndef {define_name}")
     lines.append(f"`define {define_name}")
@@ -201,9 +201,9 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
     lines.extend(_section("Module Declare"))
     lines.append("module " + module_name)
     lines.extend(_section("Parameter Declare"))
-    lines.append("#(")
-    lines.append("    // No parameters")
-    lines.append(")")
+    lines.append("//#(")
+    lines.append("//    No parameters")
+    lines.append("//)")
     lines.extend(_section("Input/Output Port Declare"))
     lines.append("(")
     lines.append("    input  iRst,")
@@ -249,11 +249,16 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
 
     if sequenced:
         lines.append("// Condition signals (iHi, iLo, iForce) for PSEQCELL")
-        for r in node_order_rails:
-            if not r.has_pseqcell:
-                continue
-            s = _internal_sig(r.name)
-            lines.append(f"wire {s}_hi, {s}_lo, {s}_force;")
+        cond_sigs = [_internal_sig(r.name) for r in node_order_rails if r.has_pseqcell]
+        w_hi = max(len(s) + 3 for s in cond_sigs)     # "_hi"
+        w_lo = max(len(s) + 3 for s in cond_sigs)     # "_lo"
+        w_fc = max(len(s) + 6 for s in cond_sigs)     # "_force"
+        for s in cond_sigs:
+            lines.append(
+                f"wire {(s + '_hi').ljust(w_hi)}, "
+                f"{(s + '_lo').ljust(w_lo)}, "
+                f"{(s + '_force').ljust(w_fc)};"
+            )
         lines.append("")
 
     lines.extend(_section("Task Define"))
