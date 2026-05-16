@@ -147,6 +147,31 @@ class PowerSeqConfig:
     pulse_period_ns: float = 100.0
     pulses: list[str] = field(default_factory=lambda: ["iPulse_1us"])  # Pulse 來源列表，每個為單一訊號（無 _Hi/_Lo/_Force）
 
+    def rename_rail(self, old_name: str, new_name: str) -> bool:
+        """重新命名一個 rail，並把所有其他 rail 的依賴 / inv / use 欄位中的舊名替換為新名。
+        回傳是否實際完成（找不到 old 或 new==old 時回傳 False）。"""
+        if not new_name or new_name == old_name:
+            return False
+        target = next((r for r in self.rails if r.name == old_name), None)
+        if target is None:
+            return False
+        target.name = new_name
+        for r in self.rails:
+            r.depends_on = [new_name if n == old_name else n for n in r.depends_on]
+            r.depends_on_hi = [new_name if n == old_name else n for n in r.depends_on_hi]
+            r.depends_on_lo = [new_name if n == old_name else n for n in r.depends_on_lo]
+            r.depends_on_force = [new_name if n == old_name else n for n in r.depends_on_force]
+            r.depends_on_hi_groups = [[new_name if n == old_name else n for n in g] for g in r.depends_on_hi_groups]
+            r.depends_on_lo_groups = [[new_name if n == old_name else n for n in g] for g in r.depends_on_lo_groups]
+            r.depends_on_force_groups = [[new_name if n == old_name else n for n in g] for g in r.depends_on_force_groups]
+            r.depends_on_hi_inv = {new_name if k == old_name else k: v for k, v in r.depends_on_hi_inv.items()}
+            r.depends_on_lo_inv = {new_name if k == old_name else k: v for k, v in r.depends_on_lo_inv.items()}
+            r.depends_on_force_inv = {new_name if k == old_name else k: v for k, v in r.depends_on_force_inv.items()}
+            r.depends_on_hi_use = {new_name if k == old_name else k: v for k, v in r.depends_on_hi_use.items()}
+            r.depends_on_lo_use = {new_name if k == old_name else k: v for k, v in r.depends_on_lo_use.items()}
+            r.depends_on_force_use = {new_name if k == old_name else k: v for k, v in r.depends_on_force_use.items()}
+        return True
+
     def to_dict(self) -> dict:
         """轉換為可序列化的 dict"""
         return {
