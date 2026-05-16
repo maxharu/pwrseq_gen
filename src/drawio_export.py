@@ -273,22 +273,19 @@ def _row_height_for_output(r: PowerRail) -> int:
     return max(CELL_GROUP_H, and_stack + or_span + 16)
 
 
-def generate_drawio(config: PowerSeqConfig, *, optimize_layout: bool = False) -> str:
+def generate_drawio(config: PowerSeqConfig) -> str:
     """
     Generate Draw.io XML per PSEQCELL.xml:
     - Only output rails become nodes (Power Sequence Cell: 4 個獨立 cells — inner + H_Deb + L_Deb + O 矩形，無 group）。
     - Input rails are text labels only; 反相一律用共用 NOT 閘呈現（非舊版 ~Name 文字）。
 
-    optimize_layout: 啟用拓撲排序 + 重心法列排序，使依賴關係緊密的 output 相鄰，減少走線交叉。
+    版面預設啟用拓撲排序 + 重心法列排序與走線交叉最小化，使依賴關係緊密的 output 相鄰、走線交叉最少。
     """
     name_to_rail = {r.name: r for r in config.rails}
     valid = set(name_to_rail.keys())
     inputs = [r for r in config.rails if r.seq_type == "input"]
     outputs_raw = [r for r in config.rails if r.seq_type == "output"]
-    if optimize_layout:
-        outputs = _barycenter_order_outputs(outputs_raw, name_to_rail, valid)
-    else:
-        outputs = list(outputs_raw)
+    outputs = _barycenter_order_outputs(outputs_raw, name_to_rail, valid)
 
     # 偵測是否有 inv=True（任何反相皆用共用 NOT 閘，佔用 AND 欄左側空間）
     _has_not_gate = False
@@ -1326,8 +1323,7 @@ def generate_drawio(config: PowerSeqConfig, *, optimize_layout: bool = False) ->
                 if arr.tag == "Array" and arr.get("as") == "points":
                     geo.remove(arr)
 
-    if optimize_layout:
-        minimize_crossings(root, grid=GRID)
+    minimize_crossings(root, grid=GRID)
 
     rough = ET.tostring(mxfile, encoding="unicode", default_namespace="")
     dom = minidom.parseString(rough)

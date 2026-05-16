@@ -1519,9 +1519,6 @@ class PowerSeqGUI(ctk.CTk):
         ctk.CTkButton(toolbar, text="Save JSON (Ctrl+S)", width=140, command=self._save_json).pack(side="left", padx=(0, S_SM))
         ctk.CTkButton(toolbar, text="Generate Verilog (Ctrl+G)", width=170, command=self._generate_verilog).pack(side="left", padx=(0, S_SM))
         ctk.CTkButton(toolbar, text="Export Draw.io (Ctrl+D)", width=160, command=self._export_drawio).pack(side="left", padx=(0, S_SM))
-        self._optimize_layout_var = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(toolbar, text="Optimize Layout",
-                        variable=self._optimize_layout_var, width=130).pack(side="left", padx=(0, S_SM))
 
         self._undo_btn = ctk.CTkButton(toolbar, text="\u21B6 Undo", width=80, command=self._undo)
         self._undo_btn.pack(side="left", padx=(0, S_XS))
@@ -2035,7 +2032,7 @@ class PowerSeqGUI(ctk.CTk):
         if not path:
             return
         try:
-            xml = generate_drawio(cfg, optimize_layout=self._optimize_layout_var.get())
+            xml = generate_drawio(cfg)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(xml)
             messagebox.showinfo("Saved", f"Saved: {path}\nOpen in Draw.io (diagrams.net) to view.")

@@ -11,10 +11,10 @@ from config_models import PowerSeqConfig
 from drawio_export import generate_drawio
 
 
-def convert(json_path: str, xml_path: str, optimize: bool) -> None:
+def convert(json_path: str, xml_path: str) -> None:
     with open(json_path, "r", encoding="utf-8") as f:
         cfg = PowerSeqConfig.from_dict(json.load(f))
-    xml = generate_drawio(cfg, optimize_layout=optimize)
+    xml = generate_drawio(cfg)
     with open(xml_path, "w", encoding="utf-8") as f:
         f.write(xml)
 
@@ -30,10 +30,6 @@ def main() -> None:
     parser.add_argument(
         "-o", "--output",
         help="Output XML path (only when a single input is given)",
-    )
-    parser.add_argument(
-        "--optimize", action="store_true",
-        help="Enable layout optimization (topological sort + channel assignment + crossing reduction)",
     )
     args = parser.parse_args()
 
@@ -55,7 +51,7 @@ def main() -> None:
             continue
         out = args.output if args.output else os.path.splitext(path)[0] + ".xml"
         try:
-            convert(path, out, args.optimize)
+            convert(path, out)
             print(f"[OK] {path} -> {out}")
             ok += 1
         except Exception as e:
