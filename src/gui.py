@@ -6,7 +6,7 @@ Power Sequence Config GUI v1.2
 - Hi/Lo/Force 改 Tab 顯示，節點展開後高度減半（B2）
 - 三段以顏色語意區分：Hi=綠 / Lo=紅 / Force=琥珀（A1）
 - Header chip 化（[Output] [HI:8] [LO:4] [INIT:0]）（A2）
-- Dirty flag（title 顯示 *）、快捷鍵 Ctrl+S/N/G/D/F/Z/Y/Delete（A3）
+- Dirty flag（title 顯示 *）、快捷鍵 Ctrl+S/Shift+S/O/N/G/E/F/Z/Y/Delete、F1 Help（A3）
 - 自動 commit（FocusOut / radio trace），拿掉每張卡片的 Apply 按鈕（A4）
 - 左側 list 升級為 CTkScrollableFrame，支援搜尋、多選批次刪除 / 改類型（A5/B5）
 - Browse / Inspect 雙模式（B3）
@@ -19,6 +19,7 @@ Power Sequence Config GUI v1.2
 未實作：節點群組（C3，需要 schema 變更，目前以搜尋 + 名稱前綴排序替代）
 """
 import json
+import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from typing import Callable, Optional
@@ -378,7 +379,16 @@ class CondSectionFrame(ctk.CTkFrame):
 
     # ---- row drag ----
     def _on_cond_drag_start(self, gi: int, ii: int):
-        self._cond_drag_state = {"gi": gi, "from": ii, "target": ii}
+        # 預備虛影 label：用 dep 顯示名稱（High/Low 或實際 rail 名稱）
+        pending_text = None
+        if 0 <= gi < len(self.groups) and 0 <= ii < len(self.groups[gi]):
+            name = self.groups[gi][ii]
+            display = "High" if name == DEP_HIGH else ("Low" if name == DEP_LOW else name)
+            pending_text = f"\u2261 {display}"
+        self._cond_drag_state = {
+            "gi": gi, "from": ii, "target": ii, "target_di": ii,
+            "ghost": None, "pending_text": pending_text,
+        }
         key = (gi, ii)
         if key in self.rows:
             try:
@@ -390,26 +400,61 @@ class CondSectionFrame(ctk.CTkFrame):
         st = self._cond_drag_state
         if not st or st["gi"] != gi:
             return
-        target = self._find_row_target_idx(gi, event.y_root)
-        if target is None:
+        # 虛影 lazy 建立 + 跟隨游標
+        if st["ghost"] is None and st.get("pending_text"):
+            st["ghost"] = DragGhost.create(self, st["pending_text"], bg=self.theme["text"][0])
+            st["pending_text"] = None
+        DragGhost.move(st["ghost"], event.x_root, event.y_root)
+        result = self._find_row_target_idx(gi, event.y_root)
+        if result is None:
             return
-        prev = st.get("target", st["from"])
-        if target == prev:
+        target_vp, target_di = result
+        prev_vp = st.get("target", st["from"])
+        if target_vp == prev_vp:
             return
-        prev_key = (gi, prev)
-        if prev != st["from"] and prev_key in self.rows:
+        # 即時換位視覺效果（不動 data；release 才寫入）
+        # target_vp 是 visual position，跟 _move_cond_visually 的 target_idx 一致
+        self._move_cond_visually(gi, st["from"], target_vp)
+        prev_di = st.get("target_di", st["from"])
+        prev_key = (gi, prev_di)
+        if prev_di != st["from"] and prev_key in self.rows:
             try:
                 self.rows[prev_key].configure(border_width=0)
             except Exception:
                 pass
-        new_key = (gi, target)
-        if target != st["from"] and new_key in self.rows:
+        new_key = (gi, target_di)
+        if target_di != st["from"] and new_key in self.rows:
             try:
                 self.rows[new_key].configure(border_width=2,
                                              border_color=("#1f6feb", "#58a6ff"))
             except Exception:
                 pass
-        st["target"] = target
+        st["target"] = target_vp
+        st["target_di"] = target_di
+
+    def _move_cond_visually(self, gi: int, from_idx: int, target_idx: int):
+        """重排 group gi 內所有 cond row 的 pack 順序為 [..., target_idx 位置含 from_idx, ...]。
+
+        不動 self.groups（data）；只用 pack_forget + pack 重新排版。
+        """
+        keys = sorted([k for k in self.rows if k[0] == gi], key=lambda k: k[1])
+        if not keys:
+            return
+        n = len(keys)
+        if not (0 <= from_idx < n and 0 <= target_idx < n):
+            return
+        order = list(range(n))
+        moved = order.pop(from_idx)
+        order.insert(target_idx, moved)
+        for ii in order:
+            row = self.rows.get((gi, ii))
+            if row is None:
+                continue
+            try:
+                row.pack_forget()
+                row.pack(fill="x", pady=1)
+            except Exception:
+                pass
 
     def _on_cond_drag_release(self, gi: int):
         st = self._cond_drag_state
@@ -417,6 +462,7 @@ class CondSectionFrame(ctk.CTkFrame):
             return
         from_idx = st["from"]
         to_idx = st.get("target", from_idx)
+        DragGhost.destroy(st.get("ghost"))
         self._cond_drag_state = None
         for (g, _i), row in self.rows.items():
             if g != gi:
@@ -430,6 +476,14 @@ class CondSectionFrame(ctk.CTkFrame):
             self._fire_change()
 
     def _find_row_target_idx(self, gi: int, py: int):
+        """回傳 (visual_position, data_index) tuple。
+
+        visual_position：游標所在 row 在 y 排序後的 index (0..n-1)。
+        data_index：對應 row 的 data index（用於查 self.rows[(gi, di)]）。
+
+        用 visual_position 比較 prev/target 可避免「換位後 row 物理位置變 → 同 y 命中
+        不同 data_index」造成的震盪。
+        """
         cands = []
         for (g, i), row in self.rows.items():
             if g != gi:
@@ -445,10 +499,11 @@ class CondSectionFrame(ctk.CTkFrame):
         if not cands:
             return None
         cands.sort(key=lambda x: x[1])
-        for i, _t, b in cands:
+        for vp, (di, _t, b) in enumerate(cands):
             if py < b:
-                return i
-        return cands[-1][0]
+                return (vp, di)
+        last_di = cands[-1][0]
+        return (len(cands) - 1, last_di)
 
     def _reorder_cond(self, gi: int, from_idx: int, to_idx: int):
         if gi >= len(self.groups):
@@ -491,7 +546,10 @@ class CondSectionFrame(ctk.CTkFrame):
 
     # ---- group drag ----
     def _on_group_drag_start(self, gi: int):
-        self._group_drag_state = {"from": gi, "target": gi}
+        self._group_drag_state = {
+            "from": gi, "target": gi, "target_gi": gi,
+            "ghost": None, "pending_text": f"\u2261 Group {gi + 1}",
+        }
         if 0 <= gi < len(self.group_frames):
             try:
                 self.group_frames[gi]["frame"].configure(fg_color=("#cfe0ff", "#3a4a6a"))
@@ -502,25 +560,50 @@ class CondSectionFrame(ctk.CTkFrame):
         st = self._group_drag_state
         if not st:
             return
-        target = self._find_group_target_idx(event.y_root)
-        if target is None:
+        if st["ghost"] is None and st.get("pending_text"):
+            st["ghost"] = DragGhost.create(self, st["pending_text"], bg=self.theme["text"][0])
+            st["pending_text"] = None
+        DragGhost.move(st["ghost"], event.x_root, event.y_root)
+        result = self._find_group_target_idx(event.y_root)
+        if result is None:
             return
-        prev = st.get("target", st["from"])
-        if target == prev:
+        target_vp, target_gi = result
+        prev_vp = st.get("target", st["from"])
+        if target_vp == prev_vp:
             return
-        if prev != st["from"] and 0 <= prev < len(self.group_frames):
+        # 即時換位視覺效果（不動 data）
+        self._move_group_visually(st["from"], target_vp)
+        prev_gi = st.get("target_gi", st["from"])
+        if prev_gi != st["from"] and 0 <= prev_gi < len(self.group_frames):
             try:
-                self.group_frames[prev]["frame"].configure(
+                self.group_frames[prev_gi]["frame"].configure(
                     border_width=1, border_color=self.theme["border"])
             except Exception:
                 pass
-        if target != st["from"] and 0 <= target < len(self.group_frames):
+        if target_gi != st["from"] and 0 <= target_gi < len(self.group_frames):
             try:
-                self.group_frames[target]["frame"].configure(
+                self.group_frames[target_gi]["frame"].configure(
                     border_width=2, border_color=("#1f6feb", "#58a6ff"))
             except Exception:
                 pass
-        st["target"] = target
+        st["target"] = target_vp
+        st["target_gi"] = target_gi
+
+    def _move_group_visually(self, from_idx: int, target_idx: int):
+        """重排所有 group frame 的 pack 順序（不動 self.groups data）。"""
+        n = len(self.group_frames)
+        if not (0 <= from_idx < n and 0 <= target_idx < n):
+            return
+        order = list(range(n))
+        moved = order.pop(from_idx)
+        order.insert(target_idx, moved)
+        for gi in order:
+            try:
+                frame = self.group_frames[gi]["frame"]
+                frame.pack_forget()
+                frame.pack(fill="x", pady=S_XS, padx=(S_LG, 0))
+            except Exception:
+                pass
 
     def _on_group_drag_release(self):
         st = self._group_drag_state
@@ -528,6 +611,7 @@ class CondSectionFrame(ctk.CTkFrame):
             return
         from_idx = st["from"]
         to_idx = st.get("target", from_idx)
+        DragGhost.destroy(st.get("ghost"))
         self._group_drag_state = None
         for gf in self.group_frames:
             try:
@@ -541,6 +625,13 @@ class CondSectionFrame(ctk.CTkFrame):
             self._fire_change()
 
     def _find_group_target_idx(self, py: int):
+        """回傳 (visual_position, group_index) tuple。
+
+        visual_position：游標所在 frame 在 y 排序後的 index (0..n-1)。
+        group_index：對應 group 的 data index（self.group_frames 內的位置）。
+
+        以 visual_position 比較 prev/target 避免換位後的震盪。
+        """
         cands = []
         for gi, gf in enumerate(self.group_frames):
             try:
@@ -554,10 +645,10 @@ class CondSectionFrame(ctk.CTkFrame):
         if not cands:
             return None
         cands.sort(key=lambda x: x[1])
-        for gi, _t, b in cands:
+        for vp, (gi, _t, b) in enumerate(cands):
             if py < b:
-                return gi
-        return cands[-1][0]
+                return (vp, gi)
+        return (len(cands) - 1, cands[-1][0])
 
     def _reorder_groups(self, from_idx: int, to_idx: int):
         if from_idx == to_idx:
@@ -1126,8 +1217,10 @@ class NodeListPanel(ctk.CTkFrame):
         self._selected: set[int] = set()
         self._primary_idx: Optional[int] = None
         self._row_widgets: dict[int, ctk.CTkFrame] = {}
-        self._drag_from: Optional[int] = None
-        self._drag_to: Optional[int] = None
+        self._drag_from: Optional[int] = None  # data index of the dragged row
+        self._drag_to: Optional[int] = None  # visual position (0..n-1)
+        self._drag_to_di: Optional[int] = None  # data index of row under cursor (for border)
+        self._drag_ghost: Optional[tk.Toplevel] = None  # 拖拉跟游標的半透明虛影
         self._build_ui()
 
     def _build_ui(self):
@@ -1164,7 +1257,7 @@ class NodeListPanel(ctk.CTkFrame):
 
     def clear_selection(self):
         self._selected.clear()
-        self._render()
+        self._apply_row_bgs()
 
     def _render(self):
         for w in self.scroll.winfo_children():
@@ -1175,6 +1268,16 @@ class NodeListPanel(ctk.CTkFrame):
             if ft and ft not in rail.name.lower():
                 continue
             self._make_row(idx, rail)
+        self._update_multi_status()
+
+    def _apply_row_bgs(self):
+        """輕量更新：只改既有 row 的 fg_color，不 destroy/重建。
+        用於 selection / primary 變化等不影響 row 集合的情境，避免按下時整列重繪卡頓。"""
+        for i, row in self._row_widgets.items():
+            try:
+                row.configure(fg_color=self._row_bg(i))
+            except Exception:
+                pass
         self._update_multi_status()
 
     def _update_multi_status(self):
@@ -1221,44 +1324,111 @@ class NodeListPanel(ctk.CTkFrame):
             else:
                 self._selected.add(idx)
                 self._primary_idx = idx
-            self._render()
+            # 只變顏色不重建 row（row 集合不變）
+            self._apply_row_bgs()
             self.on_multi_change(set(self._selected))
             return
         # 普通 click：單選 + 開始拖拉（拖拉提交延後到 release）
         self._selected = {idx}
         self._primary_idx = idx
         self._drag_from = idx
-        self._drag_to = idx
-        self._render()
+        self._drag_to = idx  # 初始 visual position = data index（_render 後一致）
+        self._drag_to_di = idx
+        self._apply_row_bgs()
         self.on_multi_change(set(self._selected))
         self.on_select(idx)
+        # 預備虛影（lazy：第一次 motion 才真正顯示，避免按下沒拖也建 Toplevel）
+        self._ghost_pending_rail = self._rails[idx] if 0 <= idx < len(self._rails) else None
 
     def _on_motion(self, _idx: int, event):
         if self._drag_from is None:
             return
-        target = self._find_row_target_idx(event.y_root)
-        if target is None or target == self._drag_to:
+        # 虛影：第一次 motion 才真正建立 Toplevel
+        if self._drag_ghost is None and getattr(self, "_ghost_pending_rail", None) is not None:
+            rail = self._ghost_pending_rail
+            type_short = SEQ_TYPE_LABELS.get(rail.seq_type, rail.seq_type)[:6]
+            self._drag_ghost = DragGhost.create(self, f"[{type_short}] {rail.name}")
+            self._ghost_pending_rail = None
+        DragGhost.move(self._drag_ghost, event.x_root, event.y_root)
+        result = self._find_row_target_idx(event.y_root)
+        if result is None:
             return
-        # 還原前一個 target 的邊框；新增當前 target 邊框
-        prev = self._drag_to
-        if prev != self._drag_from and prev in self._row_widgets:
+        target_vp, target_di = result
+        if target_vp == self._drag_to:
+            return
+        # 即時換位視覺效果（不動 data；release 才寫入）
+        self._move_row_visually(self._drag_from, target_vp)
+        # 還原前一個 target 的邊框；新增當前 target 邊框（用 data index 查 widget）
+        prev_di = self._drag_to_di
+        if prev_di is not None and prev_di != self._drag_from and prev_di in self._row_widgets:
             try:
-                self._row_widgets[prev].configure(border_width=0)
+                self._row_widgets[prev_di].configure(border_width=0)
             except Exception:
                 pass
-        if target != self._drag_from and target in self._row_widgets:
+        if target_di != self._drag_from and target_di in self._row_widgets:
             try:
-                self._row_widgets[target].configure(
+                self._row_widgets[target_di].configure(
                     border_width=2, border_color=("#1f6feb", "#58a6ff"))
             except Exception:
                 pass
-        self._drag_to = target
+        self._drag_to = target_vp
+        self._drag_to_di = target_di
+
+    def _move_row_visually(self, from_di: int, target_vp: int):
+        """重排 scroll 內 row 的 pack 順序，使 from_di 視覺上位於 target_vp。
+
+        不動 self._rails（data）；release 才呼叫 on_reorder 寫入。
+        """
+        if not self._row_widgets:
+            return
+        # 取當前可見 row 的 data index list，按 winfo_y 排序
+        pairs = []
+        for di, row in self._row_widgets.items():
+            try:
+                pairs.append((di, row.winfo_rooty()))
+            except Exception:
+                continue
+        if not pairs:
+            return
+        pairs.sort(key=lambda x: x[1])
+        order = [di for di, _y in pairs]
+        if from_di not in order:
+            return
+        from_vp = order.index(from_di)
+        if not (0 <= target_vp < len(order)):
+            return
+        if from_vp == target_vp:
+            return
+        moved = order.pop(from_vp)
+        order.insert(target_vp, moved)
+        for di in order:
+            row = self._row_widgets.get(di)
+            if row is None:
+                continue
+            try:
+                row.pack_forget()
+                row.pack(fill="x", pady=1, padx=S_XS)
+            except Exception:
+                pass
+
+    def _destroy_drag_ghost(self):
+        DragGhost.destroy(self._drag_ghost)
+        self._drag_ghost = None
+        self._ghost_pending_rail = None
 
     def _on_release(self, _idx: int, _event):
-        f, t = self._drag_from, self._drag_to
+        f, t_vp = self._drag_from, self._drag_to
         self._drag_from = None
         self._drag_to = None
-        if f is None or t is None or f == t:
+        self._drag_to_di = None
+        self._destroy_drag_ghost()
+        if f is None or t_vp is None or f == t_vp:
+            # 還原邊框（即便沒移動，可能因 motion 加過邊框）
+            for row in self._row_widgets.values():
+                try:
+                    row.configure(border_width=0)
+                except Exception:
+                    pass
             return
         # 還原所有 row 邊框
         for row in self._row_widgets.values():
@@ -1266,9 +1436,17 @@ class NodeListPanel(ctk.CTkFrame):
                 row.configure(border_width=0)
             except Exception:
                 pass
-        self.on_reorder(f, t)
+        # t_vp 是 visual position（_rails.pop(f) 後 insert(t_vp, …) 的位置），
+        # 與 _move_row_visually 解讀及 _on_node_reordered 內 pop+insert 一致。
+        self.on_reorder(f, t_vp)
 
-    def _find_row_target_idx(self, py: int) -> Optional[int]:
+    def _find_row_target_idx(self, py: int) -> Optional[tuple[int, int]]:
+        """回傳 (visual_position, data_index)。
+
+        visual_position：游標所在 row 在 y 排序後的 index (0..n-1)。
+        以 visual_position 比較 prev/target 可避免「換位 → row 物理位置變 → 同 y 命中
+        不同 data index」造成的震盪。
+        """
         cands = []
         for i, row in self._row_widgets.items():
             try:
@@ -1282,10 +1460,10 @@ class NodeListPanel(ctk.CTkFrame):
         if not cands:
             return None
         cands.sort(key=lambda x: x[1])
-        for i, _t, b in cands:
+        for vp, (di, _t, b) in enumerate(cands):
             if py < b:
-                return i
-        return cands[-1][0]
+                return (vp, di)
+        return (len(cands) - 1, cands[-1][0])
 
 
 # ============================================================
@@ -1483,6 +1661,219 @@ class BatchPanel(ctk.CTkFrame):
 
 
 # ============================================================
+# Tooltip / StatusBar / RecentFiles / HelpDialog — UI 共用元件
+# ============================================================
+
+class Tooltip:
+    """簡易 hover tooltip：游標停留 delay ms 後彈出 tk.Toplevel 小標籤。"""
+
+    def __init__(self, widget, text: str, delay: int = 500):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self._tip: Optional[tk.Toplevel] = None
+        self._after_id: Optional[str] = None
+        widget.bind("<Enter>", self._on_enter, add="+")
+        widget.bind("<Leave>", self._on_leave, add="+")
+        widget.bind("<ButtonPress>", self._on_leave, add="+")
+
+    def _on_enter(self, _e=None):
+        self._cancel_pending()
+        self._after_id = self.widget.after(self.delay, self._show)
+
+    def _on_leave(self, _e=None):
+        self._cancel_pending()
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
+
+    def _cancel_pending(self):
+        if self._after_id is not None:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _show(self):
+        if not self.widget.winfo_exists():
+            return
+        x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        tip = tk.Toplevel(self.widget)
+        tip.wm_overrideredirect(True)
+        tip.wm_geometry(f"+{x}+{y}")
+        lbl = tk.Label(
+            tip, text=self.text, bg="#1f2937", fg="#f9fafb",
+            padx=8, pady=4, font=("", 9), bd=0,
+        )
+        lbl.pack()
+        self._tip = tip
+
+
+class DragGhost:
+    """Drag preview overlay：alpha=0.7 無邊框 Toplevel，跟游標走。
+
+    用法：
+        ghost = DragGhost.create(parent, "label text")
+        DragGhost.move(ghost, x_root, y_root)
+        DragGhost.destroy(ghost)
+    """
+
+    @staticmethod
+    def create(parent, text: str, bg: str = "#1f6feb") -> Optional[tk.Toplevel]:
+        try:
+            top = tk.Toplevel(parent)
+            top.wm_overrideredirect(True)
+            try:
+                top.wm_attributes("-alpha", 0.7)
+            except tk.TclError:
+                pass
+            try:
+                top.wm_attributes("-topmost", True)
+            except tk.TclError:
+                pass
+            frame = tk.Frame(top, bg=bg, bd=0, padx=8, pady=4)
+            frame.pack()
+            tk.Label(frame, text=text, bg=bg, fg="#ffffff",
+                     font=("", 10, "bold"), bd=0).pack()
+            return top
+        except Exception:
+            return None
+
+    @staticmethod
+    def move(ghost: Optional[tk.Toplevel], x_root: int, y_root: int):
+        if ghost is None:
+            return
+        try:
+            ghost.geometry(f"+{x_root + 12}+{y_root + 8}")
+        except Exception:
+            pass
+
+    @staticmethod
+    def destroy(ghost: Optional[tk.Toplevel]):
+        if ghost is None:
+            return
+        try:
+            ghost.destroy()
+        except Exception:
+            pass
+
+
+class StatusBar(ctk.CTkFrame):
+    """底部 status bar：左=檔名+dirty / 中=節點統計 / 右=訊息（toast 文字）。"""
+
+    def __init__(self, master, **kwargs):
+        super().__init__(master, height=24, fg_color=("gray85", "gray18"),
+                         corner_radius=0, **kwargs)
+        self.pack_propagate(False)
+        self._file_lbl = ctk.CTkLabel(self, text="(unsaved)", font=FONT_HINT, anchor="w")
+        self._file_lbl.pack(side="left", padx=(S_MD, S_SM))
+        self._stat_lbl = ctk.CTkLabel(self, text="", font=FONT_HINT, anchor="w",
+                                       text_color=("gray35", "gray65"))
+        self._stat_lbl.pack(side="left", padx=S_SM)
+        self._msg_lbl = ctk.CTkLabel(self, text="", font=FONT_HINT, anchor="e",
+                                      text_color=("gray35", "gray65"))
+        self._msg_lbl.pack(side="right", padx=(S_SM, S_MD))
+        self._msg_after_id: Optional[str] = None
+
+    def set_file(self, path: Optional[str], dirty: bool):
+        if path is None:
+            text = "(unsaved)" + (" *" if dirty else "")
+        else:
+            text = os.path.basename(path) + (" *" if dirty else "")
+        self._file_lbl.configure(text=text)
+
+    def set_stats(self, n_total: int, n_output: int, n_input: int):
+        self._stat_lbl.configure(text=f"Nodes: {n_total}  (Output: {n_output}, Input: {n_input})")
+
+    def set_message(self, msg: str, level: str = "info", auto_clear_ms: int = 5000):
+        color_map = {
+            "info":    ("gray25", "#9ca3af"),
+            "success": ("#1a7f37", "#3fb950"),
+            "warn":    ("#9a6700", "#e3b341"),
+            "error":   ("#cf222e", "#ff7b72"),
+        }
+        self._msg_lbl.configure(text=msg, text_color=color_map.get(level, color_map["info"]))
+        if self._msg_after_id is not None:
+            try:
+                self.after_cancel(self._msg_after_id)
+            except Exception:
+                pass
+            self._msg_after_id = None
+        if auto_clear_ms > 0:
+            self._msg_after_id = self.after(auto_clear_ms, lambda: self._msg_lbl.configure(text=""))
+
+
+class RecentFiles:
+    """Recent files 儲存於 ~/.pwrseq_gen/recent.json，最多 8 個。"""
+
+    MAX = 8
+
+    def __init__(self):
+        self._dir = os.path.join(os.path.expanduser("~"), ".pwrseq_gen")
+        self._path = os.path.join(self._dir, "recent.json")
+        self._items: list[str] = self._load()
+
+    def _load(self) -> list[str]:
+        try:
+            with open(self._path, encoding="utf-8") as f:
+                items = json.load(f)
+            return [p for p in items if isinstance(p, str) and os.path.isfile(p)][: self.MAX]
+        except Exception:
+            return []
+
+    def _save(self) -> None:
+        try:
+            os.makedirs(self._dir, exist_ok=True)
+            with open(self._path, "w", encoding="utf-8") as f:
+                json.dump(self._items, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def add(self, path: str) -> None:
+        if not path:
+            return
+        path = os.path.abspath(path)
+        if path in self._items:
+            self._items.remove(path)
+        self._items.insert(0, path)
+        self._items = self._items[: self.MAX]
+        self._save()
+
+    def list(self) -> list[str]:
+        return list(self._items)
+
+
+class HelpDialog(ctk.CTkToplevel):
+    """快捷鍵清單對話框（F1 開啟）。"""
+
+    def __init__(self, master, shortcuts: list[tuple[str, str]]):
+        super().__init__(master)
+        self.title("Shortcuts")
+        self.geometry("420x460")
+        self.transient(master)
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+        ctk.CTkLabel(self, text="Keyboard Shortcuts", font=FONT_TITLE).pack(pady=(S_MD, S_SM))
+        body = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=S_MD, pady=(0, S_MD))
+        for key, desc in shortcuts:
+            row = ctk.CTkFrame(body, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            ctk.CTkLabel(row, text=key, font=FONT_MONO, width=140, anchor="w",
+                         text_color=("#1f6feb", "#58a6ff")).pack(side="left")
+            ctk.CTkLabel(row, text=desc, font=FONT_BODY, anchor="w").pack(side="left")
+        ctk.CTkButton(self, text="Close", width=80, command=self.destroy).pack(pady=(0, S_MD))
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+
+# ============================================================
 # PowerSeqGUI — 主視窗
 # ============================================================
 
@@ -1503,46 +1894,144 @@ class PowerSeqGUI(ctk.CTk):
         self._redo_stack: list[str] = []
         self._preview_after_id: Optional[str] = None
         self._editor_change_after_id: Optional[str] = None
+        self._current_path: Optional[str] = None
+        self._recent = RecentFiles()
+        self._tooltips: list[Tooltip] = []  # 強引用，避免 GC
 
         self._build_ui()
         self._bind_shortcuts()
         self._refresh_all()
 
     # ---- UI ----
+    def _tt(self, widget, text: str):
+        """Attach tooltip; keep reference to avoid GC."""
+        self._tooltips.append(Tooltip(widget, text))
+
+    def _sep(self, parent):
+        """Toolbar 視覺分隔線。
+
+        注意：CTkFrame 預設 height=200，若不顯式指定且 fill='y'，會把整個
+        toolbar 撐高到 200+，按鈕變成中段一條、上下大片空白。固定 height=22
+        與按鈕視覺對齊。
+        """
+        s = ctk.CTkFrame(parent, width=1, height=22, fg_color=("gray70", "gray30"))
+        s.pack(side="left", fill="y", padx=S_SM, pady=S_XS)
+        return s
+
+    # 主動作（產出）著色
+    ACCENT_FG = ("#2563eb", "#1d4ed8")
+    ACCENT_HOVER = ("#1d4ed8", "#1e40af")
+
     def _build_ui(self):
         # ----- Toolbar -----
         toolbar = ctk.CTkFrame(self, fg_color="transparent")
-        toolbar.pack(fill="x", padx=S_MD, pady=S_MD)
-        ctk.CTkButton(toolbar, text="+ Add (Ctrl+N)", width=110, command=self._add_rail).pack(side="left", padx=(0, S_SM))
-        ctk.CTkButton(toolbar, text="- Delete (Del)", width=110, command=self._delete_selected).pack(side="left", padx=(0, S_SM))
-        ctk.CTkButton(toolbar, text="Load JSON", width=100, command=self._load_json).pack(side="left", padx=(0, S_SM))
-        ctk.CTkButton(toolbar, text="Save JSON (Ctrl+S)", width=140, command=self._save_json).pack(side="left", padx=(0, S_SM))
-        ctk.CTkButton(toolbar, text="Generate Verilog (Ctrl+G)", width=170, command=self._generate_verilog).pack(side="left", padx=(0, S_SM))
-        ctk.CTkButton(toolbar, text="Export Draw.io (Ctrl+D)", width=160, command=self._export_drawio).pack(side="left", padx=(0, S_SM))
+        toolbar.pack(fill="x", padx=S_MD, pady=(S_MD, S_SM))
 
-        self._undo_btn = ctk.CTkButton(toolbar, text="\u21B6 Undo", width=80, command=self._undo)
+        # group: edit
+        b_add = ctk.CTkButton(toolbar, text="+ Add", width=70, command=self._add_rail)
+        b_add.pack(side="left", padx=(0, S_XS))
+        self._tt(b_add, "Add new node  (Ctrl+N)")
+        b_del = ctk.CTkButton(toolbar, text="- Delete", width=80, command=self._delete_selected)
+        b_del.pack(side="left", padx=(0, S_SM))
+        self._tt(b_del, "Delete selected nodes  (Del)")
+
+        self._sep(toolbar)
+
+        # group: file
+        self._open_btn = ctk.CTkButton(toolbar, text="Open", width=70, command=self._load_json)
+        self._open_btn.pack(side="left", padx=(0, S_XS))
+        self._tt(self._open_btn, "Open JSON  (Ctrl+O)")
+        self._recent_btn = ctk.CTkButton(toolbar, text="\u25BC", width=24, command=self._show_recent_menu)
+        self._recent_btn.pack(side="left", padx=(0, S_SM))
+        self._tt(self._recent_btn, "Recent files")
+        b_save = ctk.CTkButton(toolbar, text="Save", width=70, command=self._save_json)
+        b_save.pack(side="left", padx=(0, S_XS))
+        self._tt(b_save, "Save  (Ctrl+S)")
+        b_saveas = ctk.CTkButton(toolbar, text="Save As", width=80, command=self._save_json_as)
+        b_saveas.pack(side="left", padx=(0, S_SM))
+        self._tt(b_saveas, "Save As...  (Ctrl+Shift+S)")
+
+        self._sep(toolbar)
+
+        # group: history
+        self._undo_btn = ctk.CTkButton(toolbar, text="\u21B6", width=36, command=self._undo)
         self._undo_btn.pack(side="left", padx=(0, S_XS))
-        self._redo_btn = ctk.CTkButton(toolbar, text="\u21B7 Redo", width=80, command=self._redo)
+        self._tt(self._undo_btn, "Undo  (Ctrl+Z)")
+        self._redo_btn = ctk.CTkButton(toolbar, text="\u21B7", width=36, command=self._redo)
         self._redo_btn.pack(side="left", padx=(0, S_SM))
+        self._tt(self._redo_btn, "Redo  (Ctrl+Y)")
 
+        self._sep(toolbar)
+
+        # group: view toggles
         self._inspect_var = tk.BooleanVar(value=False)
-        ctk.CTkCheckBox(toolbar, text="Inspect", variable=self._inspect_var,
-                        width=90, command=self._toggle_inspect).pack(side="left", padx=(0, S_SM))
+        cb_ins = ctk.CTkCheckBox(toolbar, text="Inspect", variable=self._inspect_var,
+                                  width=80, command=self._toggle_inspect)
+        cb_ins.pack(side="left", padx=(0, S_SM))
+        self._tt(cb_ins, "Show only selected node, fully expanded")
         self._preview_var = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(toolbar, text="Preview", variable=self._preview_var,
-                        width=90, command=self._toggle_preview).pack(side="left", padx=(0, S_SM))
+        cb_pv = ctk.CTkCheckBox(toolbar, text="Preview", variable=self._preview_var,
+                                 width=80, command=self._toggle_preview)
+        cb_pv.pack(side="left", padx=(0, S_SM))
+        self._tt(cb_pv, "Toggle right-side live Verilog preview")
 
-        self._pin_btn = ctk.CTkButton(toolbar, text="\U0001F4CC", width=36, command=self._toggle_topmost)
+        # right side: pin / theme / help / validation badge / main actions
+        self._pin_btn = ctk.CTkButton(toolbar, text="Pin", width=44, command=self._toggle_topmost)
         self._pin_btn.pack(side="right")
+        self._tt(self._pin_btn, "Toggle always-on-top")
 
-        # ----- Body (3-col) -----
-        body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=S_MD, pady=(0, S_MD))
+        self._theme_var = tk.StringVar(value="Dark")
+        theme_menu = ctk.CTkOptionMenu(
+            toolbar, values=["Dark", "Light", "System"], width=90,
+            variable=self._theme_var, command=self._apply_theme,
+        )
+        theme_menu.pack(side="right", padx=(0, S_SM))
+        self._tt(theme_menu, "Appearance mode")
+
+        b_help = ctk.CTkButton(toolbar, text="?", width=28, command=self._open_help)
+        b_help.pack(side="right", padx=(0, S_SM))
+        self._tt(b_help, "Keyboard shortcuts  (F1)")
+
+        # validation badge：0 errors 隱藏，否則紅色 ⚠ N
+        self._validation_badge = ctk.CTkLabel(
+            toolbar, text="", font=FONT_CHIP, width=50, corner_radius=10,
+            fg_color=("#fee2e2", "#7f1d1d"),
+            text_color=("#991b1b", "#fecaca"),
+            cursor="hand2",
+        )
+        # 不立即 pack；_update_validation 中根據錯誤數顯示 / 隱藏
+        self._validation_badge.bind("<Button-1>", lambda _e: self._focus_validation())
+
+        b_export = ctk.CTkButton(toolbar, text="Export Draw.io", width=130,
+                                  fg_color=self.ACCENT_FG, hover_color=self.ACCENT_HOVER,
+                                  command=self._export_drawio)
+        b_export.pack(side="right", padx=(0, S_SM))
+        self._tt(b_export, "Export dependency diagram XML  (Ctrl+E)")
+        b_gen = ctk.CTkButton(toolbar, text="Generate Verilog", width=140,
+                               fg_color=self.ACCENT_FG, hover_color=self.ACCENT_HOVER,
+                               command=self._generate_verilog)
+        b_gen.pack(side="right", padx=(0, S_SM))
+        self._tt(b_gen, "Validate and generate Verilog .v  (Ctrl+G)")
+
+        # ----- Body (3-col, resizable) -----
+        body_wrap = ctk.CTkFrame(self, fg_color="transparent")
+        body_wrap.pack(fill="both", expand=True, padx=S_MD, pady=(0, 0))
+
+        # 用 tk.PanedWindow 提供拖拉分隔；內嵌 ctk frame
+        # opaqueresize=False：拖時只顯示分隔線，放手才 reflow，避免 ctk widgets 持續重繪造成卡頓
+        sash_bg = "#374151"
+        paned = tk.PanedWindow(
+            body_wrap, orient=tk.HORIZONTAL,
+            sashrelief="flat", sashwidth=4,
+            bg=sash_bg, bd=0,
+            opaqueresize=False,
+        )
+        paned.pack(fill="both", expand=True)
+        self._paned = paned
 
         # left
-        left_wrap = ctk.CTkFrame(body, fg_color=("gray90", "gray17"), width=260)
-        left_wrap.pack(side="left", fill="y", padx=(0, S_MD))
-        left_wrap.pack_propagate(False)
+        left_wrap = ctk.CTkFrame(paned, fg_color=("gray90", "gray17"), width=260)
+        paned.add(left_wrap, minsize=200, stretch="never", width=260)
 
         self.node_list = NodeListPanel(
             left_wrap, on_select=self._on_node_selected,
@@ -1554,44 +2043,65 @@ class PowerSeqGUI(ctk.CTk):
         self.pulse_panel = PulsePanel(left_wrap, on_change=self._on_pulses_changed)
         self.pulse_panel.pack(fill="x")
 
-        # middle (使用 grid 以便 batch_panel 顯示/隱藏時不破壞順序)
-        mid = ctk.CTkFrame(body, fg_color="transparent")
-        mid.pack(side="left", fill="both", expand=True)
-        mid.grid_rowconfigure(1, weight=1)
+        # middle
+        mid = ctk.CTkFrame(paned, fg_color="transparent")
+        paned.add(mid, minsize=480, stretch="always")
+        mid.grid_rowconfigure(2, weight=1)
         mid.grid_columnconfigure(0, weight=1)
+
+        # editor mini header：Expand all / Collapse all
+        editor_hdr = ctk.CTkFrame(mid, fg_color="transparent")
+        editor_hdr.grid(row=0, column=0, sticky="ew", pady=(0, S_XS))
+        ctk.CTkLabel(editor_hdr, text="Nodes", font=FONT_SECTION).pack(side="left", padx=(S_XS, S_MD))
+        b_exp = ctk.CTkButton(editor_hdr, text="Expand all", width=90, height=24,
+                               fg_color="transparent", border_width=1,
+                               command=self._expand_all)
+        b_exp.pack(side="right", padx=(S_XS, 0))
+        b_col = ctk.CTkButton(editor_hdr, text="Collapse all", width=100, height=24,
+                               fg_color="transparent", border_width=1,
+                               command=self._collapse_all)
+        b_col.pack(side="right", padx=(S_XS, 0))
 
         self.batch_panel = BatchPanel(
             mid, on_delete=self._batch_delete, on_set_type=self._batch_set_type,
         )
-        self.batch_panel.grid(row=0, column=0, sticky="ew", pady=(0, S_SM))
+        self.batch_panel.grid(row=1, column=0, sticky="ew", pady=(0, S_SM))
         self.batch_panel.grid_remove()  # 初始隱藏
 
         self.editor_scroll = ctk.CTkScrollableFrame(mid, fg_color="transparent")
-        self.editor_scroll.grid(row=1, column=0, sticky="nsew")
+        self.editor_scroll.grid(row=2, column=0, sticky="nsew")
         self.collapsible_frames: list[CollapsibleRailFrame] = []
 
         self.validation = ValidationPanel(
             mid, on_jump=self._jump_to_rail,
             fg_color=("gray90", "gray17"),
         )
-        self.validation.grid(row=2, column=0, sticky="ew", pady=(S_SM, 0))
+        self.validation.grid(row=3, column=0, sticky="ew", pady=(S_SM, 0))
 
         # right (preview)
-        self.preview_wrap = ctk.CTkFrame(body, fg_color=("gray90", "gray17"), width=380)
-        self.preview_wrap.pack(side="left", fill="y", padx=(S_MD, 0))
-        self.preview_wrap.pack_propagate(False)
+        self.preview_wrap = ctk.CTkFrame(paned, fg_color=("gray90", "gray17"), width=380)
+        paned.add(self.preview_wrap, minsize=240, stretch="never", width=380)
         self.preview = PreviewPanel(self.preview_wrap, fg_color="transparent")
         self.preview.pack(fill="both", expand=True)
+
+        # ----- Status bar -----
+        self._status = StatusBar(self)
+        self._status.pack(side="bottom", fill="x")
 
     def _bind_shortcuts(self):
         self.bind_all("<Control-s>", lambda _e: self._save_json())
         self.bind_all("<Control-S>", lambda _e: self._save_json())
+        self.bind_all("<Control-Shift-s>", lambda _e: self._save_json_as())
+        self.bind_all("<Control-Shift-S>", lambda _e: self._save_json_as())
+        self.bind_all("<Control-o>", lambda _e: self._load_json())
+        self.bind_all("<Control-O>", lambda _e: self._load_json())
+        self.bind_all("<F1>", lambda _e: self._open_help())
         self.bind_all("<Control-n>", lambda _e: self._add_rail())
         self.bind_all("<Control-N>", lambda _e: self._add_rail())
         self.bind_all("<Control-g>", lambda _e: self._generate_verilog())
         self.bind_all("<Control-G>", lambda _e: self._generate_verilog())
-        self.bind_all("<Control-d>", lambda _e: self._export_drawio())
-        self.bind_all("<Control-D>", lambda _e: self._export_drawio())
+        self.bind_all("<Control-e>", lambda _e: self._export_drawio())
+        self.bind_all("<Control-E>", lambda _e: self._export_drawio())
         self.bind_all("<Control-f>", lambda _e: self.node_list.focus_search())
         self.bind_all("<Control-F>", lambda _e: self.node_list.focus_search())
         self.bind_all("<Control-z>", lambda _e: self._undo())
@@ -1615,12 +2125,25 @@ class PowerSeqGUI(ctk.CTk):
             self._update_title()
 
     def _mark_clean(self):
-        if self._dirty:
-            self._dirty = False
-            self._update_title()
+        self._dirty = False
+        self._update_title()
 
     def _update_title(self):
         self.title(self._base_title + (" *" if self._dirty else ""))
+        if hasattr(self, "_status"):
+            self._status.set_file(self._current_path, self._dirty)
+
+    def _update_stats(self):
+        if not hasattr(self, "_status"):
+            return
+        n = len(self.config_obj.rails)
+        n_out = sum(1 for r in self.config_obj.rails if r.seq_type == "output")
+        n_in = sum(1 for r in self.config_obj.rails if r.seq_type == "input")
+        self._status.set_stats(n, n_out, n_in)
+
+    def _status_msg(self, msg: str, level: str = "info"):
+        if hasattr(self, "_status"):
+            self._status.set_message(msg, level)
 
     # ---- undo / redo ----
     def _push_undo(self):
@@ -1738,6 +2261,7 @@ class PowerSeqGUI(ctk.CTk):
         self._update_validation()
         self._schedule_preview()
         self._update_undo_btns()
+        self._update_stats()
 
     def _apply_inspect_mode(self):
         # 先全部 pack_forget 再依序重新 pack，避免 toggle 後順序錯亂
@@ -1955,6 +2479,21 @@ class PowerSeqGUI(ctk.CTk):
         cfg = self._collect_config()
         ok, errs = validate(cfg)
         self.validation.set_result(ok, errs)
+        # 同步 toolbar badge
+        if hasattr(self, "_validation_badge"):
+            if ok:
+                self._validation_badge.pack_forget()
+            else:
+                n = len(errs)
+                self._validation_badge.configure(text=f"\u26A0 {n}")
+                # 確保只 pack 一次
+                if not self._validation_badge.winfo_ismapped():
+                    self._validation_badge.pack(side="right", padx=(0, S_SM))
+
+    def _focus_validation(self):
+        """點 validation badge 時，確保 validation panel 展開並把焦點移到第一個錯誤。"""
+        if hasattr(self, "validation") and getattr(self.validation, "_collapsed", False):
+            self.validation._toggle()
 
     def _jump_to_rail(self, name: str):
         for idx, r in enumerate(self.config_obj.rails):
@@ -1970,44 +2509,126 @@ class PowerSeqGUI(ctk.CTk):
         self._topmost = not self._topmost
         self.attributes("-topmost", self._topmost)
         self._pin_btn.configure(
-            fg_color=("green", "#2a8c2a") if self._topmost
+            fg_color=("#10b981", "#059669") if self._topmost
             else ctk.ThemeManager.theme["CTkButton"]["fg_color"]
         )
+        self._status_msg("Pinned on top" if self._topmost else "Unpinned")
 
-    def _load_json(self):
-        path = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
-        if not path:
+    # ---- theme ----
+    def _apply_theme(self, value: str):
+        mode = (value or "Dark").lower()
+        if mode not in ("dark", "light", "system"):
+            mode = "dark"
+        ctk.set_appearance_mode(mode)
+        self._status_msg(f"Theme: {value}")
+
+    # ---- help ----
+    def _open_help(self):
+        shortcuts = [
+            ("Ctrl+N",        "Add new node"),
+            ("Delete",        "Delete selected nodes"),
+            ("Ctrl+O",        "Open JSON"),
+            ("Ctrl+S",        "Save (overwrite if path known)"),
+            ("Ctrl+Shift+S",  "Save As..."),
+            ("Ctrl+G",        "Generate Verilog"),
+            ("Ctrl+E",        "Export Draw.io"),
+            ("Ctrl+F",        "Focus node search"),
+            ("Ctrl+Z",        "Undo"),
+            ("Ctrl+Y",        "Redo"),
+            ("F1",            "Show this dialog"),
+        ]
+        HelpDialog(self, shortcuts)
+
+    # ---- recent ----
+    def _show_recent_menu(self):
+        items = self._recent.list()
+        menu = tk.Menu(self, tearoff=0)
+        if not items:
+            menu.add_command(label="(no recent files)", state="disabled")
+        else:
+            for p in items:
+                menu.add_command(label=p, command=lambda _p=p: self._open_path(_p))
+        x = self._recent_btn.winfo_rootx()
+        y = self._recent_btn.winfo_rooty() + self._recent_btn.winfo_height()
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _open_path(self, path: str):
+        if not os.path.isfile(path):
+            self._status_msg(f"Not found: {path}", level="error")
             return
         try:
             with open(path, encoding="utf-8") as f:
                 self.config_obj = PowerSeqConfig.from_dict(json.load(f))
             self._undo_stack.clear()
             self._redo_stack.clear()
+            self._current_path = path
+            self._recent.add(path)
             self._refresh_all()
             self._mark_clean()
-            messagebox.showinfo("Success", "Loaded")
+            self._status_msg(f"Loaded: {os.path.basename(path)}", level="success")
         except Exception as e:
             messagebox.showerror("Error", str(e))
+            self._status_msg(f"Load failed: {e}", level="error")
 
-    def _save_json(self):
-        cfg = self._collect_config()
-        path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")])
+    # ---- expand/collapse all ----
+    def _expand_all(self):
+        for cf in self.collapsible_frames:
+            cf.expand()
+
+    def _collapse_all(self):
+        for cf in self.collapsible_frames:
+            if hasattr(cf, "collapse"):
+                cf.collapse()
+            elif getattr(cf, "_expanded", False):
+                cf._toggle()
+
+    # ---- save / load ----
+    def _load_json(self):
+        path = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
         if not path:
             return
+        self._open_path(path)
+
+    def _save_json(self):
+        """Save to current path if known, else fall back to Save As."""
+        if self._current_path:
+            return self._save_to(self._current_path)
+        return self._save_json_as()
+
+    def _save_json_as(self):
+        cfg = self._collect_config()
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json", filetypes=[("JSON", "*.json")],
+            initialfile=os.path.basename(self._current_path) if self._current_path else "",
+        )
+        if not path:
+            return
+        return self._save_to(path, cfg)
+
+    def _save_to(self, path: str, cfg: Optional[PowerSeqConfig] = None):
+        if cfg is None:
+            cfg = self._collect_config()
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(cfg.to_dict(), f, indent=2, ensure_ascii=False)
             self.config_obj = cfg
+            self._current_path = path
+            self._recent.add(path)
             self._mark_clean()
-            messagebox.showinfo("Success", "Saved")
+            self._status_msg(f"Saved: {os.path.basename(path)}", level="success")
         except Exception as e:
             messagebox.showerror("Error", str(e))
+            self._status_msg(f"Save failed: {e}", level="error")
 
     def _generate_verilog(self):
         cfg = self._collect_config()
         ok, errs = validate(cfg)
         if not ok:
             messagebox.showerror("Validation Failed", "\n".join(errs))
+            self._status_msg(f"{len(errs)} validation error(s); cannot generate", level="error")
             return
         path = filedialog.asksaveasfilename(defaultextension=".v", filetypes=[("Verilog", "*.v")])
         if not path:
@@ -2016,14 +2637,15 @@ class PowerSeqGUI(ctk.CTk):
             code = generate_verilog(cfg, output_filename=path)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(code)
-            messagebox.showinfo("Success", f"Generated: {path}")
+            self._status_msg(f"Generated: {os.path.basename(path)}", level="success")
         except Exception as e:
             messagebox.showerror("Error", str(e))
+            self._status_msg(f"Generate failed: {e}", level="error")
 
     def _export_drawio(self):
         cfg = self._collect_config()
         if not cfg.rails:
-            messagebox.showinfo("Notice", "No nodes. Add rails first.")
+            self._status_msg("No nodes. Add rails first.", level="warn")
             return
         path = filedialog.asksaveasfilename(
             defaultextension=".xml",
@@ -2035,9 +2657,10 @@ class PowerSeqGUI(ctk.CTk):
             xml = generate_drawio(cfg)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(xml)
-            messagebox.showinfo("Saved", f"Saved: {path}\nOpen in Draw.io (diagrams.net) to view.")
+            self._status_msg(f"Exported: {os.path.basename(path)}", level="success")
         except Exception as e:
             messagebox.showerror("Error", str(e))
+            self._status_msg(f"Export failed: {e}", level="error")
 
 
 def run_gui():
