@@ -33,6 +33,7 @@ from config_models import PowerRail, PowerSeqConfig
 from drawio_export import generate_drawio
 from validator import validate
 from verilog_generator import generate_verilog
+from c_generator import generate_c
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -1481,8 +1482,10 @@ class PulsePanel(ctk.CTkFrame):
 
     def _build_ui(self):
         ctk.CTkLabel(self, text="Timing Signals", font=FONT_TITLE).pack(pady=(S_MD, S_SM))
-        self.entry = ctk.CTkEntry(self, placeholder_text="New signal")
+        self.entry = ctk.CTkEntry(self, placeholder_text="New signal (Enter to add)")
         self.entry.pack(fill="x", padx=S_SM, pady=(0, S_SM))
+        self.entry.bind("<Return>", lambda _e: self._on_add())
+        self.entry.bind("<KP_Enter>", lambda _e: self._on_add())
         self.listbox = tk.Listbox(self, font=FONT_MONO, selectmode="single", height=4)
         self.listbox.pack(fill="x", padx=S_SM, pady=(0, S_SM))
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
@@ -1593,20 +1596,31 @@ class ValidationPanel(ctk.CTkFrame):
 
 
 # ============================================================
-# PreviewPanel — 右側 Verilog 即時預覽（C1）
+# PreviewPanel — 右側 Verilog / C 即時預覽（C1）
 # ============================================================
 
-class PreviewPanel(ctk.CTkFrame):
-    """右側預覽面板：Verilog read-only text，內建主題化捲軸。"""
+PREVIEW_LANGS = ("Verilog", "C")
 
-    def __init__(self, master, **kwargs):
+
+class PreviewPanel(ctk.CTkFrame):
+    """右側預覽面板：Verilog 或 C read-only text，內建主題化捲軸。"""
+
+    def __init__(self, master, on_lang_change: Optional[Callable[[], None]] = None, **kwargs):
         super().__init__(master, **kwargs)
+        self.on_lang_change = on_lang_change
         self._build_ui()
 
     def _build_ui(self):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=S_SM, pady=(S_SM, 0))
-        ctk.CTkLabel(header, text="Verilog Preview", font=FONT_SECTION).pack(side="left")
+        self._title = ctk.CTkLabel(header, text="Verilog Preview", font=FONT_SECTION)
+        self._title.pack(side="left")
+        self._lang_var = tk.StringVar(value="Verilog")
+        self._lang_menu = ctk.CTkOptionMenu(
+            header, values=list(PREVIEW_LANGS), variable=self._lang_var, width=88,
+            command=self._on_lang_selected,
+        )
+        self._lang_menu.pack(side="left", padx=(S_SM, 0))
         self._status = ctk.CTkLabel(header, text="", font=FONT_HINT, text_color="gray")
         self._status.pack(side="right")
         self._text = ctk.CTkTextbox(self, font=FONT_MONO, wrap="none",
@@ -1614,17 +1628,36 @@ class PreviewPanel(ctk.CTkFrame):
         self._text.pack(fill="both", expand=True, padx=S_SM, pady=(S_XS, S_SM))
         self._text.configure(state="disabled")
 
+    def _on_lang_selected(self, _value: str):
+        self._update_title()
+        if self.on_lang_change:
+            self.on_lang_change()
+
+    def _update_title(self):
+        lang = self.get_lang()
+        self._title.configure(text=f"{lang} Preview")
+
+    def get_lang(self) -> str:
+        v = self._lang_var.get()
+        return v if v in PREVIEW_LANGS else "Verilog"
+
     def _set_text(self, content: str):
         self._text.configure(state="normal")
         self._text.delete("1.0", "end")
         self._text.insert("1.0", content)
         self._text.configure(state="disabled")
 
-    def set_verilog(self, code: str, status: str = ""):
+    def set_code(self, code: str, status: str = ""):
+        self._update_title()
         self._set_text(code)
         self._status.configure(text=status, text_color="gray")
 
+    def set_verilog(self, code: str, status: str = ""):
+        """相容舊呼叫；等同 set_code。"""
+        self.set_code(code, status=status)
+
     def set_error(self, msg: str):
+        self._update_title()
         self._set_text(f"// 無法預覽：\n// {msg}")
         self._status.configure(text="error", text_color=("#cf222e", "#ff7b72"))
 
@@ -1973,7 +2006,7 @@ class PowerSeqGUI(ctk.CTk):
         cb_pv = ctk.CTkCheckBox(toolbar, text="Preview", variable=self._preview_var,
                                  width=80, command=self._toggle_preview)
         cb_pv.pack(side="left", padx=(0, S_SM))
-        self._tt(cb_pv, "Toggle right-side live Verilog preview")
+        self._tt(cb_pv, "Toggle right-side live code preview (Verilog or C)")
 
         # right side: pin / theme / help / validation badge / main actions
         self._pin_btn = ctk.CTkButton(toolbar, text="Pin", width=44, command=self._toggle_topmost)
@@ -2007,6 +2040,11 @@ class PowerSeqGUI(ctk.CTk):
                                   command=self._export_drawio)
         b_export.pack(side="right", padx=(0, S_SM))
         self._tt(b_export, "Export dependency diagram XML  (Ctrl+E)")
+        b_gen_c = ctk.CTkButton(toolbar, text="Generate C", width=110,
+                                 fg_color=self.ACCENT_FG, hover_color=self.ACCENT_HOVER,
+                                 command=self._generate_c)
+        b_gen_c.pack(side="right", padx=(0, S_SM))
+        self._tt(b_gen_c, "Validate and generate firmware C  (Ctrl+Shift+G)")
         b_gen = ctk.CTkButton(toolbar, text="Generate Verilog", width=140,
                                fg_color=self.ACCENT_FG, hover_color=self.ACCENT_HOVER,
                                command=self._generate_verilog)
@@ -2081,7 +2119,10 @@ class PowerSeqGUI(ctk.CTk):
         # right (preview)
         self.preview_wrap = ctk.CTkFrame(paned, fg_color=("gray90", "gray17"), width=380)
         paned.add(self.preview_wrap, minsize=240, stretch="never", width=380)
-        self.preview = PreviewPanel(self.preview_wrap, fg_color="transparent")
+        self.preview = PreviewPanel(
+            self.preview_wrap, fg_color="transparent",
+            on_lang_change=self._schedule_preview,
+        )
         self.preview.pack(fill="both", expand=True)
 
         # ----- Status bar -----
@@ -2100,6 +2141,8 @@ class PowerSeqGUI(ctk.CTk):
         self.bind_all("<Control-N>", lambda _e: self._add_rail())
         self.bind_all("<Control-g>", lambda _e: self._generate_verilog())
         self.bind_all("<Control-G>", lambda _e: self._generate_verilog())
+        self.bind_all("<Control-Shift-g>", lambda _e: self._generate_c())
+        self.bind_all("<Control-Shift-G>", lambda _e: self._generate_c())
         self.bind_all("<Control-e>", lambda _e: self._export_drawio())
         self.bind_all("<Control-E>", lambda _e: self._export_drawio())
         self.bind_all("<Control-f>", lambda _e: self.node_list.focus_search())
@@ -2461,16 +2504,28 @@ class PowerSeqGUI(ctk.CTk):
                 pass
         self._preview_after_id = self.after(300, self._render_preview)
 
+    def _preview_c_filename(self) -> str:
+        """預覽 C 時決定 output_filename（影響 guard / 函式前綴）。"""
+        if self._current_path and self._current_path.lower().endswith(".json"):
+            return os.path.splitext(self._current_path)[0] + ".c"
+        return "power.c"
+
     def _render_preview(self):
         self._preview_after_id = None
         if not self._show_preview:
             return
         try:
             cfg = self._collect_config()
-            code = generate_verilog(cfg)
             ok, errs = validate(cfg)
             status = "live" if ok else f"{len(errs)} error{'s' if len(errs) != 1 else ''}"
-            self.preview.set_verilog(code, status=status)
+            if self.preview.get_lang() == "C":
+                code = generate_c(cfg, output_filename=self._preview_c_filename())
+            else:
+                v_path = None
+                if self._current_path and self._current_path.lower().endswith(".json"):
+                    v_path = os.path.splitext(self._current_path)[0] + ".v"
+                code = generate_verilog(cfg, output_filename=v_path)
+            self.preview.set_code(code, status=status)
         except Exception as e:
             self.preview.set_error(str(e))
 
@@ -2531,6 +2586,7 @@ class PowerSeqGUI(ctk.CTk):
             ("Ctrl+S",        "Save (overwrite if path known)"),
             ("Ctrl+Shift+S",  "Save As..."),
             ("Ctrl+G",        "Generate Verilog"),
+            ("Ctrl+Shift+G",  "Generate C"),
             ("Ctrl+E",        "Export Draw.io"),
             ("Ctrl+F",        "Focus node search"),
             ("Ctrl+Z",        "Undo"),
@@ -2624,23 +2680,33 @@ class PowerSeqGUI(ctk.CTk):
             self._status_msg(f"Save failed: {e}", level="error")
 
     def _generate_verilog(self):
+        self._generate_code(
+            "Verilog", ".v", [("Verilog", "*.v")], generate_verilog,
+        )
+
+    def _generate_c(self):
+        self._generate_code(
+            "C", ".c", [("C source", "*.c")], generate_c,
+        )
+
+    def _generate_code(self, label: str, ext: str, filetypes, generator):
         cfg = self._collect_config()
         ok, errs = validate(cfg)
         if not ok:
             messagebox.showerror("Validation Failed", "\n".join(errs))
             self._status_msg(f"{len(errs)} validation error(s); cannot generate", level="error")
             return
-        path = filedialog.asksaveasfilename(defaultextension=".v", filetypes=[("Verilog", "*.v")])
+        path = filedialog.asksaveasfilename(defaultextension=ext, filetypes=filetypes)
         if not path:
             return
         try:
-            code = generate_verilog(cfg, output_filename=path)
+            code = generator(cfg, output_filename=path)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(code)
-            self._status_msg(f"Generated: {os.path.basename(path)}", level="success")
+            self._status_msg(f"Generated {label}: {os.path.basename(path)}", level="success")
         except Exception as e:
             messagebox.showerror("Error", str(e))
-            self._status_msg(f"Generate failed: {e}", level="error")
+            self._status_msg(f"Generate {label} failed: {e}", level="error")
 
     def _export_drawio(self):
         cfg = self._collect_config()
