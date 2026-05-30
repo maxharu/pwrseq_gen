@@ -17,7 +17,7 @@ from wavedrom_scenario_io import (
     resolve_scenario,
     save_scenario_file,
 )
-from wavedrom_sim import DEP_HIGH, DEP_LOW, InputWaveSpec, WaveDromScenario
+from wavedrom_sim import DEP_HIGH, DEP_LOW, InputWaveSpec, WaveDromScenario, _norm_hscale
 
 HI_LO_MODES = [
     ("Low (0)", "constant_0"),
@@ -176,6 +176,17 @@ class WaveDromExportDialog(ctk.CTkToplevel):
         ctk.CTkEntry(opts, textvariable=self._steps_var, width=80, height=_CTRL_H).pack(
             side="left"
         )
+        ctk.CTkLabel(opts, text="hscale:").pack(side="left", padx=(16, 8))
+        self._hscale_var = tk.StringVar(value=str(self._saved.hscale))
+        ctk.CTkEntry(opts, textvariable=self._hscale_var, width=48, height=_CTRL_H).pack(
+            side="left"
+        )
+        ctk.CTkLabel(
+            opts,
+            text="(WaveDrom horizontal scale per step; default 1)",
+            font=("", 11),
+            text_color="gray",
+        ).pack(side="left", padx=(8, 0))
 
         self._pack_table_header()
 
@@ -344,6 +355,10 @@ class WaveDromExportDialog(ctk.CTkToplevel):
             steps = max(10, int(self._steps_var.get().strip()))
         except ValueError:
             steps = 200
+        try:
+            hscale = _norm_hscale(int(self._hscale_var.get().strip()))
+        except ValueError:
+            hscale = 1
         inputs: dict[str, InputWaveSpec] = {}
         for name, widgets in self._rows.items():
             inputs[name] = InputWaveSpec(
@@ -358,7 +373,7 @@ class WaveDromExportDialog(ctk.CTkToplevel):
                 lo_inv_groups=widgets["lo_inv_groups"],
                 lo_use_groups=widgets["lo_use_groups"],
             )
-        return WaveDromScenario(steps=steps, inputs=inputs)
+        return WaveDromScenario(steps=steps, inputs=inputs, hscale=hscale)
 
     def _default_scenario_basename(self) -> str:
         mod = (self.config.module_name or "pwrseq").strip()
@@ -368,6 +383,7 @@ class WaveDromExportDialog(ctk.CTkToplevel):
     def _reload_from_scenario(self, scenario: WaveDromScenario) -> None:
         self._saved = merge_scenario_for_config(scenario, self.config)
         self._steps_var.set(str(self._saved.steps))
+        self._hscale_var.set(str(self._saved.hscale))
         for w in self._table.winfo_children():
             w.destroy()
         self._rows.clear()
