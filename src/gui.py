@@ -1934,9 +1934,11 @@ class PowerSeqGUI(ctk.CTk):
         self._current_path: Optional[str] = None
         self._recent = RecentFiles()
         self._tooltips: list[Tooltip] = []  # 強引用，避免 GC
+        self._wavedrom_dialog = None
 
         self._build_ui()
         self._bind_shortcuts()
+        self.bind("<FocusIn>", self._raise_wavedrom_dialog_if_open, add="+")
         self._refresh_all()
 
     # ---- UI ----
@@ -2730,6 +2732,23 @@ class PowerSeqGUI(ctk.CTk):
             return os.path.splitext(self._current_path)[0] + "_wavedrom_scenario.json"
         return None
 
+    def _on_wavedrom_dialog_closed(self) -> None:
+        self._wavedrom_dialog = None
+
+    def _raise_wavedrom_dialog_if_open(self, event=None) -> None:
+        if event is not None and event.widget != self:
+            return
+        dlg = self._wavedrom_dialog
+        if dlg is None:
+            return
+        try:
+            if not dlg.winfo_exists():
+                self._wavedrom_dialog = None
+                return
+            dlg.bring_to_front()
+        except tk.TclError:
+            self._wavedrom_dialog = None
+
     def _export_wavedrom(self):
         cfg = self._collect_config()
         ok, errs = validate(cfg)
@@ -2740,6 +2759,16 @@ class PowerSeqGUI(ctk.CTk):
         if not cfg.rails:
             self._status_msg("No nodes. Add rails first.", level="warn")
             return
+
+        dlg = self._wavedrom_dialog
+        if dlg is not None:
+            try:
+                if dlg.winfo_exists():
+                    dlg.bring_to_front()
+                    return
+            except tk.TclError:
+                pass
+            self._wavedrom_dialog = None
 
         def _export_diagram(scenario: WaveDromScenario):
             path = filedialog.asksaveasfilename(
@@ -2759,12 +2788,13 @@ class PowerSeqGUI(ctk.CTk):
                 messagebox.showerror("Error", str(e))
                 self._status_msg(f"WaveDrom export failed: {e}", level="error")
 
-        WaveDromExportDialog(
+        self._wavedrom_dialog = WaveDromExportDialog(
             self,
             cfg,
             on_export=_export_diagram,
             scenario_path_hint=self._wavedrom_scenario_sidecar_path(),
             project_json_path=self._current_path,
+            on_closed=self._on_wavedrom_dialog_closed,
         )
 
     def _export_drawio(self):
