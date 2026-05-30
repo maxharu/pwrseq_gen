@@ -57,6 +57,198 @@ class TestSimulate:
         b_high_step = next(i for i, v in enumerate(result.output_values[b_sig]) if v == 1)
         assert b_high_step == a_high_step + 1
 
+    def test_cond_step_delay_default_1(self):
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail("A", seq_type="input"),
+                PowerRail(
+                    "B",
+                    depends_on_hi=["A"],
+                    depends_on_lo=["__LOW__"],
+                    cycle_hi=1,
+                    init=0,
+                ),
+            ],
+        )
+        scenario = WaveDromScenario(
+            steps=20,
+            cond_step_delay=1,
+            inputs={"A": InputWaveSpec(hi_mode="custom", hi_wave="0.1.")},
+        )
+        result = simulate(cfg, scenario)
+        a_hi = next(i for i, v in enumerate(result.raw_inputs["A"]) if v == 1)
+        b_hi = next(i for i, v in enumerate(result.output_values["b"]) if v == 1)
+        assert b_hi == a_hi + 1
+
+    def test_cond_step_delay_2(self):
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail("A", seq_type="input"),
+                PowerRail(
+                    "B",
+                    depends_on_hi=["A"],
+                    depends_on_lo=["__LOW__"],
+                    cycle_hi=1,
+                    init=0,
+                ),
+            ],
+        )
+        scenario = WaveDromScenario(
+            steps=20,
+            cond_step_delay=2,
+            inputs={"A": InputWaveSpec(hi_mode="custom", hi_wave="0.1.")},
+        )
+        result = simulate(cfg, scenario)
+        a_hi = next(i for i, v in enumerate(result.raw_inputs["A"]) if v == 1)
+        b_hi = next(i for i, v in enumerate(result.output_values["b"]) if v == 1)
+        assert b_hi == a_hi + 2
+
+    def test_output_hi_seen_same_step_as_depend_input_gpio(self):
+        """Depends inputs updated before output eval (PRIM H -> PCH EN +1 step, not +2)."""
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail("EKEY", seq_type="input"),
+                PowerRail("PRIM_VR_EN", seq_type="input"),
+                PowerRail(
+                    "PCH_P0V85A_EN",
+                    depends_on_hi=["EKEY", "PRIM_VR_EN"],
+                    depends_on_hi_groups=[["EKEY", "PRIM_VR_EN"]],
+                    depends_on_lo=["__LOW__"],
+                    cycle_hi=1,
+                    init=0,
+                ),
+            ],
+        )
+        scenario = WaveDromScenario(
+            steps=20,
+            cond_step_delay=1,
+            inputs={
+                "EKEY": InputWaveSpec(hi_mode="custom", hi_wave="01"),
+                "PRIM_VR_EN": InputWaveSpec(
+                    hi_mode="depends",
+                    hi_groups=[["EKEY"]],
+                    hi_inv_groups=[[False]],
+                    hi_use_groups=[["self"]],
+                ),
+            },
+        )
+        result = simulate(cfg, scenario)
+        sig = "pch_p0v85a_en"
+        prim_hi = next(
+            i for i, v in enumerate(result.raw_inputs["PRIM_VR_EN"]) if v == 1
+        )
+        pch_hi = next(i for i, v in enumerate(result.output_values[sig]) if v == 1)
+        assert pch_hi == prim_hi + 1
+
+    def test_pch_p125_hi_same_step_as_pg_inputs(self):
+        """Topo + per-output PG refresh: both PG high -> hi same step, gpio +1 delay."""
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail("EKEY", seq_type="input"),
+                PowerRail("PRIM_VR_EN", seq_type="input"),
+                PowerRail("PCH_P0V85A_PG", seq_type="input"),
+                PowerRail("PVNNAON_PG", seq_type="input"),
+                PowerRail(
+                    "PCH_P0V85A_EN",
+                    depends_on_hi=["EKEY", "PRIM_VR_EN"],
+                    depends_on_hi_groups=[["EKEY", "PRIM_VR_EN"]],
+                    depends_on_lo=["__LOW__"],
+                    cycle_hi=1,
+                    init=0,
+                ),
+                PowerRail(
+                    "PVNNAON_EN",
+                    depends_on_hi=["PCH_P0V85A_EN"],
+                    depends_on_hi_groups=[["PCH_P0V85A_EN"]],
+                    depends_on_hi_use={"PCH_P0V85A_EN": "hi"},
+                    depends_on_hi_use_groups=[["hi"]],
+                    depends_on_lo=["__LOW__"],
+                    cycle_hi=1,
+                    init=0,
+                ),
+                PowerRail(
+                    "PCH_P1V25A_EN",
+                    depends_on_hi=["PCH_P0V85A_PG", "PVNNAON_PG"],
+                    depends_on_hi_groups=[["PCH_P0V85A_PG", "PVNNAON_PG"]],
+                    depends_on_lo=["__LOW__"],
+                    cycle_hi=1,
+                    init=0,
+                ),
+            ],
+        )
+        scenario = WaveDromScenario(
+            steps=30,
+            cond_step_delay=1,
+            inputs={
+                "EKEY": InputWaveSpec(hi_mode="custom", hi_wave="01"),
+                "PRIM_VR_EN": InputWaveSpec(
+                    hi_mode="depends",
+                    hi_groups=[["EKEY"]],
+                    hi_inv_groups=[[False]],
+                    hi_use_groups=[["self"]],
+                ),
+                "PCH_P0V85A_PG": InputWaveSpec(
+                    hi_mode="depends",
+                    hi_groups=[["PCH_P0V85A_EN"]],
+                    hi_inv_groups=[[False]],
+                    hi_use_groups=[["self"]],
+                ),
+                "PVNNAON_PG": InputWaveSpec(
+                    hi_mode="depends",
+                    hi_groups=[["PVNNAON_EN"]],
+                    hi_inv_groups=[[False]],
+                    hi_use_groups=[["self"]],
+                ),
+            },
+        )
+        result = simulate(cfg, scenario)
+        sig = "pch_p1v25a_en"
+        pg_step = max(
+            next(i for i, v in enumerate(result.raw_inputs["PCH_P0V85A_PG"]) if v),
+            next(i for i, v in enumerate(result.raw_inputs["PVNNAON_PG"]) if v),
+        )
+        hi_step = next(i for i, v in enumerate(result.output_hi_cond[sig]) if v)
+        gpio_step = next(i for i, v in enumerate(result.output_values[sig]) if v)
+        assert hi_step == pg_step
+        assert gpio_step == hi_step + 1
+
+    def test_slps4_one_step_after_slps5(self):
+        """SLPS4 depends SLPS5; each level uses cond_step_delay=1 (not same step)."""
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail("RSMRST_N", depends_on_hi=["__HIGH__"], cycle_hi=1, init=0),
+                PowerRail("SLPS5_N", seq_type="input"),
+                PowerRail("SLPS4_N", seq_type="input"),
+            ],
+        )
+        scenario = WaveDromScenario(
+            steps=30,
+            cond_step_delay=1,
+            inputs={
+                "SLPS5_N": InputWaveSpec(
+                    hi_mode="depends",
+                    hi_groups=[["RSMRST_N"]],
+                    hi_inv_groups=[[False]],
+                    hi_use_groups=[["self"]],
+                ),
+                "SLPS4_N": InputWaveSpec(
+                    hi_mode="depends",
+                    hi_groups=[["SLPS5_N"]],
+                    hi_inv_groups=[[False]],
+                    hi_use_groups=[["self"]],
+                ),
+            },
+        )
+        result = simulate(cfg, scenario)
+        s5 = next(i for i, v in enumerate(result.raw_inputs["SLPS5_N"]) if v)
+        s4 = next(i for i, v in enumerate(result.raw_inputs["SLPS4_N"]) if v)
+        assert s4 == s5 + 1
+
     def test_generate_wavedrom_structure(self):
         cfg = PowerSeqConfig(
             rails=[
@@ -72,6 +264,11 @@ class TestSimulate:
         assert all(isinstance(lane, dict) and "name" in lane for lane in doc["signal"])
         assert doc.get("config", {}).get("skin") == "narrow"
         assert doc.get("config", {}).get("hscale", 1) == 1
+        doc2 = generate_wavedrom(
+            cfg,
+            WaveDromScenario(steps=20, hscale=3, inputs={}),
+        )
+        assert doc2["config"]["hscale"] == 3
         assert validate_wavedrom_doc(doc, steps=200) == []
         assert all("_deb" not in lane["name"] for lane in doc["signal"])
         assert len(expand_binary_wave(doc["signal"][0]["wave"], 200)) == 200

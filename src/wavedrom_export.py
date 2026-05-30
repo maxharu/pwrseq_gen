@@ -13,6 +13,7 @@ from wavedrom_sim import (
     SimResult,
     WaveDromScenario,
     _internal_sig,
+    _norm_hscale,
     default_scenario_for_config,
     expand_binary_wave,
     simulate,
@@ -385,7 +386,10 @@ def generate_wavedrom(
 
     doc: dict = {
         "head": {
-            "text": f"{config.module_name} ({steps} steps, i*=in o*=out)",
+            "text": (
+                f"{config.module_name} ({steps} steps, hscale="
+                f"{_norm_hscale(scenario.hscale)}, i*=in o*=out)"
+            ),
             "tick": 0,
             "every": _head_every(steps),
         },
@@ -396,7 +400,10 @@ def generate_wavedrom(
             ),
         },
         "signal": signals,
-        "config": {"skin": "narrow"},
+        "config": {
+            "skin": "narrow",
+            "hscale": _norm_hscale(scenario.hscale),
+        },
     }
     if edges:
         doc["edge"] = edges

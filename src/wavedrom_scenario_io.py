@@ -22,7 +22,11 @@ def merge_scenario_for_config(
         inputs[r.name] = loaded.inputs.get(r.name) or defaults.inputs.get(
             r.name, InputWaveSpec(),
         )
-    return WaveDromScenario(steps=loaded.steps, inputs=inputs)
+    return WaveDromScenario(
+        steps=loaded.steps,
+        inputs=inputs,
+        hscale=loaded.hscale,
+    )
 
 
 def scenario_to_dict(scenario: WaveDromScenario) -> dict:

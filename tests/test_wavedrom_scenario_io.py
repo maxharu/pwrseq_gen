@@ -20,6 +20,7 @@ from wavedrom_scenario_io import (
 def test_roundtrip_file():
     scenario = WaveDromScenario(
         steps=100,
+        hscale=2,
         inputs={"A": InputWaveSpec(hi_mode="custom", hi_wave="0.1.")},
     )
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
@@ -28,6 +29,7 @@ def test_roundtrip_file():
         save_scenario_file(path, scenario)
         loaded = load_scenario_file(path)
         assert loaded.steps == 100
+        assert loaded.hscale == 2
         assert loaded.inputs["A"].hi_wave == "0.1."
     finally:
         os.unlink(path)
@@ -37,6 +39,11 @@ def test_load_wrapped_in_project_dict():
     wrapped = {"wavedrom_scenario": {"steps": 50, "inputs": {}}}
     s = scenario_from_dict(wrapped)
     assert s.steps == 50
+
+
+def test_from_dict_legacy_cond_step_delay_maps_to_hscale():
+    s = scenario_from_dict({"steps": 10, "cond_step_delay": 3, "inputs": {}})
+    assert s.hscale == 3
 
 
 def test_to_dict_omits_unused_waves():

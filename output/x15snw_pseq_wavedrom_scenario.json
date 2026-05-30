@@ -1,5 +1,5 @@
 {
-  "steps": 35,
+  "steps": 22,
   "inputs": {
     "EKEY": {
       "hi_mode": "custom",
@@ -158,12 +158,12 @@
         ]
       ]
     },
-    "SLPS3_N": {
+    "SLPS5_N": {
       "hi_mode": "depends",
       "lo_mode": "constant_0",
       "hi_groups": [
         [
-          "SLPS4_N"
+          "RSMRST_N"
         ]
       ],
       "hi_inv_groups": [
@@ -196,12 +196,12 @@
         ]
       ]
     },
-    "SLPS5_N": {
+    "SLPS3_N": {
       "hi_mode": "depends",
       "lo_mode": "constant_0",
       "hi_groups": [
         [
-          "RSMRST_N"
+          "SLPS4_N"
         ]
       ],
       "hi_inv_groups": [
