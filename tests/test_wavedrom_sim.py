@@ -13,7 +13,7 @@ from wavedrom_sim import (
     simulate,
     values_to_wave,
 )
-from wavedrom_export import generate_wavedrom, validate_wavedrom_doc
+from wavedrom_export import format_rail_condition, generate_wavedrom, validate_wavedrom_doc
 from wavedrom_sim import expand_binary_wave
 
 
@@ -75,6 +75,74 @@ class TestSimulate:
         assert validate_wavedrom_doc(doc, steps=200) == []
         assert all("_deb" not in lane["name"] for lane in doc["signal"])
         assert len(expand_binary_wave(doc["signal"][0]["wave"], 200)) == 200
+
+    def test_edges_per_hi_dep_to_output_rise(self):
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail("A", seq_type="input"),
+                PowerRail("C", seq_type="input"),
+                PowerRail(
+                    "B",
+                    depends_on_hi=["A", "C"],
+                    depends_on_hi_groups=[["A", "C"]],
+                    depends_on_lo=["__LOW__"],
+                    cycle_hi=1,
+                    init=0,
+                ),
+            ],
+        )
+        scenario = WaveDromScenario(
+            steps=20,
+            inputs={
+                "A": InputWaveSpec(hi_mode="custom", hi_wave="0.1."),
+                "C": InputWaveSpec(hi_mode="custom", hi_wave="0..1"),
+            },
+        )
+        doc = generate_wavedrom(cfg, scenario)
+        assert "edge" in doc
+        assert len(doc["edge"]) >= 2
+        assert all("-~>" in e and " Hi " not in e and " Lo " not in e for e in doc["edge"])
+        b = cfg.rails[2]
+        assert "A" in format_rail_condition(b, "hi")
+        assert "C" in format_rail_condition(b, "hi")
+
+    def test_edges_expand_output_hi_cond_to_inputs(self):
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail("EKEY", seq_type="input"),
+                PowerRail("PRIM", seq_type="input"),
+                PowerRail(
+                    "PCH_EN",
+                    depends_on_hi=["EKEY", "PRIM"],
+                    depends_on_hi_groups=[["EKEY", "PRIM"]],
+                    depends_on_lo=["__LOW__"],
+                    cycle_hi=1,
+                    init=0,
+                ),
+                PowerRail(
+                    "PVNN",
+                    depends_on_hi=["PCH_EN"],
+                    depends_on_hi_groups=[["PCH_EN"]],
+                    depends_on_hi_use={"PCH_EN": "hi"},
+                    depends_on_hi_use_groups=[["hi"]],
+                    depends_on_lo=["__LOW__"],
+                    cycle_hi=1,
+                    init=0,
+                ),
+            ],
+        )
+        scenario = WaveDromScenario(
+            steps=20,
+            inputs={
+                "EKEY": InputWaveSpec(hi_mode="custom", hi_wave="0.1."),
+                "PRIM": InputWaveSpec(hi_mode="custom", hi_wave="0..1"),
+            },
+        )
+        doc = generate_wavedrom(cfg, scenario)
+        assert doc.get("edge")
+        assert not any("PCH_EN" in e for e in doc["edge"])
 
 
 class TestValuesToWave:

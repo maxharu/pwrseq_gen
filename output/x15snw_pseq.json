@@ -1083,7 +1083,7 @@
       "od": 0
     },
     {
-      "name": "SLPS3_N",
+      "name": "SLPS5_N",
       "seq_type": "Input",
       "depends_on": [],
       "depends_on_hi": [],
@@ -1163,7 +1163,7 @@
       "od": 0
     },
     {
-      "name": "SLPS5_N",
+      "name": "SLPS3_N",
       "seq_type": "Input",
       "depends_on": [],
       "depends_on_hi": [],
