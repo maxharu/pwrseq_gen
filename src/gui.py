@@ -34,6 +34,10 @@ from drawio_export import generate_drawio
 from validator import validate
 from verilog_generator import generate_verilog
 from c_generator import generate_c
+from wavedrom_export import generate_wavedrom_json
+from wavedrom_scenario_io import resolve_scenario
+from wavedrom_sim import WaveDromScenario
+from wavedrom_dialog import WaveDromExportDialog
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -1599,7 +1603,7 @@ class ValidationPanel(ctk.CTkFrame):
 # PreviewPanel — 右側 Verilog / C 即時預覽（C1）
 # ============================================================
 
-PREVIEW_LANGS = ("Verilog", "C")
+PREVIEW_LANGS = ("Verilog", "C", "WaveDrom")
 
 
 class PreviewPanel(ctk.CTkFrame):
@@ -1980,7 +1984,7 @@ class PowerSeqGUI(ctk.CTk):
         b_save = ctk.CTkButton(toolbar, text="Save", width=70, command=self._save_json)
         b_save.pack(side="left", padx=(0, S_XS))
         self._tt(b_save, "Save  (Ctrl+S)")
-        b_saveas = ctk.CTkButton(toolbar, text="Save As", width=80, command=self._save_json_as)
+        b_saveas = ctk.CTkButton(toolbar, text="Save As...", width=80, command=self._save_json_as)
         b_saveas.pack(side="left", padx=(0, S_SM))
         self._tt(b_saveas, "Save As...  (Ctrl+Shift+S)")
 
@@ -2035,6 +2039,11 @@ class PowerSeqGUI(ctk.CTk):
         # 不立即 pack；_update_validation 中根據錯誤數顯示 / 隱藏
         self._validation_badge.bind("<Button-1>", lambda _e: self._focus_validation())
 
+        b_wavedrom = ctk.CTkButton(toolbar, text="Export WaveDrom", width=130,
+                                    fg_color=self.ACCENT_FG, hover_color=self.ACCENT_HOVER,
+                                    command=self._export_wavedrom)
+        b_wavedrom.pack(side="right", padx=(0, S_SM))
+        self._tt(b_wavedrom, "Export timing diagram JSON  (Ctrl+Shift+E)")
         b_export = ctk.CTkButton(toolbar, text="Export Draw.io", width=130,
                                   fg_color=self.ACCENT_FG, hover_color=self.ACCENT_HOVER,
                                   command=self._export_drawio)
@@ -2145,6 +2154,8 @@ class PowerSeqGUI(ctk.CTk):
         self.bind_all("<Control-Shift-G>", lambda _e: self._generate_c())
         self.bind_all("<Control-e>", lambda _e: self._export_drawio())
         self.bind_all("<Control-E>", lambda _e: self._export_drawio())
+        self.bind_all("<Control-Shift-e>", lambda _e: self._export_wavedrom())
+        self.bind_all("<Control-Shift-E>", lambda _e: self._export_wavedrom())
         self.bind_all("<Control-f>", lambda _e: self.node_list.focus_search())
         self.bind_all("<Control-F>", lambda _e: self.node_list.focus_search())
         self.bind_all("<Control-z>", lambda _e: self._undo())
@@ -2264,6 +2275,7 @@ class PowerSeqGUI(ctk.CTk):
             clock_freq_mhz=self.config_obj.clock_freq_mhz,
             pulse_period_ns=self.config_obj.pulse_period_ns,
             pulses=getattr(self.config_obj, "pulses", None) or ["iPulse_1us"],
+            wavedrom_scenario=getattr(self.config_obj, "wavedrom_scenario", None),
         )
 
     def _get_pulses(self) -> list[str]:
@@ -2518,8 +2530,12 @@ class PowerSeqGUI(ctk.CTk):
             cfg = self._collect_config()
             ok, errs = validate(cfg)
             status = "live" if ok else f"{len(errs)} error{'s' if len(errs) != 1 else ''}"
-            if self.preview.get_lang() == "C":
+            lang = self.preview.get_lang()
+            if lang == "C":
                 code = generate_c(cfg, output_filename=self._preview_c_filename())
+            elif lang == "WaveDrom":
+                scenario = resolve_scenario(cfg, self._current_path)
+                code = generate_wavedrom_json(cfg, scenario)
             else:
                 v_path = None
                 if self._current_path and self._current_path.lower().endswith(".json"):
@@ -2587,6 +2603,7 @@ class PowerSeqGUI(ctk.CTk):
             ("Ctrl+Shift+S",  "Save As..."),
             ("Ctrl+G",        "Generate Verilog"),
             ("Ctrl+Shift+G",  "Generate C"),
+            ("Ctrl+Shift+E",  "Export WaveDrom"),
             ("Ctrl+E",        "Export Draw.io"),
             ("Ctrl+F",        "Focus node search"),
             ("Ctrl+Z",        "Undo"),
@@ -2707,6 +2724,48 @@ class PowerSeqGUI(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Error", str(e))
             self._status_msg(f"Generate {label} failed: {e}", level="error")
+
+    def _wavedrom_scenario_sidecar_path(self) -> str | None:
+        if self._current_path and self._current_path.lower().endswith(".json"):
+            return os.path.splitext(self._current_path)[0] + "_wavedrom_scenario.json"
+        return None
+
+    def _export_wavedrom(self):
+        cfg = self._collect_config()
+        ok, errs = validate(cfg)
+        if not ok:
+            messagebox.showerror("Validation Failed", "\n".join(errs))
+            self._status_msg(f"{len(errs)} validation error(s); cannot export", level="error")
+            return
+        if not cfg.rails:
+            self._status_msg("No nodes. Add rails first.", level="warn")
+            return
+
+        def _export_diagram(scenario: WaveDromScenario):
+            path = filedialog.asksaveasfilename(
+                defaultextension=".json",
+                filetypes=[("WaveDrom JSON", "*.json"), ("All", "*")],
+            )
+            if not path:
+                return
+            try:
+                cfg2 = self._collect_config()
+                cfg2.wavedrom_scenario = scenario.to_dict()
+                text = generate_wavedrom_json(cfg2, scenario)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                self._status_msg(f"Exported WaveDrom: {os.path.basename(path)}", level="success")
+            except Exception as e:
+                messagebox.showerror("Error", str(e))
+                self._status_msg(f"WaveDrom export failed: {e}", level="error")
+
+        WaveDromExportDialog(
+            self,
+            cfg,
+            on_export=_export_diagram,
+            scenario_path_hint=self._wavedrom_scenario_sidecar_path(),
+            project_json_path=self._current_path,
+        )
 
     def _export_drawio(self):
         cfg = self._collect_config()

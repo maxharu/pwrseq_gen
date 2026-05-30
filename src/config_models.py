@@ -146,6 +146,7 @@ class PowerSeqConfig:
     clock_freq_mhz: float = 100.0
     pulse_period_ns: float = 100.0
     pulses: list[str] = field(default_factory=lambda: ["iPulse_1us"])  # Pulse 來源列表，每個為單一訊號（無 _Hi/_Lo/_Force）
+    wavedrom_scenario: dict | None = None  # 可選：WaveDrom 匯出設定（見 wavedrom_sim.WaveDromScenario）
 
     def rename_rail(self, old_name: str, new_name: str) -> bool:
         """重新命名一個 rail，並把所有其他 rail 的依賴 / inv / use 欄位中的舊名替換為新名。
@@ -174,7 +175,7 @@ class PowerSeqConfig:
 
     def to_dict(self) -> dict:
         """轉換為可序列化的 dict"""
-        return {
+        d = {
             "module_name": self.module_name,
             "clock_freq_mhz": self.clock_freq_mhz,
             "pulse_period_ns": self.pulse_period_ns,
@@ -223,6 +224,9 @@ class PowerSeqConfig:
                 for r in self.rails
             ],
         }
+        if self.wavedrom_scenario:
+            d["wavedrom_scenario"] = self.wavedrom_scenario
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "PowerSeqConfig":
@@ -288,4 +292,5 @@ class PowerSeqConfig:
             clock_freq_mhz=d.get("clock_freq_mhz", 100.0),
             pulse_period_ns=d.get("pulse_period_ns", 100.0),
             pulses=d.get("pulses") or ["iPulse_1us"],
+            wavedrom_scenario=d.get("wavedrom_scenario"),
         )
