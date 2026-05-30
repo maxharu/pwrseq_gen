@@ -38,7 +38,91 @@ _TABLE_COLS = [
 ]
 
 
-class InputCondEditorDialog(ctk.CTkToplevel):
+def _release_modal_grab(window: tk.Misc) -> None:
+    try:
+        window.grab_release()
+    except tk.TclError:
+        pass
+
+
+class _ModalToplevelMixin:
+    """Recover Toplevel visibility after Win+D (Show Desktop) on Windows."""
+
+    _default_geom: str = "640x400"
+
+    def _close_modal(self) -> None:
+        if getattr(self, "_closing", False):
+            return
+        self._closing = True
+        _release_modal_grab(self)
+        on_closed = getattr(self, "_on_closed", None)
+        if on_closed:
+            on_closed()
+        self.destroy()
+
+    def _place_over_master(self) -> None:
+        """Center on parent so the dialog is not left off-screen after Win+D."""
+        master = self.master
+        if master is None:
+            return
+        try:
+            if not master.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        self.update_idletasks()
+        master.update_idletasks()
+        try:
+            parts = self._default_geom.split("x", 1)
+            w, h = int(parts[0]), int(parts[1])
+        except (ValueError, IndexError):
+            w, h = 640, 400
+        try:
+            mw = max(master.winfo_width(), 100)
+            mh = max(master.winfo_height(), 100)
+            mx = master.winfo_rootx()
+            my = master.winfo_rooty()
+        except tk.TclError:
+            mx, my, mw, mh = 0, 0, w, h
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = max(0, min(mx + (mw - w) // 2, max(0, sw - w)))
+        y = max(0, min(my + (mh - h) // 2, max(0, sh - h)))
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+    def bring_to_front(self, *, use_grab: bool = False) -> bool:
+        try:
+            if not self.winfo_exists():
+                return False
+            _release_modal_grab(self)
+            self.deiconify()
+            if str(self.state()) == "iconic":
+                self.state("normal")
+            self._place_over_master()
+            master = self.master
+            if master is not None:
+                try:
+                    self.transient(master)
+                    self.lift(master)
+                except tk.TclError:
+                    self.lift()
+            else:
+                self.lift()
+            self.attributes("-topmost", True)
+            self.update_idletasks()
+            self.focus_force()
+            self.after(80, lambda: self.attributes("-topmost", False))
+            if use_grab:
+                try:
+                    self.grab_set()
+                except tk.TclError:
+                    pass
+            return True
+        except tk.TclError:
+            return False
+
+
+class InputCondEditorDialog(_ModalToplevelMixin, ctk.CTkToplevel):
     def __init__(
         self,
         master,
@@ -51,14 +135,16 @@ class InputCondEditorDialog(ctk.CTkToplevel):
         on_save: Callable[[list, list, list], None],
     ):
         super().__init__(master)
+        self._default_geom = "520x360"
         self.title(f"{input_name} — {kind.upper()} signal condition")
-        self.geometry("520x360")
+        self.geometry(self._default_geom)
         self.minsize(440, 280)
         self.transient(master)
         try:
             self.grab_set()
         except tk.TclError:
             pass
+        self.after(50, self._place_over_master)
 
         from gui import CondSectionFrame
 
@@ -103,13 +189,15 @@ class InputCondEditorDialog(ctk.CTkToplevel):
 
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.pack(fill="x", padx=12, pady=(0, 12))
-        ctk.CTkButton(btn_row, text="Cancel", width=90, command=self.destroy).pack(
+        ctk.CTkButton(btn_row, text="Cancel", width=90, command=self._close_modal).pack(
             side="right", padx=(8, 0)
         )
         ctk.CTkButton(
             btn_row, text="OK", width=90,
             command=lambda: self._save(on_save),
         ).pack(side="right")
+        self.protocol("WM_DELETE_WINDOW", self._close_modal)
+        self.bind("<Escape>", lambda _e: self._close_modal())
 
     def _save(self, on_save: Callable):
         on_save(
@@ -117,10 +205,10 @@ class InputCondEditorDialog(ctk.CTkToplevel):
             self._section.get_inv_groups(),
             self._section.get_use_groups(),
         )
-        self.destroy()
+        self._close_modal()
 
 
-class WaveDromExportDialog(ctk.CTkToplevel):
+class WaveDromExportDialog(_ModalToplevelMixin, ctk.CTkToplevel):
     def __init__(
         self,
         master,
@@ -128,8 +216,11 @@ class WaveDromExportDialog(ctk.CTkToplevel):
         on_export: Callable[[WaveDromScenario], None],
         scenario_path_hint: Optional[str] = None,
         project_json_path: Optional[str] = None,
+        on_closed: Optional[Callable[[], None]] = None,
     ):
         super().__init__(master)
+        self._on_closed = on_closed
+        self._closing = False
         self.config = config
         self.on_export = on_export
         self._scenario_path_hint = scenario_path_hint
@@ -142,18 +233,18 @@ class WaveDromExportDialog(ctk.CTkToplevel):
         self._name_to_rail = {r.name: r for r in config.rails}
 
         self.title("Export WaveDrom")
-        self.geometry("820x480")
+        self._default_geom = "820x480"
+        self.geometry(self._default_geom)
         self.minsize(680, 320)
         self.transient(master)
-        try:
-            self.grab_set()
-        except tk.TclError:
-            pass
+        # No grab_set: Win+D can hide the window while grab blocks the whole app.
 
         self._saved = resolve_scenario(config, project_json_path)
 
         self._build_ui()
-        self.bind("<Escape>", lambda _e: self.destroy())
+        self.protocol("WM_DELETE_WINDOW", self._close_modal)
+        self.bind("<Escape>", lambda _e: self._close_modal())
+        self.after(80, lambda: self.bring_to_front())
 
     def _build_ui(self):
         hdr = ctk.CTkFrame(self, fg_color="transparent")
@@ -208,7 +299,7 @@ class WaveDromExportDialog(ctk.CTkToplevel):
 
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.pack(fill="x", padx=12, pady=(0, 12))
-        ctk.CTkButton(btn_row, text="Close", width=90, command=self.destroy).pack(
+        ctk.CTkButton(btn_row, text="Close", width=90, command=self._close_modal).pack(
             side="right", padx=(8, 0)
         )
         ctk.CTkButton(
