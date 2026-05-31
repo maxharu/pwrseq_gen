@@ -58,6 +58,7 @@ class TestSimulate:
         assert b_high_step == a_high_step + 1
 
     def test_cond_step_delay_default_1(self):
+        """cond_step_delay 已廢用；input/output 皆為 permit + 下一 step 翻轉。"""
         cfg = PowerSeqConfig(
             pulses=["iPulse_1us"],
             rails=[
@@ -81,7 +82,8 @@ class TestSimulate:
         b_hi = next(i for i, v in enumerate(result.output_values["b"]) if v == 1)
         assert b_hi == a_hi + 1
 
-    def test_cond_step_delay_2(self):
+    def test_cycle_hi_ignored_on_output(self):
+        """WaveDrom output 不模擬 cycle_hi；仍為條件成立後下一 step 翻轉。"""
         cfg = PowerSeqConfig(
             pulses=["iPulse_1us"],
             rails=[
@@ -90,20 +92,19 @@ class TestSimulate:
                     "B",
                     depends_on_hi=["A"],
                     depends_on_lo=["__LOW__"],
-                    cycle_hi=1,
+                    cycle_hi=2,
                     init=0,
                 ),
             ],
         )
         scenario = WaveDromScenario(
             steps=20,
-            cond_step_delay=2,
             inputs={"A": InputWaveSpec(hi_mode="custom", hi_wave="0.1.")},
         )
         result = simulate(cfg, scenario)
         a_hi = next(i for i, v in enumerate(result.raw_inputs["A"]) if v == 1)
         b_hi = next(i for i, v in enumerate(result.output_values["b"]) if v == 1)
-        assert b_hi == a_hi + 2
+        assert b_hi == a_hi + 1
 
     def test_output_hi_seen_same_step_as_depend_input_gpio(self):
         """Depends inputs updated before output eval (PRIM H -> PCH EN +1 step, not +2)."""
@@ -264,6 +265,7 @@ class TestSimulate:
         assert all(isinstance(lane, dict) and "name" in lane for lane in doc["signal"])
         assert doc.get("config", {}).get("skin") == "narrow"
         assert doc.get("config", {}).get("hscale", 1) == 1
+        assert "Author: Haru" in doc["head"]["text"]
         doc2 = generate_wavedrom(
             cfg,
             WaveDromScenario(steps=20, hscale=3, inputs={}),
@@ -361,7 +363,7 @@ class TestValuesToWave:
 
 
 class TestOutputDelayed:
-    def test_hi_prev_step_rises_next_step(self):
+    def test_hi_rises_next_step_after_condition(self):
         cfg = PowerSeqConfig(
             pulses=["iPulse_1us"],
             rails=[
@@ -376,8 +378,8 @@ class TestOutputDelayed:
         result = simulate(cfg, WaveDromScenario(steps=5))
         assert result.output_values["b"][:3] == [0, 1, 1]
 
-    def test_hi_and_lo_both_prev_high_stays_high(self):
-        """Hi&Lo 上一格同時成立時，高態不拉回低（避免 1010 抖盪）。"""
+    def test_hi_and_lo_both_true_blocks_rise_when_low(self):
+        """pwrcell: hi∧lo 同時成立時不給 hi.permit，低態無法拉高。"""
         cfg = PowerSeqConfig(
             pulses=["iPulse_1us"],
             rails=[
@@ -389,11 +391,25 @@ class TestOutputDelayed:
                 ),
             ],
         )
+        result = simulate(cfg, WaveDromScenario(steps=10))
+        assert all(v == 0 for v in result.output_values["en"])
+
+    def test_hi_and_lo_both_prev_high_stays_high(self):
+        """Hi&Lo 同時成立時，高態不給 lo.permit，維持高（對齊 pwrcell_handle）。"""
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail(
+                    "EN",
+                    depends_on_hi=["__HIGH__"],
+                    depends_on_lo=["__HIGH__"],
+                    init=1,
+                ),
+            ],
+        )
         result = simulate(cfg, WaveDromScenario(steps=30))
         en = result.output_values["en"]
-        first_hi = next(i for i, v in enumerate(en) if v)
-        assert all(v == 1 for v in en[first_hi:])
-        assert sum(1 for i in range(1, len(en)) if en[i] != en[i - 1]) <= 1
+        assert all(v == 1 for v in en)
 
 
 class TestInputDependsSignal:
@@ -422,3 +438,117 @@ class TestInputDependsSignal:
             i for i, v in enumerate(result.raw_inputs["A"]) if v == 1
         )
         assert a_high == b_high + 1
+
+    def test_input_lo_falls_next_step(self):
+        """Lo 條件成立且 permit 允許時，下一 step 才拉低（非同 step）。"""
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail("X", seq_type="input"),
+                PowerRail("A", seq_type="input"),
+            ],
+        )
+        scenario = WaveDromScenario(
+            steps=15,
+            inputs={
+                "X": InputWaveSpec(
+                    hi_mode="custom",
+                    hi_wave="0110",
+                    lo_mode="custom",
+                    lo_wave="0000100000",
+                ),
+                "A": InputWaveSpec(
+                    hi_mode="depends",
+                    hi_groups=[["X"]],
+                    lo_mode="depends",
+                    lo_groups=[["__HIGH__"]],
+                ),
+            },
+        )
+        result = simulate(cfg, scenario)
+        a = result.raw_inputs["A"]
+        x = result.raw_inputs["X"]
+        fall = next(i for i in range(1, len(a)) if a[i - 1] == 1 and a[i] == 0)
+        assert a[fall - 1] == 1 and a[fall] == 0
+        assert x[fall - 1] == 0
+
+    def test_input_hi_depends_on_self(self):
+        """Input hi cond may reference its own GPIO (WaveDrom dialog allows self)."""
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[PowerRail("A", seq_type="input")],
+        )
+        scenario = WaveDromScenario(
+            steps=10,
+            inputs={
+                "A": InputWaveSpec(
+                    hi_mode="depends",
+                    hi_groups=[["A"]],
+                ),
+            },
+        )
+        result = simulate(cfg, scenario)
+        assert len(result.raw_inputs["A"]) == 10
+        assert result.raw_inputs["A"][0] == 0
+
+    def test_hi_custom_01_rises_next_step(self):
+        """hi_wave \"01\"：第 2 step 條件成立，第 3 step GPIO 拉高。"""
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[PowerRail("A", seq_type="input")],
+        )
+        scenario = WaveDromScenario(
+            steps=10,
+            inputs={"A": InputWaveSpec(hi_mode="custom", hi_wave="01")},
+        )
+        result = simulate(cfg, scenario)
+        a = result.raw_inputs["A"]
+        assert a[0] == 0 and a[1] == 0 and a[2] == 1
+
+    def test_input_lo_custom_falls_next_step(self):
+        """lo custom 為條件：Hi 條件先結束後 Lo 成立 → 下一 step 拉低。"""
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[PowerRail("A", seq_type="input")],
+        )
+        scenario = WaveDromScenario(
+            steps=10,
+            inputs={
+                "A": InputWaveSpec(
+                    hi_mode="custom",
+                    hi_wave="0110",
+                    lo_mode="custom",
+                    lo_wave="0000100000",
+                ),
+            },
+        )
+        result = simulate(cfg, scenario)
+        a = result.raw_inputs["A"]
+        rise = next(i for i, v in enumerate(a) if v == 1)
+        fall = next(i for i in range(rise + 1, len(a)) if a[i] == 0)
+        assert rise == 2
+        assert fall == 5
+
+    def test_output_lo_falls_next_step_after_lo_cond(self):
+        """Output Lo 條件成立後下一 step 拉低（非延遲 2 step）。"""
+        import json
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        with open(root / "output/test_pseq.json") as f:
+            cfg = PowerSeqConfig.from_dict(json.load(f))
+        with open(root / "output/test_wavedrom_config.json") as f:
+            sc = WaveDromScenario.from_dict(json.load(f))
+        result = simulate(cfg, sc)
+        for name, sig in [("EN1", "en1"), ("EN2", "en2")]:
+            lo = result.output_lo_cond[sig]
+            val = result.output_values[sig]
+            rise = next(i for i, v in enumerate(val) if v == 1)
+            transitions = [
+                i for i in range(rise + 1, len(val))
+                if lo[i] and val[i - 1] == 1 and val[i] == 0
+            ]
+            assert transitions, f"{name} never fell on lo cond"
+            for fall in transitions:
+                assert lo[fall - 1], f"{name} lo cond false step before fall"
+                assert fall == fall  # fall is next step after lo cond at fall-1
+                assert lo[fall - 1] and val[fall - 1] == 1 and val[fall] == 0

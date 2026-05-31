@@ -20,6 +20,8 @@ from wavedrom_sim import (
     values_to_wave,
 )
 
+WAVEDROM_AUTHOR = "Haru"
+
 
 def _port_name(name: str, prefix: str) -> str:
     safe = name.replace(".", "_").replace("-", "_").replace(" ", "_")
@@ -388,7 +390,8 @@ def generate_wavedrom(
         "head": {
             "text": (
                 f"{config.module_name} ({steps} steps, hscale="
-                f"{_norm_hscale(scenario.hscale)}, i*=in o*=out)"
+                f"{_norm_hscale(scenario.hscale)}, i*=in o*=out)\n"
+                f"Author: {WAVEDROM_AUTHOR}"
             ),
             "tick": 0,
             "every": _head_every(steps),
