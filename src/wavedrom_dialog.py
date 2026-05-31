@@ -153,8 +153,7 @@ class InputCondEditorDialog(_ModalToplevelMixin, ctk.CTkToplevel):
         def dep_options() -> list[str]:
             opts = ["High", "Low"]
             for r in config.rails:
-                if r.name != input_name:
-                    opts.append(r.name)
+                opts.append(r.name)
             return opts
 
         def is_pseqcell(name: str) -> bool:

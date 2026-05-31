@@ -61,15 +61,6 @@ class InputWaveSpec:
         return d
 
 
-def _norm_cond_step_delay(value: int) -> int:
-    """Steps after cond becomes true before GPIO/FSM may switch (min 1)."""
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        n = 1
-    return max(1, n)
-
-
 def _norm_hscale(value: int) -> int:
     """WaveDrom config.hscale — horizontal pixels per time step (min 1)."""
     try:
@@ -77,27 +68,6 @@ def _norm_hscale(value: int) -> int:
     except (TypeError, ValueError):
         n = 1
     return max(1, min(100, n))
-
-
-class _CondStepDelay:
-    """Count down `delay` sim steps while cond stays true, then allow one edge."""
-
-    def __init__(self, delay: int) -> None:
-        self.delay = _norm_cond_step_delay(delay)
-        self._pending: int | None = None
-
-    def ready(self, cond: int) -> bool:
-        if not cond:
-            self._pending = None
-            return False
-        if self._pending is None:
-            self._pending = self.delay
-            return False
-        self._pending -= 1
-        if self._pending <= 0:
-            self._pending = None
-            return True
-        return False
 
 
 @dataclass
@@ -289,7 +259,8 @@ def _eval_spec_groups(
 def _input_inst_hi_lo(
     spec: InputWaveSpec,
     step: int,
-    wave_bits: list[int],
+    hi_wave_bits: list[int],
+    lo_wave_bits: list[int],
     name_to_rail: dict[str, PowerRail],
     raw: dict[str, int],
     out_hi: dict[str, int],
@@ -307,7 +278,7 @@ def _input_inst_hi_lo(
     elif spec.hi_mode == "constant_0":
         hi = 0
     elif spec.hi_mode == "custom":
-        hi = wave_bits[step] if step < len(wave_bits) else 0
+        hi = hi_wave_bits[step] if step < len(hi_wave_bits) else 0
     else:
         hi = 0
 
@@ -317,35 +288,51 @@ def _input_inst_hi_lo(
             spec.lo_groups, spec.lo_inv_groups, spec.lo_use_groups, "lo",
             name_to_rail, raw, out_hi, out_lo, out_val,
         )
+    elif spec.lo_mode == "custom":
+        lo = lo_wave_bits[step] if step < len(lo_wave_bits) else 0
     return hi, lo
 
 
-def _input_gpio_delayed(
+def _input_permit_hi_c(spec: InputWaveSpec, inst_hi: int) -> int:
+    """Hi 用於 hi∧lo permit 衝突（含 constant/custom 的即時 hi）。"""
+    if spec.hi_mode == "depends" and spec.hi_groups:
+        return 1 if inst_hi else 0
+    if spec.hi_mode == "constant_1":
+        return 1
+    if spec.hi_mode == "custom":
+        return 1 if inst_hi else 0
+    return 0
+
+
+def _input_gpio_from_spec(
     spec: InputWaveSpec,
-    instant_hi: int,
-    instant_lo: int,
-    hi_delay: _CondStepDelay,
-    lo_delay: _CondStepDelay,
-    gpio: int,
+    inst_hi: int,
+    inst_lo: int,
+    fsm: _PermitGpioFsm,
 ) -> int:
-    """常數/自訂 wave 即時；訊號條件成立後 cond_step_delay 格才切換。"""
-    if spec.hi_mode in ("constant_0", "constant_1", "custom"):
-        v = instant_hi
-    elif spec.hi_mode == "depends" and spec.hi_groups:
-        if not instant_hi:
-            hi_delay.ready(0)
-            v = 0
-        elif gpio and instant_hi:
-            v = 1
-        elif hi_delay.ready(instant_hi):
-            v = 1
-        else:
-            v = gpio
-    else:
-        v = 0
-    if spec.lo_mode == "depends" and spec.lo_groups and lo_delay.ready(instant_lo):
+    """Input GPIO：depends/custom 皆為 permit 條件，成立後下一 step 翻轉。"""
+    enable_hi = (
+        (spec.hi_mode == "depends" and bool(spec.hi_groups))
+        or spec.hi_mode == "custom"
+    )
+    enable_lo = (
+        (spec.lo_mode == "depends" and bool(spec.lo_groups))
+        or spec.lo_mode == "custom"
+    )
+
+    if enable_hi or enable_lo:
+        hi_c = _input_permit_hi_c(spec, inst_hi)
+        lo_c = (1 if inst_lo else 0) if enable_lo else 0
+        fsm.tick(hi_c, lo_c, rise_on_hi=enable_hi, fall_on_lo=enable_lo)
+
+    if spec.hi_mode == "constant_0":
         return 0
-    return v
+    if spec.hi_mode == "constant_1":
+        if enable_lo and fsm.gpio == 0:
+            return 0
+        return 1
+
+    return fsm.gpio
 
 
 def _eval_dep(
@@ -444,35 +431,69 @@ def _pulses_active_at_step(step: int, pulses: list[str]) -> set[str]:
     return active or {"iPulse_1us"}
 
 
+class _PermitGpioFsm:
+    """pwrcell permit rules; armed edge applies at start of next tick (sim step)."""
+
+    def __init__(self, init: int = 0):
+        self.gpio = init
+        self.hi_permit = 0
+        self.lo_permit = 0
+        self._armed_hi = 0
+        self._armed_lo = 0
+
+    def tick(
+        self,
+        hi_c: int,
+        lo_c: int,
+        *,
+        rise_on_hi: bool = True,
+        fall_on_lo: bool = True,
+    ) -> int:
+        hi_c = 1 if hi_c else 0
+        lo_c = 1 if lo_c else 0
+
+        if rise_on_hi and self.gpio == 0 and self._armed_hi:
+            self.gpio = 1
+        elif fall_on_lo and self.gpio == 1 and self._armed_lo:
+            self.gpio = 0
+
+        if self.gpio:
+            self.hi_permit = 0
+            if not (hi_c and lo_c):
+                self.lo_permit = 1 if fall_on_lo else 0
+            self._armed_lo = 1 if (fall_on_lo and self.lo_permit and lo_c) else 0
+            self._armed_hi = 0
+        else:
+            self.lo_permit = 0
+            if not (hi_c and lo_c):
+                self.hi_permit = 1 if rise_on_hi else 0
+            self._armed_hi = 1 if (rise_on_hi and self.hi_permit and hi_c) else 0
+            self._armed_lo = 0
+
+        return self.gpio
+
+
 class _OutputFsm:
-    """WaveDrom output：不模擬 cycle/pulse；條件成立後 cond_step_delay 格才切換。
+    """Output GPIO — permit FSM + force."""
 
-    高→低時 hi/lo 不可同時成立（避免抖盪）。
-    """
-
-    def __init__(self, rail: PowerRail, cond_step_delay: int):
+    def __init__(self, rail: PowerRail):
         self._rail = rail
-        self.output = 1 if rail.init else 0
-        self._hi_delay = _CondStepDelay(cond_step_delay)
-        self._lo_delay = _CondStepDelay(cond_step_delay)
+        self._fsm = _PermitGpioFsm(1 if rail.init else 0)
+
+    @property
+    def output(self) -> int:
+        return self._fsm.gpio
 
     def tick(self, hi_cond: int, lo_cond: int, force_cond: int) -> int:
         if force_cond:
-            self.output = 1 if self._rail.force_val else 0
-            self._hi_delay._pending = None
-            self._lo_delay._pending = None
-            return self.output
-
-        if self.output == 0 and self._hi_delay.ready(hi_cond):
-            self.output = 1
-        elif (
-            self.output == 1
-            and self._lo_delay.ready(lo_cond)
-            and not (hi_cond and lo_cond)
-        ):
-            self.output = 0
-
-        return self.output
+            self._fsm.hi_permit = 0
+            self._fsm.lo_permit = 0
+            self._fsm._armed_hi = 0
+            self._fsm._armed_lo = 0
+            self._fsm.gpio = 1 if self._rail.force_val else 0
+            return self._fsm.gpio
+        self._fsm.tick(hi_cond, lo_cond)
+        return self._fsm.gpio
 
 
 def _input_spec_refs_output(
@@ -553,6 +574,7 @@ def _input_only_cascade_roots(
     roots: list[PowerRail] = []
     for r in candidates:
         ups = _input_dep_input_names(input_specs[r.name], name_to_rail)
+        ups.discard(r.name)
         if ups & candidate_names:
             continue
         if any(
@@ -560,6 +582,32 @@ def _input_only_cascade_roots(
             for d in ups
             if d in input_specs
         ):
+            continue
+        roots.append(r)
+    return roots
+
+
+def _inputs_ref_output_preupdate_roots(
+    inputs: list[PowerRail],
+    input_specs: dict[str, InputWaveSpec],
+    name_to_rail: dict[str, PowerRail],
+    instant_hi_modes: tuple[str, ...],
+) -> list[PowerRail]:
+    """Inputs whose Cond 引用 output GPIO；在 output 評估前先更新（用 out_val_prev）。"""
+    candidates: list[PowerRail] = []
+    for r in inputs:
+        spec = input_specs[r.name]
+        if spec.hi_mode in instant_hi_modes:
+            continue
+        if not _input_spec_refs_output(spec, name_to_rail):
+            continue
+        candidates.append(r)
+    candidate_names = {r.name for r in candidates}
+    roots: list[PowerRail] = []
+    for r in candidates:
+        ups = _input_dep_input_names(input_specs[r.name], name_to_rail)
+        ups.discard(r.name)
+        if ups & candidate_names:
             continue
         roots.append(r)
     return roots
@@ -624,13 +672,12 @@ def default_scenario_for_config(config: PowerSeqConfig) -> WaveDromScenario:
             hi_mode="depends",
             lo_mode="constant_0",
         )
-    return WaveDromScenario(steps=200, inputs=inputs)
+    return WaveDromScenario(steps=50, inputs=inputs)
 
 
 def simulate(config: PowerSeqConfig, scenario: WaveDromScenario) -> SimResult:
     """執行離散 pulse 模擬，回傳各軌跡。"""
     steps = max(10, scenario.steps)
-    cond_delay = _norm_cond_step_delay(scenario.cond_step_delay)
     pulses = list(config.pulses or ["iPulse_1us"])
 
     name_to_rail = {r.name: r for r in config.rails}
@@ -640,23 +687,31 @@ def simulate(config: PowerSeqConfig, scenario: WaveDromScenario) -> SimResult:
     pulse_active = [_pulses_active_at_step(t, pulses) for t in range(steps)]
 
     input_specs: dict[str, InputWaveSpec] = {}
-    input_waves: dict[str, list[int]] = {}
+    input_hi_waves: dict[str, list[int]] = {}
+    input_lo_waves: dict[str, list[int]] = {}
     for r in inputs:
         spec = scenario.inputs.get(r.name) or InputWaveSpec()
         input_specs[r.name] = spec
         if spec.hi_mode == "custom":
-            input_waves[r.name] = expand_wave_pattern(spec.hi_wave, steps)
+            input_hi_waves[r.name] = expand_wave_pattern(spec.hi_wave, steps)
         else:
-            input_waves[r.name] = [0] * steps
+            input_hi_waves[r.name] = [0] * steps
+        if spec.lo_mode == "custom":
+            input_lo_waves[r.name] = expand_wave_pattern(spec.lo_wave, steps)
+        else:
+            input_lo_waves[r.name] = [0] * steps
 
     raw_inputs: dict[str, list[int]] = {r.name: [] for r in inputs}
     input_prev_hi: dict[str, int] = {r.name: 0 for r in inputs}
     input_prev_lo: dict[str, int] = {r.name: 0 for r in inputs}
-    input_hi_delay = {r.name: _CondStepDelay(cond_delay) for r in inputs}
-    input_lo_delay = {r.name: _CondStepDelay(cond_delay) for r in inputs}
+    input_fsms: dict[str, _PermitGpioFsm] = {}
+    for r in inputs:
+        spec = input_specs[r.name]
+        init = 1 if spec.hi_mode == "constant_1" else 0
+        input_fsms[r.name] = _PermitGpioFsm(init)
 
     fsms = {
-        _internal_sig(r.name): _OutputFsm(r, cond_delay) for r in outputs
+        _internal_sig(r.name): _OutputFsm(r) for r in outputs
     }
 
     out_hi: dict[str, list[int]] = {s: [] for s in fsms}
@@ -668,7 +723,7 @@ def simulate(config: PowerSeqConfig, scenario: WaveDromScenario) -> SimResult:
         _internal_sig(r.name): 1 if r.init else 0 for r in outputs
     }
 
-    _instant_hi_modes = ("constant_0", "constant_1", "custom")
+    _instant_hi_modes = ("constant_0", "constant_1")
 
     for t in range(steps):
         raw_t: dict[str, int] = {
@@ -678,32 +733,38 @@ def simulate(config: PowerSeqConfig, scenario: WaveDromScenario) -> SimResult:
         hi_t: dict[str, int] = {}
         lo_t: dict[str, int] = {}
         updated_inputs_this_step: set[str] = set()
+        touched_inputs_this_step: set[str] = set()
 
         def _update_input_gpio(rail: PowerRail) -> None:
             spec = input_specs[rail.name]
-            # Use raw_t so multiple updates in one step (in-only + cascade) see prior GPIO.
-            prev_gpio = raw_t[rail.name]
             inst_hi, inst_lo = _input_inst_hi_lo(
-                spec, t, input_waves[rail.name], name_to_rail,
-                raw_t, hi_t, lo_t, out_val_prev,
+                spec, t, input_hi_waves[rail.name], input_lo_waves[rail.name],
+                name_to_rail, raw_t, hi_t, lo_t, out_val_prev,
             )
-            raw_t[rail.name] = _input_gpio_delayed(
-                spec,
-                inst_hi,
-                inst_lo,
-                input_hi_delay[rail.name],
-                input_lo_delay[rail.name],
-                prev_gpio,
+            raw_t[rail.name] = _input_gpio_from_spec(
+                spec, inst_hi, inst_lo, input_fsms[rail.name],
             )
             input_prev_hi[rail.name] = inst_hi
             input_prev_lo[rail.name] = inst_lo
 
-        def _update_input_gpio_cascade(rail: PowerRail) -> None:
+        def _update_input_gpio_cascade(
+            rail: PowerRail,
+            *,
+            track_updated: bool = True,
+            mark_touched: bool = True,
+            cascade_mark_touched: bool | None = None,
+        ) -> None:
             """Update input GPIO and refresh inputs that depend on it (e.g. SLPS5→SLPS4)."""
-            if rail.name in updated_inputs_this_step:
+            if mark_touched and rail.name in touched_inputs_this_step:
+                return
+            if track_updated and rail.name in updated_inputs_this_step:
                 return
             _update_input_gpio(rail)
-            updated_inputs_this_step.add(rail.name)
+            if mark_touched:
+                touched_inputs_this_step.add(rail.name)
+            if track_updated:
+                updated_inputs_this_step.add(rail.name)
+            child_mark = mark_touched if cascade_mark_touched is None else cascade_mark_touched
             queue = [rail.name]
             visited = {rail.name}
             while queue:
@@ -713,16 +774,35 @@ def simulate(config: PowerSeqConfig, scenario: WaveDromScenario) -> SimResult:
                 ):
                     if down.name in visited:
                         continue
+                    if child_mark and down.name in touched_inputs_this_step:
+                        continue
+                    if track_updated and down.name in updated_inputs_this_step:
+                        continue
                     visited.add(down.name)
-                    _update_input_gpio_cascade(down)
+                    _update_input_gpio_cascade(
+                        down,
+                        track_updated=track_updated,
+                        mark_touched=child_mark,
+                    )
                     queue.append(down.name)
 
         for rail in inputs:
             if input_specs[rail.name].hi_mode in _instant_hi_modes:
                 _update_input_gpio_cascade(rail)
+        for rail in _inputs_ref_output_preupdate_roots(
+            inputs, input_specs, name_to_rail, _instant_hi_modes,
+        ):
+            _update_input_gpio_cascade(
+                rail,
+                track_updated=False,
+                mark_touched=False,
+                cascade_mark_touched=True,
+            )
         for rail in _input_only_cascade_roots(
             inputs, input_specs, name_to_rail, _instant_hi_modes,
         ):
+            if rail.name in touched_inputs_this_step:
+                continue
             _update_input_gpio_cascade(rail)
 
         output_order = _outputs_topo_order(outputs, name_to_rail, input_specs)
@@ -743,16 +823,23 @@ def simulate(config: PowerSeqConfig, scenario: WaveDromScenario) -> SimResult:
             )
             out_hi[sig].append(hi_t[sig])
             out_lo[sig].append(lo_t[sig])
+            prev_out = out_val_prev[sig]
             v = fsms[sig].tick(hi_t[sig], lo_t[sig], force_t[sig])
             out_val[sig].append(v)
             out_state[sig].append("high" if v else "low")
             out_val_prev[sig] = v
-            for inp in inputs:
-                spec = input_specs[inp.name]
-                if spec.hi_mode in _instant_hi_modes:
-                    continue
-                if _input_spec_refs_output_name(spec, rail.name):
-                    _update_input_gpio_cascade(inp)
+            if v != prev_out:
+                for inp in inputs:
+                    spec = input_specs[inp.name]
+                    if spec.hi_mode in _instant_hi_modes:
+                        continue
+                    if _input_spec_refs_output_name(spec, rail.name):
+                        _update_input_gpio_cascade(
+                            inp,
+                            track_updated=True,
+                            mark_touched=False,
+                            cascade_mark_touched=True,
+                        )
 
         for rail in inputs:
             raw_inputs[rail.name].append(raw_t[rail.name])

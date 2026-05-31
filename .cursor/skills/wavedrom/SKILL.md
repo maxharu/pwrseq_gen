@@ -114,11 +114,12 @@ Per-lane timing stretch (DDR-style diagrams):
 
 **Export naming:** inputs `i{Name}`, outputs `o{Name}` (`.`/`-`/space → `_`).
 
-**Simulation limits (do not promise RTL parity):**
+**Simulation limits (do not promise full RTL parity):**
 
-- No `cycle_hi` / `cycle_lo` / pulse timing — logic-level only
-- Output: prev_hi → rise when low; prev_lo → fall when high only if hi&lo were not both true last step
-- Input scenario hi/lo: signal cond applies **next** step (no DEB)
+- Output / input（**depends** 或 **custom** hi/lo）：wave bit / Cond 為轉態**條件**；**pwrcell permit** + 條件成立後 **下一 sim step** 翻轉（例：`hi_wave: "01"` → 第 2 step 條件成立 → 第 3 step GPIO 拉高）
+- 引用 **output GPIO** 的 input（PG、FINAL 等）在每 step **output 評估前**先更新，避免 output Lo 條件晚 1 step 才成立
+- Hi∧Lo 同時成立：不給對向 permit（低無法升、高無法降）
+- 無 cycle/pulse；`cond_step_delay` 欄位僅 JSON 相容（hscale 別名），不參與模擬
 - Input scenario does **not** change rail `depends_on_*` in project JSON
 - Export adds **edge** arrows on output rails (Hi/Lo condition labels; first dep in group)
 - Multi-bit / clock lanes are not generated; add manually in Editor if needed
