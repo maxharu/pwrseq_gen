@@ -983,6 +983,24 @@ class RailEditorFrame(ctk.CTkFrame):
 
         self._on_type_toggle(initial=True)
 
+        for entry in (
+            self.entry_name,
+            self.entry_hi,
+            self.entry_lo,
+            self.entry_deb_cycle_hi,
+            self.entry_deb_cycle_lo,
+            self.entry_deb_cycle_sync,
+        ):
+            self._bind_disarm_node_delete_on_focus(entry)
+
+    def _bind_disarm_node_delete_on_focus(self, widget):
+        def _on_focus_in(_event):
+            top = self.winfo_toplevel()
+            disarm = getattr(top, "_disarm_node_list_delete", None)
+            if disarm:
+                disarm()
+        widget.bind("<FocusIn>", _on_focus_in, add="+")
+
     # ---- callbacks ----
     def _on_name_commit(self, _event=None):
         new_name = self.entry_name.get().strip()
@@ -1213,11 +1231,17 @@ class NodeListPanel(ctk.CTkFrame):
                  on_select: Callable[[int], None],
                  on_reorder: Callable[[int, int], None],
                  on_multi_change: Callable[[set[int]], None],
+                 on_delete: Callable[[], None],
+                 on_activate: Callable[[], None],
+                 on_disarm: Callable[[], None],
                  **kwargs):
         super().__init__(master, **kwargs)
         self.on_select = on_select
         self.on_reorder = on_reorder
         self.on_multi_change = on_multi_change
+        self.on_delete = on_delete
+        self.on_activate = on_activate
+        self.on_disarm = on_disarm
         self._rails: list[PowerRail] = []
         self._selected: set[int] = set()
         self._primary_idx: Optional[int] = None
@@ -1234,6 +1258,7 @@ class NodeListPanel(ctk.CTkFrame):
         self.search_entry = ctk.CTkEntry(self, placeholder_text="Search node (Ctrl+F)",
                                          textvariable=self.search_var)
         self.search_entry.pack(fill="x", padx=S_SM, pady=(0, S_SM))
+        self.search_entry.bind("<FocusIn>", lambda _e: self.on_disarm(), add="+")
         self.search_var.trace_add("write", lambda *_: self._render())
 
         self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
@@ -1241,6 +1266,15 @@ class NodeListPanel(ctk.CTkFrame):
 
         self.multi_status = ctk.CTkLabel(self, text="", font=FONT_HINT, text_color="gray")
         self.multi_status.pack(fill="x", padx=S_SM)
+
+        self.bind("<Delete>", self._on_delete_key)
+        self.scroll.bind("<Delete>", self._on_delete_key)
+
+    def _on_delete_key(self, _event):
+        if not self._selected:
+            return
+        self.on_delete()
+        return "break"
 
     def set_rails(self, rails: list[PowerRail], primary_idx: Optional[int] = None):
         self._rails = rails
@@ -1320,6 +1354,7 @@ class NodeListPanel(ctk.CTkFrame):
             w.bind("<ButtonRelease-1>", lambda e, i=idx: self._on_release(i, e))
 
     def _on_press(self, idx: int, event):
+        self.on_activate()
         ctrl = (event.state & 0x0004) != 0
         if ctrl:
             if idx in self._selected:
@@ -1332,6 +1367,7 @@ class NodeListPanel(ctk.CTkFrame):
             # 只變顏色不重建 row（row 集合不變）
             self._apply_row_bgs()
             self.on_multi_change(set(self._selected))
+            self.focus_set()
             return
         # 普通 click：單選 + 開始拖拉（拖拉提交延後到 release）
         self._selected = {idx}
@@ -1342,6 +1378,7 @@ class NodeListPanel(ctk.CTkFrame):
         self._apply_row_bgs()
         self.on_multi_change(set(self._selected))
         self.on_select(idx)
+        self.focus_set()
         # 預備虛影（lazy：第一次 motion 才真正顯示，避免按下沒拖也建 Toplevel）
         self._ghost_pending_rail = self._rails[idx] if 0 <= idx < len(self._rails) else None
 
@@ -1935,6 +1972,7 @@ class PowerSeqGUI(ctk.CTk):
         self._recent = RecentFiles()
         self._tooltips: list[Tooltip] = []  # 強引用，避免 GC
         self._wavedrom_dialog = None
+        self._node_list_delete_armed = False
 
         self._build_ui()
         self._bind_shortcuts()
@@ -2086,11 +2124,16 @@ class PowerSeqGUI(ctk.CTk):
             left_wrap, on_select=self._on_node_selected,
             on_reorder=self._on_node_reordered,
             on_multi_change=self._on_multi_changed,
+            on_delete=self._delete_selected_from_node_list,
+            on_activate=self._arm_node_list_delete,
+            on_disarm=self._disarm_node_list_delete,
         )
         self.node_list.pack(fill="both", expand=True)
 
         self.pulse_panel = PulsePanel(left_wrap, on_change=self._on_pulses_changed)
         self.pulse_panel.pack(fill="x")
+        self.pulse_panel.entry.bind(
+            "<FocusIn>", lambda _e: self._disarm_node_list_delete(), add="+")
 
         # middle
         mid = ctk.CTkFrame(paned, fg_color="transparent")
@@ -2164,15 +2207,30 @@ class PowerSeqGUI(ctk.CTk):
         self.bind_all("<Control-Z>", lambda _e: self._undo())
         self.bind_all("<Control-y>", lambda _e: self._redo())
         self.bind_all("<Control-Y>", lambda _e: self._redo())
-        # Delete 只在焦點不在 Entry/Text 時才觸發批次刪除
+        # Delete：僅在左側 Node 列表點選後生效（避免編輯 Entry 時誤刪）
         self.bind_all("<Delete>", self._on_delete_key)
 
-    def _on_delete_key(self, _event):
-        focused = self.focus_get()
-        if isinstance(focused, (tk.Entry, tk.Text)):
+    def _arm_node_list_delete(self):
+        self._node_list_delete_armed = True
+
+    def _disarm_node_list_delete(self):
+        self._node_list_delete_armed = False
+
+    def _delete_selected_from_node_list(self):
+        if not self._node_list_delete_armed:
             return
-        # CTkEntry 內部其實是 tk.Entry 的子類，會被上面 isinstance 攔下
         self._delete_selected()
+
+    def _on_delete_key(self, _event):
+        if not self._node_list_delete_armed:
+            return
+        if not self.node_list.get_selection():
+            return
+        focused = self.focus_get()
+        if isinstance(focused, tk.Listbox):
+            return
+        self._delete_selected_from_node_list()
+        return "break"
 
     # ---- title / dirty ----
     def _mark_dirty(self):
