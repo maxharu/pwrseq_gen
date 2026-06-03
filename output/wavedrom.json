@@ -1,6 +1,6 @@
 {
   "head": {
-    "text": "PWRSEQ_TOP (22 steps, hscale=2, i*=in o*=out)",
+    "text": "PWRSEQ_TOP (22 steps, hscale=1, i*=in o*=out)\nAuthor: Haru",
     "tick": 0,
     "every": 2
   },
@@ -149,7 +149,7 @@
   ],
   "config": {
     "skin": "narrow",
-    "hscale": 2
+    "hscale": 1
   },
   "edge": [
     "b-~>a",

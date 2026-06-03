@@ -59,6 +59,18 @@ When hand-writing patterns for **scenario** `hi_wave` / `lo_wave`, use the full
 WaveDrom alphabet; `.` stretches the previous symbol (`0.1.` = low, brief high,
 back to low).
 
+**Scenario shorthand (`expand_wave_pattern`, sim-only):** scenario `hi_wave` /
+`lo_wave` also accept a regex-style mini-syntax that is expanded to 0/1 before
+simulation (it is **not** written into exported WaveJSON, so no impact on
+wavedrom.com):
+
+- `0` / `1`：位元；`.` / `|`：延續前一位元一格。
+- `{n}`：量詞，把緊接在前的單位（位元或 `(...)` 群組）重複到**剛好 n 次**。
+- `(...)`：群組，可巢狀、可被 `{n}` 量化。
+- 忽略空白；長度不足補最後電平、超過截斷。
+- 範例：`0{29}1` = 29 個 0 後接 1（第 30 step 才成立）、`1{3}0{5}` = `11100000`、`(10){3}` = `101010`。
+- 舊版裸數字重複（如 `029`）仍向後相容。
+
 ### Clock lanes
 
 Clocks toggle twice per period. Use dedicated symbols (not plain `01`):
@@ -122,6 +134,7 @@ Per-lane timing stretch (DDR-style diagrams):
 - 無 cycle/pulse；`cond_step_delay` 欄位僅 JSON 相容（hscale 別名），不參與模擬
 - Input scenario does **not** change rail `depends_on_*` in project JSON
 - Export adds **edge** arrows on output rails (Hi/Lo condition labels; first dep in group)
+- **Node 大小寫慣例**：WaveDrom 對 node 字元——小寫=多畫一顆字母標記（看得見），大寫=隱形錨點（箭頭照接、不畫字母）。`_NodeAllocator` 依 edge 種類分池：**L→H（hi）優先小寫、H→L（lo）優先大寫**，各池（各 26 個）用盡才互相溢出、再退回 `0-9@#$%&?`。端點需全域唯一且為**單一字元**（edge 只吃首/尾 1 字元）。
 - Multi-bit / clock lanes are not generated; add manually in Editor if needed
 
 **Workflow for agents:**

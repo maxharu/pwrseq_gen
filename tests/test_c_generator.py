@@ -59,13 +59,14 @@ class TestGenerateC:
         assert ".lo.condition" in out
         assert "pwrcell_handle(&power_var.b" in out
 
-    def test_self_output_uses_kind_column(self):
+    def test_self_output_uses_actual_level(self):
+        """self on output 應讀該 rail 的實際輸出準位（GPIO 讀回），對齊 Verilog/模擬器。"""
         cfg = PowerSeqConfig(rails=[
             PowerRail("A", depends_on_hi=["__HIGH__"]),
             PowerRail("B", depends_on_lo=["A"]),
         ])
         out = generate_c(cfg, output_filename="power.c")
-        assert "power_var.b.lo.condition    = (power_var.a.lo.condition);" in out
+        assert "power_var.b.lo.condition    = (oemgpio_DI_Get(A));" in out
 
     def test_timer_isr(self):
         cfg = PowerSeqConfig(

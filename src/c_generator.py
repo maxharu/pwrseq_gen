@@ -107,8 +107,8 @@ def _c_dep_expr(
         elif use_mode == "force":
             base = f"{var_name}.{sig}.force.condition"
         else:
-            # self on output：由 _groups_to_c_expr 依 hi/lo/force 欄位處理；此處 fallback
-            base = f"{var_name}.{sig}.hi.condition"
+            # self on output：節點本身的實際輸出準位（讀回 GPIO），對齊 Verilog/模擬器
+            base = f"oemgpio_DI_Get({_gpio_macro(dep_name)})"
 
     if inverted:
         if base in ("0", "1"):
@@ -129,22 +129,20 @@ def _groups_to_c_expr(
 
     get_inv = {"hi": rail.get_hi_inv, "lo": rail.get_lo_inv, "force": rail.get_force_inv}[kind]
     get_use = {"hi": rail.get_hi_use, "lo": rail.get_lo_use, "force": rail.get_force_use}[kind]
+    get_group_inv = {"hi": rail.get_hi_group_inv, "lo": rail.get_lo_group_inv,
+                     "force": rail.get_force_group_inv}[kind]
 
     group_exprs = []
     for gi, group in enumerate(groups):
         terms = []
         for ii, d in enumerate(group):
             use = get_use(gi, ii, d)
-            if use == "self" and name_to_rail.get(d) and name_to_rail[d].seq_type == "output":
-                # self on output: map to same kind's condition column
-                sig = _internal_sig(d)
-                term = f"{var_name}.{sig}.{kind}.condition"
-                if get_inv(gi, ii, d):
-                    term = f"!{term}"
-            else:
-                term = _c_dep_expr(d, name_to_rail, get_inv(gi, ii, d), use, var_name)
+            term = _c_dep_expr(d, name_to_rail, get_inv(gi, ii, d), use, var_name)
             terms.append(term)
-        group_exprs.append(f"({' && '.join(terms)})")
+        group_expr = f"({' && '.join(terms)})"
+        if get_group_inv(gi):
+            group_expr = f"!{group_expr}"
+        group_exprs.append(group_expr)
     return " || ".join(group_exprs)
 
 

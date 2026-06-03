@@ -57,38 +57,58 @@ def _has_cycle_dfs(
 
 def check_circular_dependency(config: PowerSeqConfig) -> bool:
     """
-    檢查是否有循環依賴，有則回傳 True（排除 __HIGH__/__LOW__）
-    Hi 與 Lo 依賴分開檢查：iHi 決定上電順序，iLo 決定關電順序。
-    例如 SIG_3 iHi 依賴 SIG_2、SIG_2 iLo 依賴 SIG_3 不會形成循環（狀態不同）。
-    僅當 Hi 圖或 Lo 圖各自內部有環時才算循環依賴。
+    檢查是否有循環依賴，有則回傳 True（排除 __HIGH__/__LOW__）。
+
+    以 (rail, 欄位) 為節點建單一有向圖；每條依賴依其 use 連到目標欄位：
+    - use="hi"/"lo"/"force"：連到該節點的對應 condition 欄位
+    - use="self"：連到「引用端所在欄位」（與 C 產生器 self→.{kind}.condition 一致）
+    輸入節點 / __HIGH__ / __LOW__ 視為葉節點（無出邊）。
+
+    如此 Hi 與 Lo 等不同狀態欄位天然分屬不同節點：
+    - SIG_3.hi 依賴 SIG_2、SIG_2.lo 依賴 SIG_3 → 不成環（欄位不同）。
+    - EN.hi 引用自己的 EN.lo → 邊 (EN,hi)->(EN,lo)，只要 EN.lo 不回指 EN.hi 就不成環。
+    僅同欄位自我引用（EN.hi -> EN.hi）等真正組合迴圈才會被判定為循環。
     """
     const_deps = {"__HIGH__", "__LOW__"}
+    cols = ("hi", "lo", "force")
+    rail_by_name = {r.name: r for r in config.rails}
+    groups_getter = {
+        "hi": lambda r: r.get_hi_groups(),
+        "lo": lambda r: r.get_lo_groups(),
+        "force": lambda r: r.get_force_groups(),
+    }
+    use_getter = {
+        "hi": lambda r: r.get_hi_use,
+        "lo": lambda r: r.get_lo_use,
+        "force": lambda r: r.get_force_use,
+    }
 
-    def _has_cycle_in_graph(g: dict[str, list[str]]) -> bool:
-        visited = set()
-        for name in g:
-            if name not in visited:
-                if _has_cycle_dfs(name, g, visited, set()):
-                    return True
-        return False
+    def node(name: str, col: str) -> str:
+        return f"{name}\x00{col}"
 
-    graph_hi = {
-        r.name: [d for d in r.get_depends_on_hi_flat() if d not in const_deps]
-        for r in config.rails
-    }
-    graph_lo = {
-        r.name: [d for d in r.get_depends_on_lo_flat() if d not in const_deps]
-        for r in config.rails
-    }
-    graph_force = {
-        r.name: [d for d in r.get_depends_on_force_flat() if d not in const_deps]
-        for r in config.rails
-    }
-    return (
-        _has_cycle_in_graph(graph_hi)
-        or _has_cycle_in_graph(graph_lo)
-        or _has_cycle_in_graph(graph_force)
-    )
+    graph: dict[str, list[str]] = {}
+    for r in config.rails:
+        for col in cols:
+            src = node(r.name, col)
+            graph.setdefault(src, [])
+            get_use = use_getter[col](r)
+            for gi, group in enumerate(groups_getter[col](r)):
+                for ii, dep in enumerate(group):
+                    if dep in const_deps:
+                        continue
+                    target = rail_by_name.get(dep)
+                    if target is None or target.seq_type == "input":
+                        continue  # input / 不存在：葉節點，無出邊
+                    use = get_use(gi, ii, dep)
+                    tcol = use if use in cols else col  # "self" → 引用端欄位
+                    graph[src].append(node(dep, tcol))
+
+    visited: set[str] = set()
+    for n in graph:
+        if n not in visited:
+            if _has_cycle_dfs(n, graph, visited, set()):
+                return True
+    return False
 
 
 def validate(config: PowerSeqConfig) -> tuple[bool, list[str]]:

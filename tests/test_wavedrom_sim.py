@@ -25,6 +25,33 @@ class TestExpandWave:
     def test_custom_pattern(self):
         assert expand_wave_pattern("0.1.", 4) == [0, 0, 1, 1]
 
+    def test_quantifier_rise_at_step(self):
+        # 0{29}1：前 29 個 0、index 29 為 1，其後補最後電平
+        bits = expand_wave_pattern("0{29}1", 31)
+        assert bits[:29] == [0] * 29
+        assert bits[29] == 1
+        assert bits[30] == 1
+
+    def test_quantifier_exact_count(self):
+        assert expand_wave_pattern("0{29}", 29) == [0] * 29
+        assert expand_wave_pattern("1{3}0{5}", 8) == [1, 1, 1, 0, 0, 0, 0, 0]
+
+    def test_group_repeat(self):
+        assert expand_wave_pattern("(10){3}", 6) == [1, 0, 1, 0, 1, 0]
+
+    def test_nested_group(self):
+        assert expand_wave_pattern("((01){2}0){2}", 10) == [0, 1, 0, 1, 0, 0, 1, 0, 1, 0]
+
+    def test_quantifier_whitespace(self):
+        assert expand_wave_pattern("0{29} 1", 31)[29] == 1
+
+    def test_fill_to_length_after_quantifier(self):
+        assert expand_wave_pattern("0{3}1", 8) == [0, 0, 0, 1, 1, 1, 1, 1]
+
+    def test_legacy_bare_number_repeat(self):
+        # 向後相容：0 後接裸數字 = 重複前一電平
+        assert expand_wave_pattern("029", 31) == [0] * 31
+
 
 class TestSimulate:
     def test_output_switches_next_step_after_input(self):
@@ -531,24 +558,118 @@ class TestInputDependsSignal:
 
     def test_output_lo_falls_next_step_after_lo_cond(self):
         """Output Lo 條件成立後下一 step 拉低（非延遲 2 step）。"""
-        import json
-        from pathlib import Path
-        root = Path(__file__).resolve().parents[1]
-        with open(root / "output/test_pseq.json") as f:
-            cfg = PowerSeqConfig.from_dict(json.load(f))
-        with open(root / "output/test_wavedrom_config.json") as f:
-            sc = WaveDromScenario.from_dict(json.load(f))
-        result = simulate(cfg, sc)
-        for name, sig in [("EN1", "en1"), ("EN2", "en2")]:
-            lo = result.output_lo_cond[sig]
-            val = result.output_values[sig]
-            rise = next(i for i, v in enumerate(val) if v == 1)
-            transitions = [
-                i for i in range(rise + 1, len(val))
-                if lo[i] and val[i - 1] == 1 and val[i] == 0
-            ]
-            assert transitions, f"{name} never fell on lo cond"
-            for fall in transitions:
-                assert lo[fall - 1], f"{name} lo cond false step before fall"
-                assert fall == fall  # fall is next step after lo cond at fall-1
-                assert lo[fall - 1] and val[fall - 1] == 1 and val[fall] == 0
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail("RISE", seq_type="input"),
+                PowerRail("FALL", seq_type="input"),
+                PowerRail(
+                    "EN",
+                    depends_on_hi=["RISE"],
+                    depends_on_lo=["FALL"],
+                    cycle_hi=1,
+                    cycle_lo=1,
+                    init=0,
+                ),
+            ],
+        )
+        scenario = WaveDromScenario(
+            steps=10,
+            inputs={
+                "RISE": InputWaveSpec(
+                    hi_mode="custom",
+                    hi_wave="01",
+                    lo_mode="custom",
+                    lo_wave="0{4}1",
+                ),
+                "FALL": InputWaveSpec(hi_mode="custom", hi_wave="0{6}1"),
+            },
+        )
+        result = simulate(cfg, scenario)
+        val = result.output_values["en"]
+        lo = result.output_lo_cond["en"]
+        lo_step = next(i for i, v in enumerate(lo) if v)
+        fall_step = next(i for i in range(1, len(val)) if val[i - 1] == 1 and val[i] == 0)
+        assert fall_step == lo_step + 1
+
+    def test_output_lo_falls_next_step_ignoring_cycle_lo(self):
+        """H->L 與 L->H 對稱：條件成立後下一 step 轉態，不模擬 cycle_lo（邏輯預覽）。"""
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail("RISE", seq_type="input"),
+                PowerRail("FALL", seq_type="input"),
+                PowerRail(
+                    "EN",
+                    depends_on_hi=["RISE"],
+                    depends_on_lo=["FALL"],
+                    cycle_hi=1,
+                    cycle_lo=4,
+                    init=0,
+                ),
+            ],
+        )
+        scenario = WaveDromScenario(
+            steps=14,
+            inputs={
+                "RISE": InputWaveSpec(
+                    hi_mode="custom",
+                    hi_wave="01",
+                    lo_mode="custom",
+                    lo_wave="0{4}1",
+                ),
+                "FALL": InputWaveSpec(hi_mode="custom", hi_wave="0{6}1"),
+            },
+        )
+        result = simulate(cfg, scenario)
+        val = result.output_values["en"]
+        lo = result.output_lo_cond["en"]
+        lo_step = next(i for i, v in enumerate(lo) if v)
+        fall_step = next(i for i in range(1, len(val)) if val[i - 1] == 1 and val[i] == 0)
+        assert fall_step == lo_step + 1
+
+    def test_output_lo_self_dep_falls_next_step(self):
+        """self 依賴 source 準位：source 掉後下一 step 轉態（不等 cycle_lo）。"""
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail("RISE", seq_type="input"),
+                PowerRail("SRC_FALL", seq_type="input"),
+                PowerRail(
+                    "SRC",
+                    depends_on_hi=["RISE"],
+                    depends_on_lo=["SRC_FALL"],
+                    cycle_hi=1,
+                    cycle_lo=1,
+                    init=0,
+                ),
+                PowerRail(
+                    "DST",
+                    depends_on_hi=["RISE"],
+                    depends_on_lo=["SRC"],
+                    depends_on_lo_inv={"SRC": True},
+                    depends_on_lo_inv_groups=[[True]],
+                    cycle_hi=1,
+                    cycle_lo=3,
+                    init=0,
+                ),
+            ],
+        )
+        scenario = WaveDromScenario(
+            steps=16,
+            inputs={
+                "RISE": InputWaveSpec(
+                    hi_mode="custom",
+                    hi_wave="01",
+                    lo_mode="custom",
+                    lo_wave="0{4}1",
+                ),
+                "SRC_FALL": InputWaveSpec(hi_mode="custom", hi_wave="0{6}1"),
+            },
+        )
+        result = simulate(cfg, scenario)
+        src = result.output_values["src"]
+        dst = result.output_values["dst"]
+        src_fall = next(i for i in range(1, len(src)) if src[i - 1] == 1 and src[i] == 0)
+        dst_fall = next(i for i in range(1, len(dst)) if dst[i - 1] == 1 and dst[i] == 0)
+        assert dst_fall == src_fall + 1

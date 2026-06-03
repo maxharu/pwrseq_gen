@@ -142,52 +142,101 @@ def _pulse_scale_units(pulse_name: str) -> int:
     return 1
 
 
+def _expand_wave_tokens(
+    s: str, i: int, prev: int, cap: int,
+) -> tuple[list[int], int, int]:
+    """遞迴展開 wave 表達式，直到字串結束或遇到未配對的 ')'。
+
+    支援：0/1（位元）、./|（延續前一位元）、{n}（量詞，重複前一單位至剛好 n 次）、
+    (...)（群組，可巢狀與被量化）、裸數字（沿用舊「重複前一電平」相容行為）。
+    回傳 (bits, next_index, prev_level)。cap 用來避免巨量展開。
+    """
+    out: list[int] = []
+    last_unit: list[int] | None = None  # 上一個單位的 bits（供 {n} 重複）
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch.isspace():
+            i += 1
+            continue
+        if ch == ")":
+            break
+        if ch in "01":
+            prev = int(ch)
+            unit = [prev]
+            out.extend(unit)
+            last_unit = unit
+            i += 1
+        elif ch in ".|":
+            unit = [prev]
+            out.extend(unit)
+            last_unit = unit
+            i += 1
+        elif ch == "(":
+            sub, ni, prev = _expand_wave_tokens(s, i + 1, prev, cap)
+            if ni < n and s[ni] == ")":
+                ni += 1
+            out.extend(sub)
+            last_unit = sub
+            i = ni
+        elif ch == "{":
+            j = i + 1
+            while j < n and s[j].isdigit():
+                j += 1
+            num_str = s[i + 1:j]
+            if j < n and s[j] == "}":
+                j += 1
+            if num_str and last_unit is not None:
+                count = int(num_str)
+                base = len(out) - len(last_unit)
+                if count <= 0:
+                    del out[base:]
+                    last_unit = None
+                else:
+                    for _ in range(count - 1):
+                        if len(out) >= cap:
+                            break
+                        out.extend(last_unit)
+                    if last_unit:
+                        prev = last_unit[-1]
+            i = j
+        elif ch.isdigit():
+            # 舊版裸數字：重複前一電平（向後相容）
+            j = i
+            while j < n and s[j].isdigit():
+                j += 1
+            repeat = int(s[i:j])
+            for _ in range(repeat):
+                if len(out) >= cap:
+                    break
+                out.append(prev)
+            last_unit = [prev] * repeat if repeat > 0 else None
+            i = j
+        else:
+            i += 1
+    return out, i, prev
+
+
 def expand_wave_pattern(pattern: str, length: int) -> list[int]:
-    """將 WaveDrom wave 字串展開為 length 個 0/1。支援 0/1/.| 與重複數字。"""
+    """將 wave 字串展開為 length 個 0/1。
+
+    支援 0/1/./|、量詞 {n} 與群組 (...)（regex 風格），例如 0{29}1、(10){3}。
+    不足以 length 時補最後電平、超過則截斷。
+    """
     if length <= 0:
         return []
     mode = pattern.strip()
-    if not mode:
-        return [0] * length
-
-    if mode in ("constant_0", "0"):
+    if mode in ("", "constant_0", "0"):
         return [0] * length
     if mode in ("constant_1", "1"):
         return [1] * length
 
-    out: list[int] = []
-    prev = 0
-    i = 0
-    while len(out) < length and i < len(mode):
-        ch = mode[i]
-        if ch in "01":
-            prev = int(ch)
-            out.append(prev)
-            i += 1
-        elif ch == ".":
-            out.append(prev)
-            i += 1
-        elif ch == "|":
-            out.append(prev)
-            i += 1
-        elif ch.isdigit():
-            j = i
-            while j < len(mode) and mode[j].isdigit():
-                j += 1
-            repeat = int(mode[i:j])
-            fill = prev if ch == "." else prev
-            if i > 0 and mode[i - 1] in "01":
-                fill = int(mode[i - 1])
-            for _ in range(repeat):
-                if len(out) >= length:
-                    break
-                out.append(fill)
-            i = j
-        else:
-            i += 1
-    while len(out) < length:
-        out.append(prev)
-    return out[:length]
+    bits, _, _ = _expand_wave_tokens(mode, 0, 0, length)
+    if not bits:
+        return [0] * length
+    if len(bits) < length:
+        bits = bits + [bits[-1]] * (length - len(bits))
+    return bits[:length]
 
 
 def _get_inv_use(
@@ -304,13 +353,7 @@ def _input_permit_hi_c(spec: InputWaveSpec, inst_hi: int) -> int:
     return 0
 
 
-def _input_gpio_from_spec(
-    spec: InputWaveSpec,
-    inst_hi: int,
-    inst_lo: int,
-    fsm: _PermitGpioFsm,
-) -> int:
-    """Input GPIO：depends/custom 皆為 permit 條件，成立後下一 step 翻轉。"""
+def _input_enable_flags(spec: InputWaveSpec) -> tuple[bool, bool]:
     enable_hi = (
         (spec.hi_mode == "depends" and bool(spec.hi_groups))
         or spec.hi_mode == "custom"
@@ -319,20 +362,40 @@ def _input_gpio_from_spec(
         (spec.lo_mode == "depends" and bool(spec.lo_groups))
         or spec.lo_mode == "custom"
     )
+    return enable_hi, enable_lo
 
-    if enable_hi or enable_lo:
-        hi_c = _input_permit_hi_c(spec, inst_hi)
-        lo_c = (1 if inst_lo else 0) if enable_lo else 0
-        fsm.tick(hi_c, lo_c, rise_on_hi=enable_hi, fall_on_lo=enable_lo)
 
+def _input_apply_armed(spec: InputWaveSpec, fsm: _PermitGpioFsm) -> int:
+    """Phase A：套用上一拍 arm 的邊，回傳當拍 GPIO（不評估條件，順序無關）。"""
+    enable_hi, enable_lo = _input_enable_flags(spec)
     if spec.hi_mode == "constant_0":
         return 0
     if spec.hi_mode == "constant_1":
-        if enable_lo and fsm.gpio == 0:
-            return 0
+        if enable_lo:
+            fsm.apply_armed(rise_on_hi=False, fall_on_lo=True)
+            return fsm.gpio
         return 1
-
+    if enable_hi or enable_lo:
+        fsm.apply_armed(rise_on_hi=enable_hi, fall_on_lo=enable_lo)
     return fsm.gpio
+
+
+def _input_rearm(
+    spec: InputWaveSpec, inst_hi: int, inst_lo: int, fsm: _PermitGpioFsm,
+) -> None:
+    """Phase B：依當拍條件重新 arm（下一拍才翻轉）。"""
+    enable_hi, enable_lo = _input_enable_flags(spec)
+    if spec.hi_mode == "constant_0":
+        return
+    if spec.hi_mode == "constant_1":
+        if enable_lo:
+            lo_c = 1 if inst_lo else 0
+            fsm.rearm(1, lo_c, rise_on_hi=False, fall_on_lo=True)
+        return
+    if enable_hi or enable_lo:
+        hi_c = _input_permit_hi_c(spec, inst_hi)
+        lo_c = (1 if inst_lo else 0) if enable_lo else 0
+        fsm.rearm(hi_c, lo_c, rise_on_hi=enable_hi, fall_on_lo=enable_lo)
 
 
 def _eval_dep(
@@ -385,6 +448,8 @@ def _eval_groups(
 
     get_inv = {"hi": rail.get_hi_inv, "lo": rail.get_lo_inv, "force": rail.get_force_inv}[kind]
     get_use = {"hi": rail.get_hi_use, "lo": rail.get_lo_use, "force": rail.get_force_use}[kind]
+    get_group_inv = {"hi": rail.get_hi_group_inv, "lo": rail.get_lo_group_inv,
+                     "force": rail.get_force_group_inv}[kind]
 
     group_results = []
     for gi, group in enumerate(groups):
@@ -392,24 +457,17 @@ def _eval_groups(
         for ii, d in enumerate(group):
             use = get_use(gi, ii, d)
             inv = get_inv(gi, ii, d)
-            if use == "self" and name_to_rail.get(d) and name_to_rail[d].seq_type == "output":
-                # Align with c_generator: self on output → .hi/.lo.condition
-                sig = _internal_sig(d)
-                if kind == "hi":
-                    v = out_hi.get(sig, 0)
-                elif kind == "lo":
-                    v = out_lo.get(sig, 0)
-                else:
-                    v = out_val.get(sig, 0)
-                if inv:
-                    v = 1 - v
-            else:
-                v = _eval_dep(
-                    d, name_to_rail, raw, out_hi, out_lo, out_val,
-                    inv, use,
-                )
+            # self on output → 該 rail 實際輸出準位（out_val），對齊 Verilog/C；
+            # use=hi/lo/force 才走條件欄位。由 _eval_dep 統一處理。
+            v = _eval_dep(
+                d, name_to_rail, raw, out_hi, out_lo, out_val,
+                inv, use,
+            )
             terms.append(v)
-        group_results.append(1 if all(terms) else 0)
+        gr = 1 if all(terms) else 0
+        if get_group_inv(gi):
+            gr = 1 - gr
+        group_results.append(gr)
     return 1 if any(group_results) else 0
 
 
@@ -441,22 +499,30 @@ class _PermitGpioFsm:
         self._armed_hi = 0
         self._armed_lo = 0
 
-    def tick(
+    def apply_armed(
+        self,
+        *,
+        rise_on_hi: bool = True,
+        fall_on_lo: bool = True,
+    ) -> int:
+        """套用上一拍 arm 的邊（在 step 開頭、評估條件前）。與條件無關，順序無關。"""
+        if rise_on_hi and self.gpio == 0 and self._armed_hi:
+            self.gpio = 1
+        elif fall_on_lo and self.gpio == 1 and self._armed_lo:
+            self.gpio = 0
+        return self.gpio
+
+    def rearm(
         self,
         hi_c: int,
         lo_c: int,
         *,
         rise_on_hi: bool = True,
         fall_on_lo: bool = True,
-    ) -> int:
+    ) -> None:
+        """依當拍條件重新 arm（下一拍才會套用）。"""
         hi_c = 1 if hi_c else 0
         lo_c = 1 if lo_c else 0
-
-        if rise_on_hi and self.gpio == 0 and self._armed_hi:
-            self.gpio = 1
-        elif fall_on_lo and self.gpio == 1 and self._armed_lo:
-            self.gpio = 0
-
         if self.gpio:
             self.hi_permit = 0
             if not (hi_c and lo_c):
@@ -470,6 +536,16 @@ class _PermitGpioFsm:
             self._armed_hi = 1 if (rise_on_hi and self.hi_permit and hi_c) else 0
             self._armed_lo = 0
 
+    def tick(
+        self,
+        hi_c: int,
+        lo_c: int,
+        *,
+        rise_on_hi: bool = True,
+        fall_on_lo: bool = True,
+    ) -> int:
+        self.apply_armed(rise_on_hi=rise_on_hi, fall_on_lo=fall_on_lo)
+        self.rearm(hi_c, lo_c, rise_on_hi=rise_on_hi, fall_on_lo=fall_on_lo)
         return self.gpio
 
 
@@ -479,138 +555,47 @@ class _OutputFsm:
     def __init__(self, rail: PowerRail):
         self._rail = rail
         self._fsm = _PermitGpioFsm(1 if rail.init else 0)
+        self._lo_ticks = 0
 
     @property
     def output(self) -> int:
         return self._fsm.gpio
 
-    def tick(self, hi_cond: int, lo_cond: int, force_cond: int) -> int:
+    def _reset_pending(self) -> None:
+        self._lo_ticks = 0
+        self._fsm._armed_hi = 0
+        self._fsm._armed_lo = 0
+
+    def _pulse_active(self, pulse_name: str, active_pulses: set[str]) -> bool:
+        return (pulse_name or "iPulse_1us") in active_pulses
+
+    def apply_step(self) -> int:
+        """Pass A：套用上一拍 arm 的邊，回傳當拍 GPIO。與條件無關 → 順序無關。"""
+        self._fsm.apply_armed()
+        return self._fsm.gpio
+
+    def commit(
+        self,
+        hi_cond: int,
+        lo_cond: int,
+        force_cond: int,
+    ) -> int:
+        """Pass B：依當拍（已套用邊的）準位評估條件，force 即時覆寫、否則 arm 下一拍。
+
+        rise/fall 對稱：條件成立後下一 T 轉態，不模擬 cycle_hi/cycle_lo（邏輯預覽，非 RTL）。
+        """
         if force_cond:
             self._fsm.hi_permit = 0
             self._fsm.lo_permit = 0
-            self._fsm._armed_hi = 0
-            self._fsm._armed_lo = 0
+            self._reset_pending()
             self._fsm.gpio = 1 if self._rail.force_val else 0
             return self._fsm.gpio
-        self._fsm.tick(hi_cond, lo_cond)
+
+        hi_c = 1 if hi_cond else 0
+        lo_c = 1 if lo_cond else 0
+        self._lo_ticks = 0
+        self._fsm.rearm(hi_c, lo_c)
         return self._fsm.gpio
-
-
-def _input_spec_refs_output(
-    spec: InputWaveSpec, name_to_rail: dict[str, PowerRail],
-) -> bool:
-    for groups in (spec.hi_groups, spec.lo_groups):
-        for group in groups or []:
-            for dep in group:
-                r = name_to_rail.get(dep)
-                if r and r.seq_type == "output":
-                    return True
-    return False
-
-
-def _input_spec_refs_output_name(
-    spec: InputWaveSpec, output_name: str,
-) -> bool:
-    for groups in (spec.hi_groups, spec.lo_groups):
-        for group in groups or []:
-            if output_name in group:
-                return True
-    return False
-
-
-def _inputs_depending_on_signal(
-    signal_name: str,
-    inputs: list[PowerRail],
-    input_specs: dict[str, InputWaveSpec],
-    instant_hi_modes: tuple[str, ...],
-) -> list[PowerRail]:
-    """Inputs whose hi/lo groups list signal_name as a term."""
-    out: list[PowerRail] = []
-    for r in inputs:
-        spec = input_specs[r.name]
-        if spec.hi_mode in instant_hi_modes:
-            continue
-        for groups in (spec.hi_groups, spec.lo_groups):
-            for group in groups or []:
-                if signal_name in group:
-                    out.append(r)
-                    break
-            else:
-                continue
-            break
-    return out
-
-
-def _input_dep_input_names(
-    spec: InputWaveSpec, name_to_rail: dict[str, PowerRail],
-) -> set[str]:
-    """Input-type signal names referenced in hi/lo groups."""
-    names: set[str] = set()
-    for groups in (spec.hi_groups, spec.lo_groups):
-        for group in groups or []:
-            for dep in group:
-                r = name_to_rail.get(dep)
-                if r and r.seq_type == "input":
-                    names.add(dep)
-    return names
-
-
-def _input_only_cascade_roots(
-    inputs: list[PowerRail],
-    input_specs: dict[str, InputWaveSpec],
-    name_to_rail: dict[str, PowerRail],
-    instant_hi_modes: tuple[str, ...],
-) -> list[PowerRail]:
-    """Pre-output input updates: roots of input→input chains (one cascade per step)."""
-    candidates: list[PowerRail] = []
-    for r in inputs:
-        spec = input_specs[r.name]
-        if spec.hi_mode in instant_hi_modes:
-            continue
-        if _input_spec_refs_output(spec, name_to_rail):
-            continue
-        candidates.append(r)
-    candidate_names = {r.name for r in candidates}
-    roots: list[PowerRail] = []
-    for r in candidates:
-        ups = _input_dep_input_names(input_specs[r.name], name_to_rail)
-        ups.discard(r.name)
-        if ups & candidate_names:
-            continue
-        if any(
-            _input_spec_refs_output(input_specs[d], name_to_rail)
-            for d in ups
-            if d in input_specs
-        ):
-            continue
-        roots.append(r)
-    return roots
-
-
-def _inputs_ref_output_preupdate_roots(
-    inputs: list[PowerRail],
-    input_specs: dict[str, InputWaveSpec],
-    name_to_rail: dict[str, PowerRail],
-    instant_hi_modes: tuple[str, ...],
-) -> list[PowerRail]:
-    """Inputs whose Cond 引用 output GPIO；在 output 評估前先更新（用 out_val_prev）。"""
-    candidates: list[PowerRail] = []
-    for r in inputs:
-        spec = input_specs[r.name]
-        if spec.hi_mode in instant_hi_modes:
-            continue
-        if not _input_spec_refs_output(spec, name_to_rail):
-            continue
-        candidates.append(r)
-    candidate_names = {r.name for r in candidates}
-    roots: list[PowerRail] = []
-    for r in candidates:
-        ups = _input_dep_input_names(input_specs[r.name], name_to_rail)
-        ups.discard(r.name)
-        if ups & candidate_names:
-            continue
-        roots.append(r)
-    return roots
 
 
 def _output_hi_predecessors(
@@ -702,8 +687,6 @@ def simulate(config: PowerSeqConfig, scenario: WaveDromScenario) -> SimResult:
             input_lo_waves[r.name] = [0] * steps
 
     raw_inputs: dict[str, list[int]] = {r.name: [] for r in inputs}
-    input_prev_hi: dict[str, int] = {r.name: 0 for r in inputs}
-    input_prev_lo: dict[str, int] = {r.name: 0 for r in inputs}
     input_fsms: dict[str, _PermitGpioFsm] = {}
     for r in inputs:
         spec = input_specs[r.name]
@@ -732,114 +715,57 @@ def simulate(config: PowerSeqConfig, scenario: WaveDromScenario) -> SimResult:
         }
         hi_t: dict[str, int] = {}
         lo_t: dict[str, int] = {}
-        updated_inputs_this_step: set[str] = set()
-        touched_inputs_this_step: set[str] = set()
 
-        def _update_input_gpio(rail: PowerRail) -> None:
-            spec = input_specs[rail.name]
-            inst_hi, inst_lo = _input_inst_hi_lo(
-                spec, t, input_hi_waves[rail.name], input_lo_waves[rail.name],
-                name_to_rail, raw_t, hi_t, lo_t, out_val_prev,
-            )
-            raw_t[rail.name] = _input_gpio_from_spec(
-                spec, inst_hi, inst_lo, input_fsms[rail.name],
-            )
-            input_prev_hi[rail.name] = inst_hi
-            input_prev_lo[rail.name] = inst_lo
-
-        def _update_input_gpio_cascade(
-            rail: PowerRail,
-            *,
-            track_updated: bool = True,
-            mark_touched: bool = True,
-            cascade_mark_touched: bool | None = None,
-        ) -> None:
-            """Update input GPIO and refresh inputs that depend on it (e.g. SLPS5→SLPS4)."""
-            if mark_touched and rail.name in touched_inputs_this_step:
-                return
-            if track_updated and rail.name in updated_inputs_this_step:
-                return
-            _update_input_gpio(rail)
-            if mark_touched:
-                touched_inputs_this_step.add(rail.name)
-            if track_updated:
-                updated_inputs_this_step.add(rail.name)
-            child_mark = mark_touched if cascade_mark_touched is None else cascade_mark_touched
-            queue = [rail.name]
-            visited = {rail.name}
-            while queue:
-                src = queue.pop(0)
-                for down in _inputs_depending_on_signal(
-                    src, inputs, input_specs, _instant_hi_modes,
-                ):
-                    if down.name in visited:
-                        continue
-                    if child_mark and down.name in touched_inputs_this_step:
-                        continue
-                    if track_updated and down.name in updated_inputs_this_step:
-                        continue
-                    visited.add(down.name)
-                    _update_input_gpio_cascade(
-                        down,
-                        track_updated=track_updated,
-                        mark_touched=child_mark,
-                    )
-                    queue.append(down.name)
-
+        # Phase A：套用上一拍 arm 的邊，更新所有 input 的當拍 GPIO。
+        # 僅依各自上一拍的 arm，與條件無關 → 順序無關。
         for rail in inputs:
-            if input_specs[rail.name].hi_mode in _instant_hi_modes:
-                _update_input_gpio_cascade(rail)
-        for rail in _inputs_ref_output_preupdate_roots(
-            inputs, input_specs, name_to_rail, _instant_hi_modes,
-        ):
-            _update_input_gpio_cascade(
-                rail,
-                track_updated=False,
-                mark_touched=False,
-                cascade_mark_touched=True,
+            raw_t[rail.name] = _input_apply_armed(
+                input_specs[rail.name], input_fsms[rail.name],
             )
-        for rail in _input_only_cascade_roots(
-            inputs, input_specs, name_to_rail, _instant_hi_modes,
-        ):
-            if rail.name in touched_inputs_this_step:
-                continue
-            _update_input_gpio_cascade(rail)
 
+        # Outputs（兩段式，與 input 的 Phase A/B 同構）：
+        # Pass A：先套用所有 output 上一拍 arm 的邊，得到當拍準位 cur_val（與條件無關 → 順序無關）。
+        #         如此一來，即使是互為迴路的 self 依賴，Pass B 也讀得到來源的「當拍」準位，
+        #         不會慢 1 步（消除拓樸序造成的回授 eval lag）。
         output_order = _outputs_topo_order(outputs, name_to_rail, input_specs)
+        cur_val: dict[str, int] = dict(out_val_prev)
+        for rail in outputs:
+            sig = _internal_sig(rail.name)
+            cur_val[sig] = fsms[sig].apply_step()
+
+        # Pass B：依拓樸序評估條件（self 讀 cur_val 當拍準位、hi/lo 條件鏈讀 hi_t/lo_t），再 commit。
         force_t: dict[str, int] = {}
         for rail in output_order:
             sig = _internal_sig(rail.name)
             hi_t[sig] = _eval_groups(
                 rail.get_hi_groups(), rail, "hi", name_to_rail,
-                raw_t, hi_t, lo_t, out_val_prev,
+                raw_t, hi_t, lo_t, cur_val,
             )
             lo_t[sig] = _eval_groups(
                 rail.get_lo_groups(), rail, "lo", name_to_rail,
-                raw_t, hi_t, lo_t, out_val_prev,
+                raw_t, hi_t, lo_t, cur_val,
             )
             force_t[sig] = _eval_groups(
                 rail.get_force_groups(), rail, "force", name_to_rail,
-                raw_t, hi_t, lo_t, out_val_prev,
+                raw_t, hi_t, lo_t, cur_val,
             )
             out_hi[sig].append(hi_t[sig])
             out_lo[sig].append(lo_t[sig])
-            prev_out = out_val_prev[sig]
-            v = fsms[sig].tick(hi_t[sig], lo_t[sig], force_t[sig])
+            v = fsms[sig].commit(hi_t[sig], lo_t[sig], force_t[sig])
+            cur_val[sig] = v
             out_val[sig].append(v)
             out_state[sig].append("high" if v else "low")
             out_val_prev[sig] = v
-            if v != prev_out:
-                for inp in inputs:
-                    spec = input_specs[inp.name]
-                    if spec.hi_mode in _instant_hi_modes:
-                        continue
-                    if _input_spec_refs_output_name(spec, rail.name):
-                        _update_input_gpio_cascade(
-                            inp,
-                            track_updated=True,
-                            mark_touched=False,
-                            cascade_mark_touched=True,
-                        )
+
+        # Phase B：所有 output 算完後，依當拍（input GPIO + output）重新 arm 每個 input。
+        # 此時 raw_t 已是當拍 input 值、out_val_prev 已含當拍 output 值 → 順序無關。
+        for rail in inputs:
+            spec = input_specs[rail.name]
+            inst_hi, inst_lo = _input_inst_hi_lo(
+                spec, t, input_hi_waves[rail.name], input_lo_waves[rail.name],
+                name_to_rail, raw_t, hi_t, lo_t, out_val_prev,
+            )
+            _input_rearm(spec, inst_hi, inst_lo, input_fsms[rail.name])
 
         for rail in inputs:
             raw_inputs[rail.name].append(raw_t[rail.name])
