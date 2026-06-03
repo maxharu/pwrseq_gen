@@ -414,6 +414,21 @@ def generate_drawio(config: PowerSeqConfig) -> str:
         label_y = _align10(conn_y - INPUT_LABEL_H // 2)
         positions_in[name] = (INPUT_COL_X, label_y)
 
+    # 去重疊：當多個 input 對齊同一個閘輸入端（例如一個 8-input AND 只有
+    # 兩個實體 pin，前/後半各自共用同一 y），標籤會疊在一起。依偏好 y 由上而下
+    # 貪婪錯開，確保同欄標籤間至少留 INPUT_LABEL_GAP；邊以 cell id 連接，
+    # 標籤略微離開 pin 高度只會讓走線多一個轉角，不影響連線正確性（規則五允許）。
+    INPUT_LABEL_GAP = 10
+    _step = INPUT_LABEL_H + INPUT_LABEL_GAP
+    _ordered = sorted(all_input_names, key=lambda n: (positions_in[n][1], _input_order(n)))
+    _prev_bottom: int | None = None
+    for name in _ordered:
+        x, y = positions_in[name]
+        if _prev_bottom is not None and y < _prev_bottom:
+            y = _prev_bottom
+        positions_in[name] = (x, y)
+        _prev_bottom = y + _step
+
     # --- Channel Assignment (Phase B) ---
     # 為左側通道（input→gate）和右側通道（跨行 output→gate）分配不重疊的 x。
     # _ChannelAllocator 對 y 範圍不重疊的走線共用同 x，實際通道數遠少於走線數，
