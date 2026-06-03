@@ -306,9 +306,8 @@ def _build_condition_edges(
             if not groups or not any(groups):
                 continue
             prefer_lower = kind == "hi"
-            out_node = _place_edge_node(
-                out_lane, steps, out_step, alloc, at_index, prefer_lower,
-            )
+            # 延後配置 out_node：只有真的有因果 edge 時才放，避免孤兒節點標記。
+            out_node: str | None = None
 
             for gi, ii, dep in _unique_group_deps(groups):
                 for leaf in _leaf_deps_for_edge(
@@ -324,6 +323,15 @@ def _build_condition_edges(
                     dep_step = _dep_trigger_step(dep_bits, kind=kind)
                     if dep_step is None:
                         continue
+                    # 因果性：依賴的轉態若晚於 output 轉態，不可能是觸發原因，
+                    # 略過這條會「指回」較早轉態的誤導 edge（例：PCH_P0V85A_PG
+                    # 比 RSMRST_N 晚變 L，卻畫箭頭指回 RSMRST_N）。
+                    if dep_step > out_step:
+                        continue
+                    if out_node is None:
+                        out_node = _place_edge_node(
+                            out_lane, steps, out_step, alloc, at_index, prefer_lower,
+                        )
                     dep_node = _place_edge_node(
                         dep_lane, steps, dep_step, alloc, at_index, prefer_lower,
                     )

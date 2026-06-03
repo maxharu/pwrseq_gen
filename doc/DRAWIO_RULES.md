@@ -116,5 +116,4 @@
 - **實作**：`drawio_export.py`（`generate_drawio()`）。模組 docstring 與註解依本規則一～六標註，常數與版面計算與上表一致。
 - **Layout engine**：`layout_engine.py`（`layout_drawio()`）。匯出後可選用，對 XML 做自動版面調整：頂點與 waypoints 對齊格點（預設 40pt）、可選重疊頂點錯開；與本規則之格距一致，可擴充更多檢查或微調。
 - **需求對應**：`需求表.md` 第二節 F-DIO-01～F-DIO-08。
-- **範本圖**：可搭配 `assets/` 下之範本圖與說明使用，作為視覺對照。
 
