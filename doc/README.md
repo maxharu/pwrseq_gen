@@ -60,7 +60,7 @@ pwrseq_gen/
 │   ├── layout_engine.py     # Draw.io 版面引擎（格點對齊、交叉最小化）
 │   ├── json2drawio.py       # CLI 批次轉換工具
 │   ├── build.py             # PyInstaller 打包腳本
-│   └── PSEQCELL.v           # 單階 power sequence 控制元件
+│   └── reference/           # C/Verilog 參考元件（PSEQCELL.v、pwrcell.c/.h）
 ├── tests/                   # 自動化測試
 ├── output/                  # 程式產生的檔案
 ├── doc/                     # 文件
