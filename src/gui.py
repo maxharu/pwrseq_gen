@@ -144,14 +144,19 @@ class CondSectionFrame(ctk.CTkFrame):
                  initial_use_groups: list[list[str]],
                  initial_inv_flat: dict,
                  initial_use_flat: dict,
+                 initial_group_inv: Optional[list[bool]] = None,
+                 show_group_inv: bool = True,
                  on_change: Optional[Callable[[], None]] = None,
+                 get_self_name: Optional[Callable[[], str]] = None,
                  **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.kind = kind
         self.theme = COND_THEME[kind]
         self.get_dep_options = get_dep_options
+        self.get_self_name = get_self_name
         self.is_pseqcell_for = is_pseqcell_for
         self.on_change = on_change
+        self.show_group_inv = show_group_inv
 
         self.groups: list[list[str]] = [list(g) for g in (initial_groups or [[]])]
         if not self.groups:
@@ -162,8 +167,13 @@ class CondSectionFrame(ctk.CTkFrame):
         self._init_inv_flat = initial_inv_flat or {}
         self._init_use_flat = initial_use_flat or {}
 
+        # 每個 group 一個布林：反相整組 AND 結果 !(a & b)。與 self.groups 同序。
+        self.group_inv: list[bool] = [bool(x) for x in (initial_group_inv or [])]
+        self._sync_group_inv_len()
+
         self.inv_vars: dict[tuple[int, int], ctk.BooleanVar] = {}
         self.use_vars: dict[tuple[int, int], ctk.StringVar] = {}
+        self.group_inv_vars: dict[int, ctk.BooleanVar] = {}
         self.rows: dict[tuple[int, int], ctk.CTkFrame] = {}
         self.group_frames: list[dict] = []
 
@@ -178,6 +188,14 @@ class CondSectionFrame(ctk.CTkFrame):
                 self.on_change()
             except Exception:
                 pass
+
+    def _sync_group_inv_len(self):
+        """讓 self.group_inv 與 self.groups 等長（補 False / 截斷）。"""
+        n = len(self.groups)
+        if len(self.group_inv) < n:
+            self.group_inv = self.group_inv + [False] * (n - len(self.group_inv))
+        elif len(self.group_inv) > n:
+            self.group_inv = self.group_inv[:n]
 
     # ---- initial value lookup ----
     def _get_initial_inv(self, gi: int, ii: int, name: str) -> bool:
@@ -195,6 +213,19 @@ class CondSectionFrame(ctk.CTkFrame):
             except IndexError:
                 pass
         return str(self._init_use_flat.get(name, "self"))
+
+    def _allowed_use_labels(self, name: str) -> list[str]:
+        """可選的 use 標籤。自我參照時移除會造成同欄位組合迴圈的選項。
+
+        output 在自己的 Hi 段選自己時，不可再引用自己的 Hi Cond；
+        "Node"(self) 在 C 產生器也會對應到同 kind 的 condition，故一併移除。
+        """
+        labels = list(USE_LABELS.values())
+        self_name = self.get_self_name() if self.get_self_name else ""
+        if name and self_name and name == self_name:
+            forbidden = {USE_LABELS["self"], USE_LABELS.get(self.kind, "")}
+            labels = [lb for lb in labels if lb not in forbidden]
+        return labels
 
     def _build_ui(self):
         toolbar = ctk.CTkFrame(self, fg_color="transparent")
@@ -214,7 +245,9 @@ class CondSectionFrame(ctk.CTkFrame):
         self.group_frames.clear()
         self.inv_vars.clear()
         self.use_vars.clear()
+        self.group_inv_vars.clear()
         self.rows.clear()
+        self._sync_group_inv_len()
         for gi in range(len(self.groups)):
             self._add_group_ui(gi)
 
@@ -256,6 +289,15 @@ class CondSectionFrame(ctk.CTkFrame):
         ctk.CTkButton(header, text="Del Group", width=80,
                       command=lambda g=gi: self._remove_group(g)).pack(side="left")
 
+        if self.show_group_inv:
+            inv_init = bool(self.group_inv[gi]) if gi < len(self.group_inv) else False
+            gvar = ctk.BooleanVar(value=inv_init)
+            self.group_inv_vars[gi] = gvar
+            gvar.trace_add("write", lambda *_a, g=gi: self._on_group_inv_changed(g))
+            ctk.CTkCheckBox(
+                header, text="Inv Group", variable=gvar, width=80,
+            ).pack(side="right", padx=(S_SM, 0))
+
         list_frame = ctk.CTkFrame(frame, fg_color="transparent")
         # list_frame 在首列加入時才 pack
         self.group_frames.append({"frame": frame, "combo": combo, "list_frame": list_frame})
@@ -273,6 +315,9 @@ class CondSectionFrame(ctk.CTkFrame):
 
         inv_val = False if is_const else self._get_initial_inv(gi, ii, name)
         use_val = USE_LABELS.get(self._get_initial_use(gi, ii, name), "Node")
+        allowed_use = self._allowed_use_labels(name)
+        if use_val not in allowed_use:
+            use_val = allowed_use[0] if allowed_use else "Node"
         self.inv_vars[key] = ctk.BooleanVar(value=inv_val)
         self.use_vars[key] = ctk.StringVar(value=use_val)
         # trace 在初值設定後才註冊，避免初始化就觸發
@@ -301,14 +346,23 @@ class CondSectionFrame(ctk.CTkFrame):
         if not is_const:
             ctk.CTkCheckBox(row, text="Inv", variable=self.inv_vars[key], width=50).pack(side="left", padx=(0, S_SM))
         if can_use_hi_lo:
-            ctk.CTkComboBox(row, values=list(USE_LABELS.values()),
+            ctk.CTkComboBox(row, values=allowed_use,
                             variable=self.use_vars[key], width=100).pack(side="left", padx=(0, S_SM))
         captured = key
         ctk.CTkButton(row, text="Del", width=50,
                       command=lambda k=captured: self._remove_cond_by_key(k)).pack(side="left")
 
+    def _on_group_inv_changed(self, gi: int):
+        if 0 <= gi < len(self.group_inv):
+            try:
+                self.group_inv[gi] = bool(self.group_inv_vars[gi].get())
+            except Exception:
+                self.group_inv[gi] = False
+        self._fire_change()
+
     def add_group(self):
         self.groups.append([])
+        self.group_inv.append(False)
         self._rebuild_groups_ui()
         self._fire_change()
 
@@ -350,8 +404,11 @@ class CondSectionFrame(ctk.CTkFrame):
             return
         snap = self._snapshot_inv_use_all()
         del self.groups[gi]
+        if gi < len(self.group_inv):
+            del self.group_inv[gi]
         if not self.groups:
             self.groups = [[]]
+            self.group_inv = [False]
         self._rebuild_groups_ui()
         # 還原 snapshot：被移除 group 之後的 gi 要左移 1
         for (old_gi, old_ii), (inv, use) in snap.items():
@@ -665,6 +722,8 @@ class CondSectionFrame(ctk.CTkFrame):
         moved = new_order.pop(from_idx)
         new_order.insert(to_idx, moved)
         self.groups[:] = [self.groups[old] for old in new_order]
+        self._sync_group_inv_len()
+        self.group_inv[:] = [self.group_inv[old] for old in new_order]
         self._rebuild_groups_ui()
         for new_gi, old_gi in enumerate(new_order):
             for ii in range(len(self.groups[new_gi])):
@@ -715,6 +774,23 @@ class CondSectionFrame(ctk.CTkFrame):
                         val = "self"
                 row.append(val)
             result.append(row)
+        return result
+
+    def get_group_inv(self) -> list[bool]:
+        """每個非空 group 的整組反相旗標，與 get_groups() 同序。"""
+        result = []
+        for gi, g in enumerate(self.groups):
+            if not g:
+                continue
+            val = False
+            if gi in self.group_inv_vars:
+                try:
+                    val = bool(self.group_inv_vars[gi].get())
+                except Exception:
+                    val = False
+            elif gi < len(self.group_inv):
+                val = bool(self.group_inv[gi])
+            result.append(val)
         return result
 
     def get_inv_flat(self) -> dict[str, bool]:
@@ -784,7 +860,8 @@ class RailEditorFrame(ctk.CTkFrame):
 
     # ---- helpers ----
     def _dep_options(self) -> list[str]:
-        return [r.name for r in self.get_all_rails() if r.name != self.rail.name] + ["High", "Low"]
+        # 允許選自己：output 可參照自身的 Hi/Lo/Force condition（用 use 下拉指定欄位）
+        return [r.name for r in self.get_all_rails()] + ["High", "Low"]
 
     def _is_pseqcell_for(self, name: str) -> bool:
         if name in (DEP_HIGH, DEP_LOW):
@@ -916,6 +993,9 @@ class RailEditorFrame(ctk.CTkFrame):
             init_use_flat = {"hi": self.rail.depends_on_hi_use,
                              "lo": self.rail.depends_on_lo_use,
                              "force": self.rail.depends_on_force_use}[kind]
+            init_group_inv = {"hi": self.rail.depends_on_hi_group_inv,
+                              "lo": self.rail.depends_on_lo_group_inv,
+                              "force": self.rail.depends_on_force_group_inv}[kind]
             sec = CondSectionFrame(
                 tab, kind,
                 get_dep_options=self._dep_options,
@@ -925,7 +1005,9 @@ class RailEditorFrame(ctk.CTkFrame):
                 initial_use_groups=init_use,
                 initial_inv_flat=init_inv_flat,
                 initial_use_flat=init_use_flat,
+                initial_group_inv=init_group_inv,
                 on_change=self._fire_change,
+                get_self_name=lambda: self.rail.name,
             )
             sec.pack(fill="both", expand=True, padx=S_SM, pady=S_SM)
             self.cond_sections[kind] = sec
@@ -1051,6 +1133,9 @@ class RailEditorFrame(ctk.CTkFrame):
         hi_use_groups = hi.get_use_groups()
         lo_use_groups = lo.get_use_groups()
         force_use_groups = fo.get_use_groups()
+        hi_group_inv = hi.get_group_inv()
+        lo_group_inv = lo.get_group_inv()
+        force_group_inv = fo.get_group_inv()
 
         seq_type = self.var_type.get()
         if seq_type == "input":
@@ -1059,6 +1144,7 @@ class RailEditorFrame(ctk.CTkFrame):
             flat_hi, flat_lo, flat_force = [], [], []
             hi_inv_groups = lo_inv_groups = force_inv_groups = []
             hi_use_groups = lo_use_groups = force_use_groups = []
+            hi_group_inv = lo_group_inv = force_group_inv = []
 
         return PowerRail(
             name=rail_name,
@@ -1076,12 +1162,15 @@ class RailEditorFrame(ctk.CTkFrame):
             depends_on_lo_inv_groups=lo_inv_groups,
             depends_on_hi_use_groups=hi_use_groups,
             depends_on_lo_use_groups=lo_use_groups,
+            depends_on_hi_group_inv=hi_group_inv,
+            depends_on_lo_group_inv=lo_group_inv,
             depends_on_force=flat_force,
             depends_on_force_groups=groups_force,
             depends_on_force_inv=fo.get_inv_flat() if seq_type != "input" else {},
             depends_on_force_use=fo.get_use_flat() if seq_type != "input" else {},
             depends_on_force_inv_groups=force_inv_groups,
             depends_on_force_use_groups=force_use_groups,
+            depends_on_force_group_inv=force_group_inv,
             pulse_hi=self.var_pulse_hi.get() if seq_type != "input" else "iPulse_1us",
             pulse_lo=self.var_pulse_lo.get() if seq_type != "input" else "iPulse_1us",
             pulse_force=self.var_pulse_force.get() if seq_type != "input" else "iPulse_1us",

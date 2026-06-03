@@ -88,14 +88,32 @@ def _dep_label(dep: str, inv: bool, use: str) -> str:
 
 
 class _NodeAllocator:
-    def __init__(self) -> None:
-        self._chars = list(string.ascii_lowercase + string.ascii_uppercase)
-        self._i = 0
+    """配置 WaveDrom node 字元（全域唯一）。
 
-    def take(self) -> str:
-        ch = self._chars[self._i % len(self._chars)]
-        self._i += 1
-        return ch
+    WaveDrom 規則：小寫字母 node 會多畫一顆字母標記（看得見），
+    大寫字母是隱形錨點（箭頭照接、不畫字母）。依 `prefer_lower` 決定
+    優先池——L→H（hi）用小寫、H→L（lo）用大寫——各池用盡才互相溢出。
+    """
+
+    def __init__(self) -> None:
+        self._lower = list(string.ascii_lowercase)
+        self._upper = list(string.ascii_uppercase)
+        self._fallback = list(string.digits + "@#$%&?")
+        self._used: set[str] = set()
+
+    def take(self, prefer_lower: bool = True) -> str:
+        pools = (
+            (self._lower, self._upper)
+            if prefer_lower
+            else (self._upper, self._lower)
+        )
+        for pool in (*pools, self._fallback):
+            while pool:
+                ch = pool.pop(0)
+                if ch not in self._used:
+                    self._used.add(ch)
+                    return ch
+        return "z"
 
 
 def _step_index_in_wave(wave: str, step: int, steps: int) -> int:
@@ -242,6 +260,7 @@ def _place_edge_node(
     step: int,
     alloc: _NodeAllocator,
     at_index: dict[tuple[str, int], str],
+    prefer_lower: bool = True,
 ) -> str:
     """One node letter per (lane, wave index); reuse if already placed."""
     name = str(lane["name"])
@@ -249,7 +268,7 @@ def _place_edge_node(
     key = (name, idx)
     if key in at_index:
         return at_index[key]
-    letter = alloc.take()
+    letter = alloc.take(prefer_lower=prefer_lower)
     at_index[key] = letter
     _apply_node(lane, steps, step, letter)
     return letter
@@ -286,7 +305,10 @@ def _build_condition_edges(
             groups = rail.get_hi_groups() if kind == "hi" else rail.get_lo_groups()
             if not groups or not any(groups):
                 continue
-            out_node = _place_edge_node(out_lane, steps, out_step, alloc, at_index)
+            prefer_lower = kind == "hi"
+            out_node = _place_edge_node(
+                out_lane, steps, out_step, alloc, at_index, prefer_lower,
+            )
 
             for gi, ii, dep in _unique_group_deps(groups):
                 for leaf in _leaf_deps_for_edge(
@@ -303,7 +325,7 @@ def _build_condition_edges(
                     if dep_step is None:
                         continue
                     dep_node = _place_edge_node(
-                        dep_lane, steps, dep_step, alloc, at_index,
+                        dep_lane, steps, dep_step, alloc, at_index, prefer_lower,
                     )
                     edges.append(f"{dep_node}-~>{out_node}")
     return edges

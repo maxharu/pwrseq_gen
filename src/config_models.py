@@ -26,6 +26,8 @@ class PowerRail:
     depends_on_lo_use_groups: list[list[str]] = field(default_factory=list)
     depends_on_hi_groups: list[list[str]] = field(default_factory=list)  # F-DEP-08: group 內 &，group 間 |
     depends_on_lo_groups: list[list[str]] = field(default_factory=list)
+    depends_on_hi_group_inv: list[bool] = field(default_factory=list)  # 反相整組 AND 結果：!(a & b)
+    depends_on_lo_group_inv: list[bool] = field(default_factory=list)
     # iForce 依賴（與 Hi/Lo 同款結構）：空則 wForce=top iForce port
     depends_on_force: list[str] = field(default_factory=list)
     depends_on_force_inv: dict[str, bool] = field(default_factory=dict)
@@ -33,6 +35,7 @@ class PowerRail:
     depends_on_force_inv_groups: list[list[bool]] = field(default_factory=list)
     depends_on_force_use_groups: list[list[str]] = field(default_factory=list)
     depends_on_force_groups: list[list[str]] = field(default_factory=list)
+    depends_on_force_group_inv: list[bool] = field(default_factory=list)
     pulse_hi: str = "iPulse_1us"  # Hi 週期使用的 pulse（單一訊號）
     pulse_lo: str = "iPulse_1us"  # Lo 週期使用的 pulse
     pulse_force: str = "iPulse_1us"  # Force 使用的 pulse
@@ -122,6 +125,24 @@ class PowerRail:
                 pass
         return self.depends_on_force_use.get(name, "self")
 
+    def get_hi_group_inv(self, group_idx: int) -> bool:
+        try:
+            return bool(self.depends_on_hi_group_inv[group_idx])
+        except IndexError:
+            return False
+
+    def get_lo_group_inv(self, group_idx: int) -> bool:
+        try:
+            return bool(self.depends_on_lo_group_inv[group_idx])
+        except IndexError:
+            return False
+
+    def get_force_group_inv(self, group_idx: int) -> bool:
+        try:
+            return bool(self.depends_on_force_group_inv[group_idx])
+        except IndexError:
+            return False
+
     def get_depends_on_hi_flat(self) -> list[str]:
         """取得 Hi 依賴扁平列表（供驗證、拓撲用）"""
         groups = self.get_hi_groups()
@@ -197,12 +218,15 @@ class PowerSeqConfig:
                     "depends_on_lo_use_groups": r.depends_on_lo_use_groups if r.depends_on_lo_use_groups else None,
                     "depends_on_hi_groups": r.depends_on_hi_groups if r.depends_on_hi_groups else None,
                     "depends_on_lo_groups": r.depends_on_lo_groups if r.depends_on_lo_groups else None,
+                    "depends_on_hi_group_inv": r.depends_on_hi_group_inv if any(r.depends_on_hi_group_inv) else None,
+                    "depends_on_lo_group_inv": r.depends_on_lo_group_inv if any(r.depends_on_lo_group_inv) else None,
                     "depends_on_force": r.depends_on_force,
                     "depends_on_force_inv": r.depends_on_force_inv,
                     "depends_on_force_use": r.depends_on_force_use,
                     "depends_on_force_inv_groups": r.depends_on_force_inv_groups if r.depends_on_force_inv_groups else None,
                     "depends_on_force_use_groups": r.depends_on_force_use_groups if r.depends_on_force_use_groups else None,
                     "depends_on_force_groups": r.depends_on_force_groups if r.depends_on_force_groups else None,
+                    "depends_on_force_group_inv": r.depends_on_force_group_inv if any(r.depends_on_force_group_inv) else None,
                     "pulse_hi": r.pulse_hi,
                     "pulse_lo": r.pulse_lo,
                     "pulse_force": r.pulse_force,
@@ -261,12 +285,15 @@ class PowerSeqConfig:
                     depends_on_lo_use_groups=r.get("depends_on_lo_use_groups") or [],
                     depends_on_hi_groups=r.get("depends_on_hi_groups") or [],
                     depends_on_lo_groups=r.get("depends_on_lo_groups") or [],
+                    depends_on_hi_group_inv=r.get("depends_on_hi_group_inv") or [],
+                    depends_on_lo_group_inv=r.get("depends_on_lo_group_inv") or [],
                     depends_on_force=r.get("depends_on_force", []),
                     depends_on_force_inv=r.get("depends_on_force_inv", {}),
                     depends_on_force_use=r.get("depends_on_force_use", {}),
                     depends_on_force_inv_groups=r.get("depends_on_force_inv_groups") or [],
                     depends_on_force_use_groups=r.get("depends_on_force_use_groups") or [],
                     depends_on_force_groups=r.get("depends_on_force_groups") or [],
+                    depends_on_force_group_inv=r.get("depends_on_force_group_inv") or [],
                     pulse_hi=r.get("pulse_hi", "iPulse_1us"),
                     pulse_lo=r.get("pulse_lo", "iPulse_1us"),
                     pulse_force=r.get("pulse_force", "iPulse_1us"),

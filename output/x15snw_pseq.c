@@ -155,7 +155,7 @@ UINT32 IRQ = m_oemsys_getIrq();
 
     // Power cell handlers begin ////////////////////////////////////////////////////
     x15snw_pseq_var.pch_p0v85a_en.hi.condition    = (oemgpio_DI_Get(EKEY) && oemgpio_DI_Get(PRIM_VR_EN));
-    x15snw_pseq_var.pch_p0v85a_en.lo.condition    = (!x15snw_pseq_var.rsmrst_n.lo.condition);
+    x15snw_pseq_var.pch_p0v85a_en.lo.condition    = (!oemgpio_DI_Get(RSMRST_N));
     x15snw_pseq_var.pch_p0v85a_en.force.condition = 0;
 
     x15snw_pseq_var.pch_p1v25a_en.hi.condition    = (oemgpio_DI_Get(PCH_P0V85A_PG) && oemgpio_DI_Get(PVNNAON_PG));
@@ -171,7 +171,7 @@ UINT32 IRQ = m_oemsys_getIrq();
     x15snw_pseq_var.pch_p3v3a_en .force.condition = 0;
 
     x15snw_pseq_var.pvnnaon_en   .hi.condition    = (x15snw_pseq_var.pch_p0v85a_en.hi.condition);
-    x15snw_pseq_var.pvnnaon_en   .lo.condition    = (!x15snw_pseq_var.rsmrst_n.lo.condition);
+    x15snw_pseq_var.pvnnaon_en   .lo.condition    = (!oemgpio_DI_Get(RSMRST_N));
     x15snw_pseq_var.pvnnaon_en   .force.condition = 0;
 
     x15snw_pseq_var.pvccio_en    .hi.condition    = (x15snw_pseq_var.pch_p1v25a_en.hi.condition);
@@ -182,19 +182,19 @@ UINT32 IRQ = m_oemsys_getIrq();
     x15snw_pseq_var.pvcc1v8_en   .lo.condition    = (x15snw_pseq_var.pvccio_en.lo.condition && !oemgpio_DI_Get(PVCCIO_PG));
     x15snw_pseq_var.pvcc1v8_en   .force.condition = 0;
 
-    x15snw_pseq_var.rsmrst_n     .hi.condition    = (oemgpio_DI_Get(PRIM_VR_EN) && oemgpio_DI_Get(PCH_P0V85A_PG) && oemgpio_DI_Get(PVNNAON_PG) && oemgpio_DI_Get(PCH_P1V25A_PG) && oemgpio_DI_Get(PVCCIO_PG) && oemgpio_DI_Get(PCH_P1V8A_PG) && oemgpio_DI_Get(PVCC1V8_PG) && oemgpio_DI_Get(PCH_P3V3A_PG));
-    x15snw_pseq_var.rsmrst_n     .lo.condition    = 0;
+    x15snw_pseq_var.rsmrst_n     .hi.condition    = (x15snw_pseq_var.pch_p0v85a_en.hi.condition && oemgpio_DI_Get(PCH_P0V85A_PG) && oemgpio_DI_Get(PVNNAON_PG) && oemgpio_DI_Get(PCH_P1V25A_PG) && oemgpio_DI_Get(PVCCIO_PG) && oemgpio_DI_Get(PCH_P1V8A_PG) && oemgpio_DI_Get(PVCC1V8_PG) && oemgpio_DI_Get(PCH_P3V3A_PG));
+    x15snw_pseq_var.rsmrst_n     .lo.condition    = !(oemgpio_DI_Get(PRIM_VR_EN) && oemgpio_DI_Get(PCH_P0V85A_PG) && oemgpio_DI_Get(PVNNAON_PG) && oemgpio_DI_Get(PCH_P1V25A_PG) && oemgpio_DI_Get(PVCCIO_PG) && oemgpio_DI_Get(PCH_P1V8A_PG) && oemgpio_DI_Get(PVCC1V8_PG) && oemgpio_DI_Get(PCH_P3V3A_PG));
     x15snw_pseq_var.rsmrst_n     .force.condition = 0;
 
-    x15snw_pseq_var.psu_en       .hi.condition    = (x15snw_pseq_var.rsmrst_n.hi.condition && oemgpio_DI_Get(SLPS3_N));
+    x15snw_pseq_var.psu_en       .hi.condition    = (oemgpio_DI_Get(RSMRST_N) && oemgpio_DI_Get(SLPS3_N));
     x15snw_pseq_var.psu_en       .lo.condition    = (!oemgpio_DI_Get(SLPS3_N) && !oemgpio_DI_Get(IMVP_VR_PG));
     x15snw_pseq_var.psu_en       .force.condition = (x15snw_pseq_var.pvccdd2_en.force.condition);
 
-    x15snw_pseq_var.pvccdd2_en   .hi.condition    = (x15snw_pseq_var.rsmrst_n.hi.condition && oemgpio_DI_Get(SLPS4_N));
-    x15snw_pseq_var.pvccdd2_en   .lo.condition    = (!x15snw_pseq_var.pch_pwrok.lo.condition);
-    x15snw_pseq_var.pvccdd2_en   .force.condition = (x15snw_pseq_var.pch_pwrok.force.condition && !x15snw_pseq_var.imvp_vr_en.force.condition && !oemgpio_DI_Get(SLPS4_N));
+    x15snw_pseq_var.pvccdd2_en   .hi.condition    = (oemgpio_DI_Get(RSMRST_N) && oemgpio_DI_Get(SLPS4_N));
+    x15snw_pseq_var.pvccdd2_en   .lo.condition    = (!oemgpio_DI_Get(PCH_PWROK));
+    x15snw_pseq_var.pvccdd2_en   .force.condition = (x15snw_pseq_var.pch_pwrok.force.condition && !oemgpio_DI_Get(IMVP_VR_EN) && !oemgpio_DI_Get(SLPS4_N));
 
-    x15snw_pseq_var.imvp_vr_en   .hi.condition    = (x15snw_pseq_var.rsmrst_n.hi.condition && oemgpio_DI_Get(PVCCDD2_PG) && oemgpio_DI_Get(SLPS3_N) && oemgpio_DI_Get(PSU_PG));
+    x15snw_pseq_var.imvp_vr_en   .hi.condition    = (oemgpio_DI_Get(RSMRST_N) && oemgpio_DI_Get(PVCCDD2_PG) && oemgpio_DI_Get(SLPS3_N) && oemgpio_DI_Get(PSU_PG));
     x15snw_pseq_var.imvp_vr_en   .lo.condition    = (!oemgpio_DI_Get(SLPS3_N));
     x15snw_pseq_var.imvp_vr_en   .force.condition = 0;
 

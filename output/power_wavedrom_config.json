@@ -8,7 +8,8 @@
     },
     "PRIM_VR_EN": {
       "hi_mode": "depends",
-      "lo_mode": "constant_0",
+      "lo_mode": "custom",
+      "lo_wave": "0{30}1",
       "hi_groups": [
         [
           "EKEY"
@@ -27,7 +28,7 @@
     },
     "PCH_P0V85A_PG": {
       "hi_mode": "depends",
-      "lo_mode": "constant_0",
+      "lo_mode": "depends",
       "hi_groups": [
         [
           "PCH_P0V85A_EN"
@@ -42,11 +43,26 @@
         [
           "self"
         ]
+      ],
+      "lo_groups": [
+        [
+          "PCH_P0V85A_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
       ]
     },
     "PCH_P1V25A_PG": {
       "hi_mode": "depends",
-      "lo_mode": "constant_0",
+      "lo_mode": "depends",
       "hi_groups": [
         [
           "PCH_P1V25A_EN"
@@ -61,11 +77,26 @@
         [
           "self"
         ]
+      ],
+      "lo_groups": [
+        [
+          "PCH_P1V25A_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
       ]
     },
     "PCH_P1V8A_PG": {
       "hi_mode": "depends",
-      "lo_mode": "constant_0",
+      "lo_mode": "depends",
       "hi_groups": [
         [
           "PCH_P1V8A_EN"
@@ -80,11 +111,26 @@
         [
           "self"
         ]
+      ],
+      "lo_groups": [
+        [
+          "PCH_P1V8A_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
       ]
     },
     "PCH_P3V3A_PG": {
       "hi_mode": "depends",
-      "lo_mode": "constant_0",
+      "lo_mode": "depends",
       "hi_groups": [
         [
           "PCH_P3V3A_EN"
@@ -99,11 +145,26 @@
         [
           "self"
         ]
+      ],
+      "lo_groups": [
+        [
+          "PCH_P3V3A_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
       ]
     },
     "PVNNAON_PG": {
       "hi_mode": "depends",
-      "lo_mode": "constant_0",
+      "lo_mode": "depends",
       "hi_groups": [
         [
           "PVNNAON_EN"
@@ -118,11 +179,26 @@
         [
           "self"
         ]
+      ],
+      "lo_groups": [
+        [
+          "PVNNAON_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
       ]
     },
     "PVCCIO_PG": {
       "hi_mode": "depends",
-      "lo_mode": "constant_0",
+      "lo_mode": "depends",
       "hi_groups": [
         [
           "PVCCIO_EN"
@@ -137,11 +213,26 @@
         [
           "self"
         ]
+      ],
+      "lo_groups": [
+        [
+          "PVCCIO_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
       ]
     },
     "PVCC1V8_PG": {
       "hi_mode": "depends",
-      "lo_mode": "constant_0",
+      "lo_mode": "depends",
       "hi_groups": [
         [
           "PVCC1V8_EN"
@@ -153,6 +244,21 @@
         ]
       ],
       "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "PVCC1V8_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
         [
           "self"
         ]
@@ -178,19 +284,16 @@
       ],
       "lo_groups": [
         [
-          "PLTRST_N",
           "SLPS4_N"
         ]
       ],
       "lo_inv_groups": [
         [
-          true,
           true
         ]
       ],
       "lo_use_groups": [
         [
-          "self",
           "self"
         ]
       ]
@@ -215,19 +318,16 @@
       ],
       "lo_groups": [
         [
-          "PLTRST_N",
           "SLPS3_N"
         ]
       ],
       "lo_inv_groups": [
         [
-          true,
           true
         ]
       ],
       "lo_use_groups": [
         [
-          "self",
           "self"
         ]
       ]
@@ -268,7 +368,7 @@
     },
     "PSU_PG": {
       "hi_mode": "depends",
-      "lo_mode": "constant_0",
+      "lo_mode": "depends",
       "hi_groups": [
         [
           "PSU_EN"
@@ -283,11 +383,26 @@
         [
           "self"
         ]
+      ],
+      "lo_groups": [
+        [
+          "PSU_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
       ]
     },
     "PVCCDD2_PG": {
       "hi_mode": "depends",
-      "lo_mode": "constant_0",
+      "lo_mode": "depends",
       "hi_groups": [
         [
           "PVCCDD2_EN"
@@ -302,11 +417,26 @@
         [
           "self"
         ]
+      ],
+      "lo_groups": [
+        [
+          "PVCCDD2_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
       ]
     },
     "IMVP_VR_PG": {
       "hi_mode": "depends",
-      "lo_mode": "constant_0",
+      "lo_mode": "depends",
       "hi_groups": [
         [
           "IMVP_VR_EN"
@@ -321,12 +451,27 @@
         [
           "self"
         ]
+      ],
+      "lo_groups": [
+        [
+          "IMVP_VR_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
       ]
     },
     "PLTRST_N": {
       "hi_mode": "depends",
       "lo_mode": "custom",
-      "lo_wave": "000000000000000000000000001",
+      "lo_wave": "0{25}1",
       "hi_groups": [
         [
           "PCH_PWROK"

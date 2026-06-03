@@ -1,0 +1,43 @@
+---
+description: Wavedrom 時序模擬器的行為語意（轉態時序、self 依賴、與 C/Verilog 的對齊）
+globs: src/wavedrom_sim.py,src/wavedrom_export.py,src/c_generator.py,src/verilog_generator.py,tests/test_wavedrom_sim.py
+alwaysApply: false
+---
+
+# Wavedrom 模擬器行為
+
+Wavedrom 是**邏輯預覽（Logic sim, not RTL）**，呈現訊號之間的邏輯因果與串接順序，不模擬 RTL 的 cycle 級時序細節。修改 `wavedrom_sim.py` 時必須維持以下語意，並與 `c_generator.py` / `verilog_generator.py` 對齊。
+
+## 1. 轉態時序：rise/fall 對稱，皆為「條件成立後下一 T」
+
+- L→H（rise）與 H→L（fall）**都**在該方向條件成立後的**下一個 T** 轉態。
+- **不模擬 `cycle_hi` / `cycle_lo`**。這兩個是 RTL（PSEQCELL / pwrcell）的延遲參數，只用在 Verilog/C 產生，不進 Wavedrom。
+- 實作位置：`_OutputFsm.apply_step`（Pass A，套用上一拍 arm 的邊）+ `_OutputFsm.commit`（Pass B，評估條件後 `_PermitGpioFsm.rearm` 下一拍套用 arm），不可重新引入 cycle 計數。
+
+```python
+# ✅ fall 與 rise 對稱（下一 T），不數 cycle_lo
+fsm.apply_step()              # Pass A：先套邊
+fsm.commit(hi_c, lo_c, force) # Pass B：評估條件、arm 下一拍
+```
+
+## 2. self 依賴 output = 該 rail 的實際準位
+
+- `use="self"` 指**節點本身的實際輸出準位**（需求表 F-DEP），三邊一致：
+  - 模擬器：`out_val[sig]`（`_eval_dep`），inv 則 `1 - v`
+  - C：`oemgpio_DI_Get(MACRO)`
+  - Verilog：該 rail 的 wire `s`
+- `use="hi"/"lo"/"force"` 才參考該 rail 的 `.condition` 欄位（C）/ `s_hi`/`s_lo`（Verilog）。
+- 不要把 self-on-output 對應到 `.condition` 欄位（這是舊 bug，會略過該 rail 的延遲）。
+
+## 3. 兩段式評估消除回授迴路 eval lag
+
+- 每個 step 的 output 分兩段，與 input 的 Phase A/B 同構：
+  - **Pass A**：對所有 output 呼叫 `apply_step()`，先套用上一拍 arm 的邊，得到當拍準位 `cur_val`。此步與條件無關 → 順序無關。
+  - **Pass B**：依拓樸序評估條件（self 讀 `cur_val` 當拍準位、`hi/lo` 條件鏈讀當拍 `hi_t`/`lo_t`），再 `commit()`。
+- 因為 Pass A 已先把**所有** output 的當拍準位算好，互為迴路時（如 `RSMRST_N.hi` 依賴 `PCH_P0V85A_EN`，而 `PCH_P0V85A_EN.lo` 依賴 `RSMRST_N`），即使消費端在拓樸序上排在來源端之前，Pass B 也讀得到來源的**當拍**準位 → 不再慢 1 步。
+- 結果：來源**轉態**後，消費端在**下一 T**（+1）轉態，回授路徑與一般路徑一致。不要把這段改回「邊套邊評估」的單段 tick，否則 back-edge 會重新出現 +1 lag。
+- 唯一近似：被 `force` 即時覆寫的 rail，其 force 後準位只在 Pass B 依拓樸序更新；若被排在更前面的 back-edge 讀其準位，讀到的是 Pass A（force 前）值。force 極少作為 self 來源，可接受。
+
+## 驗證
+
+`tests/test_wavedrom_sim.py`：`test_output_lo_falls_next_step_ignoring_cycle_lo`（fall == lo_step+1，即使 cycle_lo=4）、`test_output_lo_self_dep_falls_next_step`（dst_fall == src_fall+1）、`test_cycle_hi_ignored_on_output`（rise 不模擬 cycle_hi）。`output/power.json` 實測：`RSMRST_N`@32→`PCH_P0V85A_EN`/`PVNNAON_EN`@33、`PCH_PWROK`@28→`PVCCDD2_EN`@29，皆為來源轉態後 +1T。

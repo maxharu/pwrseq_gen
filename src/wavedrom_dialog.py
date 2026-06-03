@@ -183,6 +183,7 @@ class InputCondEditorDialog(_ModalToplevelMixin, ctk.CTkToplevel):
             initial_use_groups=initial_use_groups,
             initial_inv_flat={},
             initial_use_flat={},
+            show_group_inv=False,
         )
         self._section.pack(fill="both", expand=True, padx=12, pady=8)
 
@@ -252,7 +253,8 @@ class WaveDromExportDialog(_ModalToplevelMixin, ctk.CTkToplevel):
             hdr,
             text="Input hi/lo is for WaveDrom simulation only (not rail depends_on_*). "
             "Export: binary 0/1 waves, compact layout (narrow skin). "
-            "Hi default: Signal cond.; Lo: Low (0). constant_1 = High in scenario JSON.",
+            "Hi default: Signal cond.; Lo: Low (0). constant_1 = High in scenario JSON. "
+            "Custom wave: 0/1/. \u8207\u91cf\u8a5e {n}\u3001\u7fa4\u7d44 ()\uff0c\u4f8b 0{29}1 = \u7b2c 30 step \u624d\u62c9 high\u3002",
             font=("", 11),
             text_color="gray",
             wraplength=760,
@@ -349,6 +351,7 @@ class WaveDromExportDialog(_ModalToplevelMixin, ctk.CTkToplevel):
         hi_wave = tk.StringVar(value=spec.hi_wave)
         hi_wave_entry = ctk.CTkEntry(
             hi_extra, textvariable=hi_wave, width=96, height=_CTRL_H,
+            placeholder_text="0{29}1",
         )
         hi_cond_btn = ctk.CTkButton(
             hi_extra, text=self._cond_btn_label(spec.hi_groups), width=96, height=_CTRL_H,
@@ -367,6 +370,7 @@ class WaveDromExportDialog(_ModalToplevelMixin, ctk.CTkToplevel):
         lo_wave = tk.StringVar(value=spec.lo_wave)
         lo_wave_entry = ctk.CTkEntry(
             lo_extra, textvariable=lo_wave, width=96, height=_CTRL_H,
+            placeholder_text="0{29}1",
         )
         lo_cond_btn = ctk.CTkButton(
             lo_extra, text=self._cond_btn_label(spec.lo_groups), width=96, height=_CTRL_H,
