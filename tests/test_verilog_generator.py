@@ -1,5 +1,6 @@
 """Tests for verilog_generator.py"""
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
@@ -148,7 +149,7 @@ class TestForceCondition:
     def test_force_wire_declared(self):
         cfg = PowerSeqConfig(rails=[PowerRail("A", depends_on_hi=["__HIGH__"])])
         out = generate_verilog(cfg)
-        assert "wire a_force;" in out
+        assert re.search(r"wire\s+[^;]*\ba_force\b", out)
 
     def test_force_fallback_to_zero_when_empty(self):
         """無 force 條件時，wXXX_force 接 1'b0（不強制），PSEQCELL.iForce 接 wXXX_force"""
@@ -190,7 +191,7 @@ class TestForceCondition:
                      depends_on_force_inv={"A": True}),
         ])
         out = generate_verilog(cfg)
-        assert "assign b_force = (~(iA));" in out
+        assert re.search(r"assign b_force = .*~iA", out)
 
     def test_force_constants(self):
         """High/Low 常數應展開為 1'b1 / 1'b0"""

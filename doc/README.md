@@ -7,7 +7,7 @@
 - **GUI 配置**：使用 CustomTkinter 建立依賴關係與參數，Accordion 折疊式編輯器
 - **驗證**：循環依賴、名稱重複、依賴存在性檢查
 - **Verilog 產生**：自動產生 PSEQCELL / DEB 實例與 iHi/iLo 連接
-- **Draw.io 匯出**：產生依賴關係圖 XML，可於 diagrams.net 開啟檢視；支援佈局優化（拓撲排序、走線通道分配、交叉最小化）
+- **Draw.io 匯出**：產生依賴關係圖 XML（匯出前可設定走線重疊選項）；input 自右側水平出發、NOT 右 80pt／下 40pt；拓撲排序、通道分配、正交避障路由。詳見 [doc/DRAWIO_RULES.md](doc/DRAWIO_RULES.md)
 - **CLI 批次轉換**：`json2drawio.bat` 不開 GUI 即可將 JSON 轉 Draw.io XML
 - **匯出格式**：JSON 設定檔、Verilog 模組、Draw.io XML
 
@@ -43,7 +43,7 @@ python src/main.py
 3. **依賴**：在 Hi Cond / Lo Cond 中加入依賴項，支援分組（組內 AND、組間 OR）、反相、Hi Cond / Lo Cond use mode
 4. **儲存/載入**：以 JSON 格式儲存或載入設定
 5. **產生 Verilog**：驗證通過後產生 Verilog 檔
-6. **匯出 Draw.io**：產生依賴關係圖 XML，以 diagrams.net 開啟
+6. **匯出 Draw.io**：在對話框設定走線重疊選項後產生 XML，以 diagrams.net 開啟（規則見 `doc/DRAWIO_RULES.md`）
 7. **釘選**：點擊右上角 📌 按鈕將視窗釘選至螢幕最上層
 
 ## 專案結構
@@ -57,7 +57,9 @@ pwrseq_gen/
 │   ├── validator.py         # 驗證邏輯
 │   ├── verilog_generator.py # Verilog 產生器
 │   ├── drawio_export.py     # Draw.io XML 匯出
-│   ├── layout_engine.py     # Draw.io 版面引擎（格點對齊、交叉最小化）
+│   ├── drawio_export_options.py  # 匯出走線重疊選項
+│   ├── drawio_dialog.py     # Export Draw.io 對話框
+│   ├── layout_engine.py     # 正交路由、水平段補齊、交叉最小化
 │   ├── json2drawio.py       # CLI 批次轉換工具
 │   ├── build.py             # PyInstaller 打包腳本
 │   └── reference/           # C/Verilog 參考元件（PSEQCELL.v、pwrcell.c/.h）

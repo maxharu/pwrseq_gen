@@ -2065,7 +2065,7 @@ class PowerSeqGUI(ctk.CTk):
 
         self._build_ui()
         self._bind_shortcuts()
-        self.bind("<FocusIn>", self._raise_wavedrom_dialog_if_open, add="+")
+        self.bind("<FocusIn>", self._raise_modal_dialogs_if_open, add="+")
         self._refresh_all()
 
     # ---- UI ----
@@ -2882,7 +2882,7 @@ class PowerSeqGUI(ctk.CTk):
     def _on_wavedrom_dialog_closed(self) -> None:
         self._wavedrom_dialog = None
 
-    def _raise_wavedrom_dialog_if_open(self, event=None) -> None:
+    def _raise_modal_dialogs_if_open(self, event=None) -> None:
         if event is not None and event.widget != self:
             return
         dlg = self._wavedrom_dialog
@@ -2895,6 +2895,9 @@ class PowerSeqGUI(ctk.CTk):
             dlg.bring_to_front()
         except tk.TclError:
             self._wavedrom_dialog = None
+
+    def _raise_wavedrom_dialog_if_open(self, event=None) -> None:
+        self._raise_modal_dialogs_if_open(event)
 
     def _export_wavedrom(self):
         cfg = self._collect_config()
@@ -2951,12 +2954,13 @@ class PowerSeqGUI(ctk.CTk):
             return
         path = filedialog.asksaveasfilename(
             defaultextension=".xml",
-            filetypes=[("XML", "*.xml"), ("All", "*")],
+            filetypes=[("Draw.io XML", "*.xml"), ("All", "*.*")],
         )
         if not path:
             return
         try:
-            xml = generate_drawio(cfg)
+            cfg2 = self._collect_config()
+            xml = generate_drawio(cfg2)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(xml)
             self._status_msg(f"Exported: {os.path.basename(path)}", level="success")
