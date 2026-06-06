@@ -211,10 +211,9 @@ Pass 1 僅處理 **source 為本列 H/L_Deb 佔位符** 的邊（`exitX=0` in st
 
 #### `_rewire_pass1_logic_edge` 進 OR／AND 要用真正入口錨點 Y ★
 
-改接後 `wire_via_channel` 收尾的 entry Y **必須用該邊 `entryY` 算出的入口錨點**，不可用閘中心（`id_to_y_center`）。OR／AND 的輸入 pin 在 `entryY=0.25/0.75`（離中心 ±10pt）；若用中心收尾，freeze 會為了補回真正錨點而多插一個折角，正向邊就從 3 段變成 5 段（曾誤判成回授）。
+改接後 `wire_via_channel` 收尾的 entry Y **必須用該邊 `entryY` 算出的入口錨點**（`numInputs=1` 時 `entryY=0.5`，與閘中心重合）。實作：caller 解析 `entry_ay=_style_float(sty,"entryY",0.5)`；`_entry_y = round(_ty + (entry_ay-0.5)*GATE_H)`（AND／OR 皆同）。
 
-- 實作：caller 解析 `entry_ay=_style_float(sty,"entryY",0.5)` 傳入；`_entry_y = round(_ty + (entry_ay-0.5)*OR_GATE_H)`（AND 同理用 `AND_GATE_H`）。
-- 症狀：AND／OR→OR 正向（含 `use=hi/lo` 跨列）出現 `(stub,center)(near_or,center)(near_or,entry)` 的 10pt 小折角。
+- 入邊 emit：`_gate_entry_y` 一律回傳 `0.5`（多扇入共用單一輸入點，見 `AND1.xml` 等）。
 
 ---
 

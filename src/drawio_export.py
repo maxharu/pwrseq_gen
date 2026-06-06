@@ -13,6 +13,7 @@ import random
 import re
 import string
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from dataclasses import dataclass
 from xml.dom import minidom
 
@@ -92,6 +93,8 @@ EDGE_JUMP_STYLE = "arc"
 EDGE_JUMP_SIZE = 6
 AND_GATE_W = 80
 AND_GATE_H = 40
+# logic_gate numInputs=1（AND1.xml 等）：唯一輸入錨點在左側中央
+_GATE_ENTRY_AY = 0.5
 OR_GATE_W = 80
 OR_GATE_H = 40
 NOT_GATE_W = 40
@@ -105,8 +108,26 @@ INPUT_NOT_LEFT = GRID - 20
 INPUT_NOT_ABOVE_CELL = GRID
 INPUT_NOT_LABEL_TO_NOT_GAP = INPUT_LABEL_H  # label 底邊至 NOT 頂 20pt（INPUT_NOT.xml）
 NOT_STACK_GAP = INPUT_LABEL_H  # 下一列放在 NOT 下方時的間距
-# AND/OR 整組反相：內建 negating bubble（reference/NAND.xml、NOR.xml），不再外掛 inverter_2
-_GATE_NEG_SUFFIX = "negating=1;negSize=0.15;"
+# AND/OR 整組反相：內建 negating bubble（reference/NAND1.xml、NOR1.xml），不再外掛 inverter_2
+_REFERENCE_DIR = Path(__file__).resolve().parent / "reference"
+
+
+def _load_logic_gate_style(xml_name: str) -> str:
+    """自 reference/*1.xml 讀取 logic_gate 的 mxCell style（AND1／NAND1／OR1／NOR1）。"""
+    path = _REFERENCE_DIR / xml_name
+    for cell in ET.parse(path).getroot().iter("mxCell"):
+        if cell.get("vertex") != "1":
+            continue
+        style = cell.get("style") or ""
+        if "logic_gates.logic_gate" in style:
+            return style
+    raise ValueError(f"no logic_gate vertex in {path}")
+
+
+_GATE_STYLE_AND = _load_logic_gate_style("AND1.xml")
+_GATE_STYLE_NAND = _load_logic_gate_style("NAND1.xml")
+_GATE_STYLE_OR = _load_logic_gate_style("OR1.xml")
+_GATE_STYLE_NOR = _load_logic_gate_style("NOR1.xml")
 # 由欄位推算的相對偏移（AND 在左、OR 在右，generate_drawio 內動態計算 and_col_x / or_col_x）
 AND_GATE_DY = ROW_GAP           # 多個 AND 垂直間距 80pt
 # OR 閘與該行 Cell 同高，放在左側（不放到 Cell 下方）
@@ -772,26 +793,18 @@ def _or_output_not(r: PowerRail, hl: str) -> bool:
     return all(get_inv(gi) for gi in range(len(groups)))
 
 
-_LOGIC_GATE_BASE = (
-    "verticalLabelPosition=bottom;shadow=0;dashed=0;align=center;html=1;"
-    "verticalAlign=top;shape=mxgraph.electrical.logic_gates.logic_gate;"
-)
-
-
 def _and_gate_style(r: PowerRail, hl: str, gi: int) -> str:
-    """AND 或 NAND（group_inv 時 negating=1）；垂直 Y 與 AND 相同，僅 style 不同。"""
-    op = "operation=and;"
+    """AND 或 NAND（group_inv）；style 取自 reference/AND1.xml、NAND1.xml。"""
     if _group_output_not(r, hl, gi):
-        op += _GATE_NEG_SUFFIX
-    return _LOGIC_GATE_BASE + op
+        return _GATE_STYLE_NAND
+    return _GATE_STYLE_AND
 
 
 def _or_gate_style(r: PowerRail, hl: str) -> str:
-    """OR 或 NOR（第二邏輯層：AND/NAND 右、Cell 左）；Y 錨 row_py+Hi/Lo offset，不進 AND catalog。"""
-    op = "operation=or;"
+    """OR 或 NOR；style 取自 reference/OR1.xml、NOR1.xml。"""
     if _or_output_not(r, hl):
-        op += _GATE_NEG_SUFFIX
-    return _LOGIC_GATE_BASE + op
+        return _GATE_STYLE_NOR
+    return _GATE_STYLE_OR
 
 
 def _count_and_gates_on_row(r: PowerRail) -> int:
@@ -2325,8 +2338,7 @@ def _rewire_pass1_logic_edge(
         _ty = id_to_y_center.get(tgt_id)
         if _ty is None:
             return
-        # 進 OR 的入口錨點在 entryY（0.25/0.75），非閘中心；用真正入口 Y 收尾，
-        # 否則 freeze 會因 10pt 落差補出多餘折角（變 5 段）。
+        # 進 OR 的入口錨點依 edge entryY（numInputs=1 時為 0.5＝閘中心）；用真正入口 Y 收尾。
         _entry_y = int(round(_ty + (entry_ay - 0.5) * OR_GATE_H))
         or_entry_x = or_col_x_fn(tgt_rail)
         if src_row is not None and src_row != output_to_row[tgt_rail]:
@@ -2344,14 +2356,14 @@ def _rewire_pass1_logic_edge(
         _ty = id_to_y_center.get(tgt_id)
         if _ty is None:
             return
-        gi = tgt_key[2]
+        _entry_y = int(round(_ty + (entry_ay - 0.5) * AND_GATE_H))
         if src_row is not None and src_row != tgt_row:
             gate_exit_lanes.wire_via_channel(
-                geo, src_id, _right, _sy, and_col_x, _ty
+                geo, src_id, _right, _sy, and_col_x, _entry_y
             )
         else:
             gate_exit_lanes.wire_via_channel(
-                geo, src_id, _right, _sy, and_col_x, _ty
+                geo, src_id, _right, _sy, and_col_x, _entry_y
             )
         return
 
@@ -3409,7 +3421,7 @@ def generate_drawio(
     feedback_auto_edge_ids: set[str] = set()
     style_output_name = "text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;rounded=0;"
     style_edge_o_to_name = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;strokeColor=%s;endArrow=classic;endFill=1;" % STROKE_DEFAULT
-    # 邏輯閘左側輸入 pin：2 輸入用 0.25/0.75，3+ 輸入均分 (對齊 mxgraph logic_gate)
+    # 邏輯閘左側輸入 pin：numInputs=1（AND1.xml 等）唯一錨點 entryY=0.5；多扇入共用此點
     # exit_left 應只在 source 是 output cell（取 H_Deb/L_Deb 訊號）時使用；
     # source 是 input label 時 input 沒有 H/L 概念，一律從右邊出（exitX=1）。
     def _is_deb_placeholder(from_id: int) -> bool:
@@ -3434,11 +3446,9 @@ def generate_drawio(
             "entryX=0;entryY=%.2f;entryDx=0;entryDy=0;entryPerimeter=0;strokeColor=%s;endArrow=classic;endFill=1;" % (ex, entry_y, STROKE_DEFAULT)
         )
     def _gate_entry_y(index: int, total: int) -> float:
-        """AND/OR 閘只畫兩個輸入 pin (0.25/0.75)。多輸入時平均分配到這兩個 pin：
-        前半（含中位）接上 pin (0.25)，後半接下 pin (0.75)。"""
-        if total <= 1:
-            return 0.5
-        return 0.25 if index < (total + 1) // 2 else 0.75
+        """AND/OR/NAND/NOR（numInputs=1）唯一輸入錨點；多條入邊共用 entryY=0.5。"""
+        del index, total  # 保留簽名供呼叫端；單一輸入點與扇入數無關
+        return _GATE_ENTRY_AY
     # 規則三：連到 H_Deb 實心綠、連到 L_Deb 實心紅
     style_and_to_cell_hi = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;strokeColor=%s;" % STROKE_HI
     style_and_to_cell_lo = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;strokeColor=%s;" % STROKE_LO
