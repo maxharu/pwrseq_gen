@@ -321,12 +321,13 @@ def _build_layout_feedback_dep_keys(
                         if src_row != tgt_row:
                             keys.add((tgt.name, hl, gi, ii, d))
                         continue
-                    if not _is_cross_row_feedback(src_row, tgt_row):
-                        continue
-                    elif d == "PCH_PWROK" and glen == 1 and inv:
-                        keys.add((tgt.name, hl, gi, ii, d))
-                    elif glen >= 2 and d != "RSMRST_N":
-                        if _departing_and_index(
+                    if d == "PCH_PWROK" and glen == 1 and inv:
+                        if _is_cross_row_feedback(src_row, tgt_row):
+                            keys.add((tgt.name, hl, gi, ii, d))
+                    elif glen >= 2:
+                        # AND 層輸出 → AND 層輸入＝同層回授，不分上下（src_row != tgt_row 即可）。
+                        # placement 的回授幹線 _count_feedback_trunks 本就不分方向計入，容量已對齊。
+                        if src_row != tgt_row and _departing_and_index(
                             d, use, idx_map=and_idx_map, name_to_rail=name_to_rail
                         ) is not None:
                             keys.add((tgt.name, hl, gi, ii, d))
