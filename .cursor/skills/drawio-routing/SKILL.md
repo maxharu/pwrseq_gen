@@ -136,9 +136,11 @@ cell `p3x` 基準算出後可能落在 OR→Cell gap 內**已被佔用**的垂�
 
 ### `layout_feedback_dep_keys`（跨列）
 
-- `d == "RSMRST_N"`
-- `d == "PCH_PWROK"` 且單一 Deb、`inv=True`
-- 多輸入 AND 且 `_departing_and_index` 非空（AND Output，不含 RSMRST_N）
+- `d == "RSMRST_N"`（`src_row != tgt_row`，不分上下）
+- `d == "PCH_PWROK"` 且單一 Deb、`inv=True`（僅向上 `_is_cross_row_feedback`）
+- 多輸入 AND 且 `_departing_and_index` 非空（**AND Output → AND 輸入**，不含 RSMRST_N）
+
+> ★ **AND→AND 不分上下**：「AND 層輸出 → AND 層輸入」屬同層回授（見 `pwrseq-terminology`），凡 `src_row != tgt_row` 即算（向下亦然），**不可**用 `_is_cross_row_feedback`（只認向上）擋掉。幾何上 AND 輸出在右、目標 AND 輸入在左，向下的 AND→AND 走正向(往右)根本到不了左側輸入。`_count_feedback_trunks`（placement 幹線預留）本就不分方向計入，故 routing 放寬與其對齊、容量不變。`_is_cross_row_feedback` 現僅用於 PCH_PWROK 單 Deb。
 
 列舉：`scripts/enumerate_feedback.py`、`scripts/list_feedback_paths.py`。
 
