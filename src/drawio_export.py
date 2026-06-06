@@ -19,7 +19,7 @@ from xml.dom import minidom
 
 from config_models import PowerSeqConfig, PowerRail
 from drawio_export_options import DrawioExportOptions
-from layout_engine import (
+from drawio_edge_freeze import (
     _style_to_frozen_none,
     freeze_edge_routing,
     restore_orthogonal_auto_routing,
@@ -2888,7 +2888,7 @@ def _apply_feedback_edge_color(
 
 
 def _apply_edge_wire_style(root: ET.Element) -> None:
-    """所有 edge 一律 strokeWidth=2、jumpStyle=arc（含 route_orthogonal 重繞後的邊）。"""
+    """所有 edge 一律 strokeWidth=2、jumpStyle=arc。"""
     for cell in root.iter("mxCell"):
         if cell.get("edge") != "1":
             continue

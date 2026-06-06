@@ -2,9 +2,9 @@
 
 本文件定義 Power Sequence 結構圖（Draw.io XML）的版面、樣式與連接規則。產圖程式（`drawio_export.py`）依此規則輸出，以減少人工二次調整。
 
-**參考圖**：`src/reference/NOT.xml`（NOT 閘 40×20pt）、`src/reference/INPUT_NOT.xml`（input label 與 input NOT）、`src/reference/AND1.xml`／`NAND1.xml`／`OR1.xml`／`NOR1.xml`（邏輯閘元件 80×40pt、`numInputs=1`）、`src/reference/LayoutRef.xml`（output O 側 NOT）、`src/reference/golden2.xml`（完整手動完成圖）。舊版 `AND.xml`／`NAND.xml`／`OR.xml`／`NOR.xml` 已停用。
+**參考圖**：`src/reference/NOT.xml`（NOT 閘 40×20pt）、`src/reference/INPUT_NOT.xml`（input label 與 input NOT）、`src/reference/AND1.xml`／`NAND1.xml`／`OR1.xml`／`NOR1.xml`（邏輯閘元件 80×40pt、`numInputs=1`）。舊版 `AND.xml`／`NAND.xml`／`OR.xml`／`NOR.xml` 已停用。
 
-**與 golden2 比對**：`python scripts/diff_golden2_export.py`（以 `golden.json` 匯出，對齊最右 input 錨點後比 vertex／edge／waypoint 數）；`--fail-on-diff` 可作 CI gate。
+**自動測試**：`pytest tests/test_drawio_matrix.py`、`tests/test_integration.py`（`debug_golden.xml` waypoint 子集）；不再維護 `golden2.xml` 全圖比對。
 
 ---
 
@@ -17,7 +17,7 @@
 - **回授幹線寬**：`_count_feedback_trunks` — 每個跨列、由來源列 **AND output** 出發的編號各 **40pt**，**RSMRST_N** 扇出只算 **1×40pt**（golden 典型為 6 條 = 240pt）。幹線區前後各 **1×GAP**（共 2 格）才到 AND 欄，與第八節公式中的 **+2** 同義（見第八節「+2 與 Input→AND 的對應」）。
 - **範例流程**：`IN1 ---(水平)--->|AND|--->|OR|--->|Cell|---(水平)---> 輸出名稱`。反相時：`IN1 ---(水平)--->|NOT|---> ...` 或 `Cell.O ---(水平)--->|NOT|--->|AND|---> ...`。
 - **Output 列順序**：依 `config.rails` **宣告順序**由上而下（非重心重排）。
-- **走線鎖定**：匯出結尾呼叫 `freeze_edge_routing()`：補齊 stub／轉折 waypoints 後改 `edgeStyle=none`（Draw.io 開檔不重算）。**例外**：**從 input label 或 input NOT 出發**的邊改回 `orthogonalEdgeStyle` 並**清除 waypoints**（`restore_orthogonal_auto_routing`），交 Draw.io 自動正交走線。其餘邊不呼叫 `route_orthogonal`／A*。`layout_engine.layout_drawio()` 僅供**外部 XML** 選用後處理。
+- **走線鎖定**：匯出結尾呼叫 `drawio_edge_freeze.freeze_edge_routing()`：補齊 stub／轉折 waypoints 後改 `edgeStyle=none`（Draw.io 開檔不重算）。**例外**：**從 input label 或 input NOT 出發**的邊改回 `orthogonalEdgeStyle` 並**清除 waypoints**（`restore_orthogonal_auto_routing`），交 Draw.io 自動正交走線。本專案**不使用**通用 hierarchical layout／A* 後處理。
 
 ---
 
@@ -151,7 +151,7 @@
 | 同 destination：水平重疊 | 不允許 |
 | 同 destination：垂直重疊 | 不允許 |
 
-選項型別：`DrawioExportOptions`（`drawio_export_options.py`），僅供程式內部／`layout_engine` 使用，GUI 不提供調整。
+選項型別：`DrawioExportOptions`（`drawio_export_options.py`），僅供 `drawio_export` 內部使用，GUI 不提供調整。
 
 ---
 
@@ -392,7 +392,7 @@ Cell 右緣至輸出名稱：**120pt**；若圖中**任一** output 需 O 側 NO
 | --- | --- |
 | `src/drawio_export.py` | `generate_drawio(config, options=...)` 主匯出邏輯。 |
 | `src/drawio_export_options.py` | 走線重疊規則 dataclass（固定預設值）。 |
-| `src/layout_engine.py` | 可選 `layout_drawio()` 後處理**外部** XML（`route_orthogonal`、`minimize_crossings` 等）；**主匯出不經此路徑**。 |
+| `src/drawio_edge_freeze.py` | 匯出結尾走線鎖定（`freeze_edge_routing`、`restore_orthogonal_auto_routing`）。 |
 | `src/reference/NOT.xml` | NOT 閘元件參考。 |
 | `src/reference/LayoutRef.xml` | Input + NOT 版面與走線參考。 |
 | `src/reference/LayoutRef_Output_With_NOT.drawio.xml` | Output O + NOT 參考。 |

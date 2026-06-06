@@ -12,7 +12,7 @@ description: >-
 # Draw.io Placement (pwrseq_gen)
 
 Placement is **deterministic** and lives in `src/drawio_export.py` → `generate_drawio()`.
-**Do not** use `layout_engine.py` for main export (optional post-process on external XML only).
+All coordinates are computed in export; there is no separate auto-layout engine.
 
 Authoritative rules: `doc/DRAWIO_RULES.md` (§8 X gaps, §10 Y slack).
 Routing regimes (**three** rules — input / gate / **FB**): [drawio-routing](../drawio-routing/SKILL.md).
@@ -154,7 +154,7 @@ See [drawio-routing](../drawio-routing/SKILL.md). Summary:
 
 | Mistake | Correct approach |
 |---------|------------------|
-| Using Sugiyama / `layout_engine` for export | Only `generate_drawio` defines coords |
+| Expecting Sugiyama / generic graph layout for export | Only `generate_drawio` defines coords |
 | Accumulating Y slack per edge | Dedup: one +40pt per gap |
 | Counting Input→AND in Y slack | Explicitly excluded |
 | Moving Cell rows when AND chain grows | `_chain_and_top_y` pushes AND only; Cell stays at `row_py` |
@@ -164,7 +164,7 @@ See [drawio-routing](../drawio-routing/SKILL.md). Summary:
 ## Verification
 
 ```bash
-python -m pytest tests/test_drawio_y_slack.py tests/test_drawio_golden_diff.py -q
+python -m pytest tests/test_drawio_y_slack.py tests/test_drawio_matrix.py -q
 ```
 
 Export sample: `run.bat` → inspect `output/*.xml` in Draw.io.
@@ -174,4 +174,3 @@ Export sample: `run.bat` → inspect `output/*.xml` in Draw.io.
 - [reference.md](reference.md) — constants, function index, slack triggers
 - `doc/DRAWIO_RULES.md` — full layout & wire rules
 - `.cursor/skills/drawio-routing/` — **edge routing**（Rule 1 input／Rule 2 gate／Rule 3 FB）
-- `.cursor/skills/hierarchical-layout/` — generic Sugiyama (not this project's placement)

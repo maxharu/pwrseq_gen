@@ -16,7 +16,7 @@ description: >-
 **三種走線制度**。座標與欄寬見 [drawio-placement](../drawio-placement/SKILL.md)。
 完整規格：`doc/DRAWIO_RULES.md` §五、§八。
 
-實作：`src/drawio_export.py`（emit + Pass 1–3 + `_apply_feedback_routing`）→ `src/layout_engine.py`（`freeze_edge_routing`、`restore_orthogonal_auto_routing`）。
+實作：`src/drawio_export.py`（emit + Pass 1–3 + `_apply_feedback_routing`）→ `src/drawio_edge_freeze.py`（`freeze_edge_routing`、`restore_orthogonal_auto_routing`）。
 
 程式對照：[reference.md](reference.md)。
 
