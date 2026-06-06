@@ -2087,6 +2087,10 @@ class PowerSeqGUI(ctk.CTk):
     # 主動作（產出）著色
     ACCENT_FG = ("#2563eb", "#1d4ed8")
     ACCENT_HOVER = ("#1d4ed8", "#1e40af")
+    _GEN_MENU_LABEL = "Generate"
+    _GEN_MENU_ITEMS = ("Verilog", "C")
+    _EXPORT_MENU_LABEL = "Export"
+    _EXPORT_MENU_ITEMS = ("Draw.io", "WaveDrom")
 
     def _build_ui(self):
         # ----- Toolbar -----
@@ -2168,26 +2172,26 @@ class PowerSeqGUI(ctk.CTk):
         # 不立即 pack；_update_validation 中根據錯誤數顯示 / 隱藏
         self._validation_badge.bind("<Button-1>", lambda _e: self._focus_validation())
 
-        b_wavedrom = ctk.CTkButton(toolbar, text="Export WaveDrom", width=130,
-                                    fg_color=self.ACCENT_FG, hover_color=self.ACCENT_HOVER,
-                                    command=self._export_wavedrom)
-        b_wavedrom.pack(side="right", padx=(0, S_SM))
-        self._tt(b_wavedrom, "Export timing diagram JSON  (Ctrl+Shift+E)")
-        b_export = ctk.CTkButton(toolbar, text="Export Draw.io", width=130,
-                                  fg_color=self.ACCENT_FG, hover_color=self.ACCENT_HOVER,
-                                  command=self._export_drawio)
-        b_export.pack(side="right", padx=(0, S_SM))
-        self._tt(b_export, "Export dependency diagram XML  (Ctrl+E)")
-        b_gen_c = ctk.CTkButton(toolbar, text="Generate C", width=110,
-                                 fg_color=self.ACCENT_FG, hover_color=self.ACCENT_HOVER,
-                                 command=self._generate_c)
-        b_gen_c.pack(side="right", padx=(0, S_SM))
-        self._tt(b_gen_c, "Validate and generate firmware C  (Ctrl+Shift+G)")
-        b_gen = ctk.CTkButton(toolbar, text="Generate Verilog", width=140,
-                               fg_color=self.ACCENT_FG, hover_color=self.ACCENT_HOVER,
-                               command=self._generate_verilog)
-        b_gen.pack(side="right", padx=(0, S_SM))
-        self._tt(b_gen, "Validate and generate Verilog .v  (Ctrl+G)")
+        export_menu = ctk.CTkOptionMenu(
+            toolbar, values=list(self._EXPORT_MENU_ITEMS), width=110,
+            command=self._on_export_menu,
+            fg_color=self.ACCENT_FG, button_color=self.ACCENT_FG,
+            button_hover_color=self.ACCENT_HOVER,
+        )
+        export_menu.set(self._EXPORT_MENU_LABEL)
+        export_menu.pack(side="right", padx=(0, S_SM))
+        self._export_menu = export_menu
+        self._tt(export_menu, "Export Draw.io (Ctrl+E) or WaveDrom (Ctrl+Shift+E)")
+        gen_menu = ctk.CTkOptionMenu(
+            toolbar, values=list(self._GEN_MENU_ITEMS), width=110,
+            command=self._on_generate_menu,
+            fg_color=self.ACCENT_FG, button_color=self.ACCENT_FG,
+            button_hover_color=self.ACCENT_HOVER,
+        )
+        gen_menu.set(self._GEN_MENU_LABEL)
+        gen_menu.pack(side="right", padx=(0, S_SM))
+        self._gen_menu = gen_menu
+        self._tt(gen_menu, "Generate Verilog (Ctrl+G) or C (Ctrl+Shift+G)")
 
         # ----- Body (3-col, resizable) -----
         body_wrap = ctk.CTkFrame(self, fg_color="transparent")
@@ -2844,6 +2848,20 @@ class PowerSeqGUI(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Error", str(e))
             self._status_msg(f"Save failed: {e}", level="error")
+
+    def _on_generate_menu(self, choice: str):
+        if choice == "Verilog":
+            self._generate_verilog()
+        elif choice == "C":
+            self._generate_c()
+        self._gen_menu.set(self._GEN_MENU_LABEL)
+
+    def _on_export_menu(self, choice: str):
+        if choice == "Draw.io":
+            self._export_drawio()
+        elif choice == "WaveDrom":
+            self._export_wavedrom()
+        self._export_menu.set(self._EXPORT_MENU_LABEL)
 
     def _generate_verilog(self):
         self._generate_code(
