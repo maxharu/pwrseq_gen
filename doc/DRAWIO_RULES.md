@@ -2,7 +2,7 @@
 
 本文件定義 Power Sequence 結構圖（Draw.io XML）的版面、樣式與連接規則。產圖程式（`drawio_export.py`）依此規則輸出，以減少人工二次調整。
 
-**參考圖**：`src/reference/NOT.xml`（NOT 閘 40×20pt）、`src/reference/INPUT_NOT.xml`（input label 與 input NOT）、`src/reference/NAND.xml`（AND `group_inv`）、`src/reference/NOR.xml`（OR 反相）、`src/reference/LayoutRef.xml`（output O 側 NOT）、`src/reference/golden2.xml`（完整手動完成圖）。
+**參考圖**：`src/reference/NOT.xml`（NOT 閘 40×20pt）、`src/reference/INPUT_NOT.xml`（input label 與 input NOT）、`src/reference/AND1.xml`／`NAND1.xml`／`OR1.xml`／`NOR1.xml`（邏輯閘元件 80×40pt、`numInputs=1`）、`src/reference/LayoutRef.xml`（output O 側 NOT）、`src/reference/golden2.xml`（完整手動完成圖）。舊版 `AND.xml`／`NAND.xml`／`OR.xml`／`NOR.xml` 已停用。
 
 **與 golden2 比對**：`python scripts/diff_golden2_export.py`（以 `golden.json` 匯出，對齊最右 input 錨點後比 vertex／edge／waypoint 數）；`--fail-on-diff` 可作 CI gate。
 
@@ -41,7 +41,7 @@
 | **分層與左右順序（X）** | 三層邏輯欄（左→右）：**① AND／NAND** → **② OR／NOR**（有 OR 路徑時）→ **③ Cell**。② 在 ① 的**後一層**、③ 的**前一層**；**不**與 ① 共用同一欄 x，也**不**參與 AND global catalog 垂直鍊。 |
 | **層級間距（固定）** | input↔回授幹線、回授↔AND 等仍用 **40pt**（`GAP`）；output 列距／NOT 偏移／多 AND 垂直距仍 **80pt**（`ROW_GAP`）。 |
 | **欄位水平間距（動態）** | AND↔OR、AND↔Cell、OR↔Cell 之間距**非固定 40pt**，依全圖公式計算（見**第八節**）。 |
-| **閘型** | AND / OR / NAND / NOR：`logic_gate`（80×40pt）；`group_inv` 時 AND→**NAND**（`negating=1;negSize=0.15`，見 `NAND.xml`）、OR 反相→**NOR**（見 `NOR.xml`）。獨立 NOT：`inverter_2`（40×20pt，僅 input／Cell O 側，見 `NOT.xml`）。 |
+| **閘型** | AND / OR / NAND / NOR：`logic_gate`（80×40pt、`numInputs=1`）；`group_inv` 時 AND→**NAND**（`negating=1;negSize=0.15`，見 `NAND1.xml`）、OR 反相→**NOR**（見 `NOR1.xml`）。基準 AND／OR 見 `AND1.xml`／`OR1.xml`。獨立 NOT：`inverter_2`（40×20pt，僅 input／Cell O 側，見 `NOT.xml`）。 |
 | **NOT 共用** | 任何 `inv=True` 的**單一依賴**皆用共用 NOT 閘。同一「來源 `d` + `use_mode`」**共用一顆 NOT**。**整組 AND/OR 反相**則用 NAND/NOR，不再外掛 NOT。 |
 | **Input NOT 位置** | 依 **`INPUT_NOT.xml`**（皆 `rotation=90`）：**左 20pt**；旋轉後**視覺底邊**在**最上列 Cell 上緣之上 40pt**（`not_y + NOT_GATE_W − NOT_GATE_H/2 = cell_top − 40`）。 |
 | **Input NOT 走線** | label → NOT、NOT → 下游閘：皆 **orthogonalEdgeStyle**、**無 waypoints**（Draw.io 自動；視覺仍為先下後右）。 |

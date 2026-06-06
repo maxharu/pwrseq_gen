@@ -97,6 +97,21 @@ positions_in[name] = (ix, input_row_y)
 - Left: `channel_x_left = post_input_x` (trunk area; input→AND uses label `x+40` bus, not trunk lanes).
 - Cross-row: `wire_via_channel` — stub lane `(1+n)×40` → vertical → horizontal to entry (no separate right-side channel x).
 
+## Logic gate components（參考 XML）★
+
+匯出閘元件 style／尺寸以 `src/reference/*1.xml` 為準（**勿**再用 `AND.xml`／`NAND.xml`／`OR.xml`／`NOR.xml`）。
+
+| 閘型 | 參考檔 | style 要點 |
+|------|--------|-----------|
+| **AND** | `AND1.xml` | `operation=and;numInputs=1;` |
+| **NAND** | `NAND1.xml` | `operation=and;negating=1;negSize=0.15;numInputs=1;` |
+| **OR** | `OR1.xml` | `operation=or;numInputs=1;` |
+| **NOR** | `NOR1.xml` | `operation=or;negating=1;negSize=0.15;numInputs=1;` |
+
+- 幾何：**80×40pt**（`AND_GATE_W`／`AND_GATE_H`）。
+- 實作：`_and_gate_style`、`_or_gate_style`（`group_inv`／`_or_output_not` 決定 NAND／NOR）。
+- 所有入邊共用唯一輸入錨點 `entryY=0.5`（`_gate_entry_y`／`_GATE_ENTRY_AY`）；多扇入亦接同一點。
+
 ## Phase 4–5 — Draw & route
 
 Emit order: input labels (+ input NOT) → PWRCELL（inner + H/L_Deb + **Q** + **~Q**）+ name → per-row Hi/Lo logic (AND then OR) → edges.
@@ -122,6 +137,7 @@ When changing placement:
 - [ ] New slack rule: add to correct layer function; use `_mark_y_gap` (1-based AND/OR) or direct assign (0-based cell row gap).
 - [ ] Run `pytest tests/test_drawio_y_slack.py` + full suite.
 - [ ] Update `doc/DRAWIO_RULES.md` if user-visible rules change.
+- [ ] 閘 style 變更：對齊 `AND1`／`NAND1`／`OR1`／`NOR1.xml`，勿引用舊 `AND.xml` 等？
 
 ## Export finale
 

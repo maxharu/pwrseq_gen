@@ -8,6 +8,7 @@ Source of truth: `src/drawio_export.py`, `doc/DRAWIO_RULES.md`.
 |----------|-------|------|
 | `GRID` / `GAP` | 40 | Grid unit; horizontal stub, slack increment |
 | `ROW_GAP` | 80 | Default row spacing; AND vertical step; NOT offset X |
+| `AND_GATE_W/H` | 80/40 | Gate size（`AND1.xml` 等） |
 | `AND_GATE_DY` | 80 | Same-row AND–AND spacing |
 | `MARGIN` | 40 | Top/left margin |
 | `CELL_GROUP_H/W` | 80 | Cell inner |
@@ -101,6 +102,10 @@ segment_pt = max(0, base + 2 + fb - exempt) × 40
 
 | Path | Role |
 |------|------|
+| `src/reference/AND1.xml` | AND 元件（`numInputs=1`） |
+| `src/reference/NAND1.xml` | NAND（`group_inv`） |
+| `src/reference/OR1.xml` | OR 元件 |
+| `src/reference/NOR1.xml` | NOR（OR 反相） |
 | `src/drawio_export.py` | Main placement + export |
 | `src/drawio_export_options.py` | Wire overlap options |
 | `src/layout_engine.py` | Optional XML post-process (not main path) |
