@@ -1,0 +1,46 @@
+---
+description: pwrseq_gen 電源序列圖的圖層、連線與 X/Y 通道術語定義
+alwaysApply: true
+---
+
+# pwrseq_gen 術語
+
+使用者提到以下術語時，依本定義理解，勿自行改義。
+
+## 圖層（由左到右）
+
+| 術語 | 元件 | 埠 |
+|---|---|---|
+| **輸入層** | Input（含 NOT） | 僅輸出，無輸入 |
+| **AND 層** | AND / NAND | 輸出、輸入 |
+| **OR 層** | OR / NOR | 輸出、輸入 |
+| **Cell（輸出）層** | Power Cell | 輸出：Q、~Q；輸入：Hi_Deb、Lo_Deb |
+
+## 前向連線（本層 → 後層）
+
+- **輸入層** → AND 層、OR 層、Cell 層的輸入
+- **AND 層** → OR 層、Cell 層的輸入
+- **OR 層** → Cell 層的輸入
+
+## 回授連線（本層 → 前層）
+
+- **Cell 層** 輸出（Q / ~Q）→ Cell 層 / OR 層 / AND 層的輸入
+- **OR 層** 輸出 → OR 層 / AND 層的輸入
+- **AND 層** 輸出 → AND 層的輸入
+
+## X 通道（水平走線區間）
+
+| 區段 | 定義 |
+|---|---|
+| **輸入層 X 通道** | 最靠右的 Input Label 右緣 → AND 層輸入左側 |
+| **AND 層 X 通道** | AND 層輸出右側 → 下一層輸入左側：有 OR 層時為 OR 層；無 OR 層時為 Cell 層 |
+| **OR 層 X 通道** | OR 層輸出右側 → Cell 層輸入左側 |
+| **Cell 層 X 通道** | Cell 層輸出右側 → Output Label 左側 |
+
+## Y 通道（垂直走線區間）
+
+上下相鄰同層元件之間，**上方元件下緣 → 下方元件上緣** 的空間：
+
+- **AND 層 Y 通道**：相鄰 AND / NAND 之間
+- **OR 層 Y 通道**：相鄰 OR / NOR 之間
+- **Cell 層 Y 通道**：相鄰 Cell 之間
