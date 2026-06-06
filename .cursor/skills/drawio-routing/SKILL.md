@@ -75,6 +75,8 @@ description: >-
 
 其後 ③④⑤ 同 Cell FB。
 
+> ★ **OR→OR 不可用短 stub**：① 一律走該閘 catalog `stub_x(src)`（`(1+n)×40`，每顆閘各自一條），**不要**用 `src_right+40` 之類的共用短 stub——否則多條 OR 回授會擠在同一 OR 層 X 通道。placement 已為每顆閘預留此通道。`_apply_feedback_routing` 的 `profile == "gate"` 分支對所有目標層（含 or）統一用 `stub_x`。
+
 ### FB X 通道與同層水平共用 ★
 
 **規則：同一 `source_id` 在每個目標層（and／or／cell）只佔 1 條 X 通道。**
@@ -93,6 +95,17 @@ description: >-
 | **cell**（H/L_Deb） | `_cell_fb_channel_base_x + slot×40` | `fb_cell` |
 
 佈局預留寬度（gap 公式）見 [drawio-placement](../drawio-placement/SKILL.md) §8；走線 slot 與預留 `fb_*` 計數模型不同（左幹線 vs AND→Cell 通道）。
+
+#### cell 幹線避讓被佔用車道 ★
+
+cell `p3x` 基準算出後可能落在 OR→Cell gap 內**已被佔用**的垂直車道（尤其 OR 閘 gate-exit stub），造成 `~Q`／cell 回授與 OR 回授路線重疊。`_apply_feedback_routing` 預掃描兩類佔用車道，cell 幹線往左（朝 OR 欄）逐格挪到空車道：
+
+| 佔用來源 | 取得方式 |
+|---------|---------|
+| 既有正向邊垂直段 | 掃 XML 各 edge waypoints 的垂直段 x |
+| gate-profile 回授 ① stub | 一律 `stub_x(src)`（catalog `(1+n)×40`，每顆閘各自一條，含 OR→OR） |
+
+- 下限 `and_col_x + AND_GATE_W + GAP`；**同一 source 同層仍共用一條** `p3x`（`source_cell_x` 快取，勿因避讓拆成多條）。
 
 ### 顏色
 
@@ -161,7 +174,7 @@ restore_orthogonal_auto_routing(root, input_auto_src_ids)  # 不含 feedback
 | Item | Value |
 |------|--------|
 | **edgeStyle** | `edgeStyle=none` |
-| **Stub** | `(1+n)×40pt` |
+| **Stub** | `(1+n)×40pt`（n＝該閘在所屬層 stub lane gap 的**本地序**）|
 
 | # | 型態 | 條件 |
 |---|------|------|
@@ -170,6 +183,14 @@ restore_orthogonal_auto_routing(root, input_auto_src_ids)  # 不含 feedback
 | 3 | 右→上/下→右 | 閘→Deb |
 
 跨列非回授正向：`wire_via_channel`（emit 凍結）。
+
+#### stub lane 序 n 每層各自從 0 數 ★
+
+`_build_gate_lane_indices` 對 AND／OR 兩層用**獨立**計數器：AND stub lane 在 **AND→OR gap**、OR stub lane 在 **OR→Cell gap**，是不同物理通道區，OR 迴圈前 `lane` 必須**歸零重數**。若沿用 AND 跑完的全域序，OR 每顆閘的 n 會多算 AND 佔掉的格數 → 出口通道整批右移、最後一顆擠到 Cell 欄邊界（`(1+n)×40` 落在 Cell 入口）；正向被 `max_lx` 夾回一格、回授仍用邊界值，於是同一閘正向與回授分走兩條通道。
+
+- 同一閘的**正向與回授共用**這條 lane（`stub_x(id)` 對 catalog 閘冪等）。
+- 症狀：某 OR/NOR 閘正向 stub 與其回授 ① stub 差 40pt（正向在 `cell_col−40`、回授在 `cell_col`）。
+- placement 的 OR→Cell gap 寬度（`_gate_gap_width`）本就用 OR 層**本地**閘數預留，本地編號才與之對齊。
 
 ### `use=hi`／`use=lo` 透傳 → 本列 H_Deb／L_Deb ★
 
@@ -185,6 +206,13 @@ restore_orthogonal_auto_routing(root, input_auto_src_ids)  # 不含 feedback
 典型：`PVNNAON_EN`／`PVCCIO_EN`／`PVCC1V8_EN` 的 Hi（`use=hi` → 上游 PCH_* AND 右側）必須 `exitX=1`。
 
 Pass 1 僅處理 **source 為本列 H/L_Deb 佔位符** 的邊（`exitX=0` in style）；已為 AND/OR 的邊不在此列。
+
+#### `_rewire_pass1_logic_edge` 進 OR／AND 要用真正入口錨點 Y ★
+
+改接後 `wire_via_channel` 收尾的 entry Y **必須用該邊 `entryY` 算出的入口錨點**，不可用閘中心（`id_to_y_center`）。OR／AND 的輸入 pin 在 `entryY=0.25/0.75`（離中心 ±10pt）；若用中心收尾，freeze 會為了補回真正錨點而多插一個折角，正向邊就從 3 段變成 5 段（曾誤判成回授）。
+
+- 實作：caller 解析 `entry_ay=_style_float(sty,"entryY",0.5)` 傳入；`_entry_y = round(_ty + (entry_ay-0.5)*OR_GATE_H)`（AND 同理用 `AND_GATE_H`）。
+- 症狀：AND／OR→OR 正向（含 `use=hi/lo` 跨列）出現 `(stub,center)(near_or,center)(near_or,entry)` 的 10pt 小折角。
 
 ---
 
@@ -210,6 +238,8 @@ generate_drawio() 主圖 + NOT Pass 1–3
 - [ ] 佈局 `feedback_n`／`fb_cell`／`fb_or` 與走線 slot 容量一致？
 - [ ] input 在 `input_auto_src_ids`；非 FB 閘邊仍 Rule 2 三型態？
 - [ ] `use=hi/lo` 透傳：僅 Deb **佔位符** `exitX=0`；logic_out 已存在則 `exitX=1`？
+- [ ] Pass 1 改接進 OR／AND：收尾 entry Y 用 `entryY` 錨點（非閘中心），避免 freeze 補折角變多段？
+- [ ] `_build_gate_lane_indices`：OR 迴圈前 `lane` 歸零（每層 stub lane 各自從 0 數），OR 出口不被推到 Cell 欄邊界、正向與回授共用同一通道？
 - [ ] `pytest tests/test_gate_exit_lanes.py tests/test_integration.py`
 
 ## See also

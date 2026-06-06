@@ -103,6 +103,9 @@ class TestFullPipeline:
                 src, tgt = cell.get("source"), cell.get("target")
                 if src is None or tgt is None:
                     continue
+                # 反向標示邊（cell→input label，startArrow）已廢除：input→Cell 改走正向邊。
+                if "startArrow" in (cell.get("style") or ""):
+                    continue
                 geo = cell.find("mxGeometry")
                 if geo is not None and geo.find("Array") is not None:
                     out.add((src, tgt))
@@ -312,6 +315,65 @@ class TestFullPipeline:
             for c in root.iter("mxCell")
             if c.get("id") in fb_edge_ids
         ], f"RSMRST ~Q → Lo AND should be FB (blue); fb edges {fb_edge_ids}"
+
+    def test_rsmrst_q_to_downstream_and_is_q_fb_blue(self):
+        """RSMRST Q use=self → 下游 hi AND 應為藍色 Q FB（先上 60pt，目標在下方亦然）。"""
+        json_path = os.path.join(OUTPUT_DIR, "power.json")
+        if not os.path.exists(json_path):
+            pytest.skip("power.json not found")
+        with open(json_path, encoding="utf-8") as f:
+            cfg = PowerSeqConfig.from_dict(json.load(f))
+        root = ET.fromstring(generate_drawio(cfg))
+
+        rsmrst_q_id = next(
+            c.get("id")
+            for c in root.iter("mxCell")
+            if c.get("vertex") == "1"
+            and (c.get("value") or "").strip() == "Q"
+            and abs(
+                float(c.find("mxGeometry").get("y", 0))
+                - float(
+                    next(
+                        c2.find("mxGeometry").get("y", 0)
+                        for c2 in root.iter("mxCell")
+                        if (c2.get("value") or "").strip() == "RSMRST_N"
+                    )
+                )
+            )
+            < 80
+        )
+        psu_and_id = next(
+            c.get("id")
+            for c in root.iter("mxCell")
+            if c.get("vertex") == "1"
+            and "operation=and" in (c.get("style") or "")
+            and abs(
+                float(c.find("mxGeometry").get("y", 0))
+                - float(
+                    next(
+                        c2.find("mxGeometry").get("y", 0)
+                        for c2 in root.iter("mxCell")
+                        if (c2.get("value") or "").strip() == "PSU_EN"
+                    )
+                )
+            )
+            < 120
+        )
+        q_to_psu = [
+            c
+            for c in root.iter("mxCell")
+            if c.get("edge") == "1"
+            and c.get("source") == rsmrst_q_id
+            and c.get("target") == psu_and_id
+        ]
+        assert len(q_to_psu) == 1, "expected RSMRST Q → PSU hi AND"
+        edge = q_to_psu[0]
+        assert STROKE_FEEDBACK in (edge.get("style") or ""), "RSMRST Q→下游 AND 應為藍色 FB"
+        pts = edge.find("mxGeometry").find("Array").findall("mxPoint")
+        assert len(pts) >= 5, "Q FB 應有五段 waypoints"
+        p1y = float(pts[0].get("y"))
+        p2y = float(pts[1].get("y"))
+        assert p2y < p1y and abs(p1y - p2y - 60.0) < 0.5
 
     def test_cell_q_feedback_second_segment_always_up(self):
         """Cell Q 回授：先右 40pt，第二段一律向上 40+20pt（目標在下方亦然）。"""
