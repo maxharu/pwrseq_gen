@@ -42,6 +42,13 @@ Source of truth: `src/drawio_export.py`, `doc/DRAWIO_RULES.md`.
 | `_count_direct_horizontal_exempts` | Gate X | Same-Y direct −1 slot |
 | `_ChannelAllocator` | Wire X | Right-side vertical lanes |
 | `_GateExitLanes` | Wire X | Per-gate right stub 40×n |
+| `_topological_order_outputs` | Cell Y | Dependency topo sort for row order |
+| `_barycenter_order_outputs` | Cell Y | 4-pass barycenter tweak (adjacent deps); **not** full-graph Sugiyama |
+
+## Output row ordering
+
+- `_topological_order_outputs` then `_barycenter_order_outputs` only reorder **Cell rows** (vertical).
+- Does **not** assign AND/OR column X or wire channels; see placement phases above.
 
 ## Y slack triggers (§10)
 
@@ -108,6 +115,6 @@ segment_pt = max(0, base + 2 + fb - exempt) × 40
 | `src/reference/NOR1.xml` | NOR（OR 反相） |
 | `src/drawio_export.py` | Main placement + export |
 | `src/drawio_export_options.py` | Wire overlap options |
-| `src/layout_engine.py` | Optional XML post-process (not main path) |
+| `src/drawio_edge_freeze.py` | Export finale: `freeze_edge_routing`, `restore_orthogonal_auto_routing` |
 | `tests/test_drawio_y_slack.py` | Y slack unit tests |
-| `tests/test_drawio_golden_diff.py` | Golden XML diff |
+| `tests/test_drawio_matrix.py` | FB matrix / gate style / routing tests |

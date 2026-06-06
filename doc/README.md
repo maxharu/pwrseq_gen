@@ -59,7 +59,7 @@ pwrseq_gen/
 │   ├── drawio_export.py     # Draw.io XML 匯出
 │   ├── drawio_export_options.py  # 匯出走線重疊選項
 │   ├── drawio_dialog.py     # Export Draw.io 對話框
-│   ├── layout_engine.py     # 正交路由、水平段補齊、交叉最小化
+│   ├── drawio_edge_freeze.py  # 匯出結尾走線鎖定（freeze / restore orthogonal）
 │   ├── json2drawio.py       # CLI 批次轉換工具
 │   ├── build.py             # PyInstaller 打包腳本
 │   └── reference/           # C/Verilog 參考元件（PSEQCELL.v、pwrcell.c/.h）
