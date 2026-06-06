@@ -274,6 +274,11 @@ def _count_feedback_trunks(
 LayoutFeedbackDepKey = tuple[str, str, int, int, str]
 
 
+def _is_cross_row_feedback(src_row: int, tgt_row: int) -> bool:
+    """回授：來源列在圖上較下方（列號較大）→ 往上游列走（src_row > tgt_row）。"""
+    return src_row > tgt_row
+
+
 def _build_layout_feedback_dep_keys(
     outputs: list[PowerRail],
     output_to_row: dict[str, int],
@@ -299,7 +304,7 @@ def _build_layout_feedback_dep_keys(
                     if name_to_rail[d].seq_type == "input":
                         continue
                     src_row = output_to_row.get(d)
-                    if src_row is None or src_row == tgt_row:
+                    if src_row is None:
                         continue
                     use = (
                         tgt.get_hi_use(gi, ii, d)
@@ -312,7 +317,12 @@ def _build_layout_feedback_dep_keys(
                         else tgt.get_lo_inv(gi, ii, d)
                     )
                     if d == "RSMRST_N":
-                        keys.add((tgt.name, hl, gi, ii, d))
+                        # RSMRST use=self 扇出至下游 AND 亦佔回授幹線（含 src_row < tgt_row）
+                        if src_row != tgt_row:
+                            keys.add((tgt.name, hl, gi, ii, d))
+                        continue
+                    if not _is_cross_row_feedback(src_row, tgt_row):
+                        continue
                     elif d == "PCH_PWROK" and glen == 1 and inv:
                         keys.add((tgt.name, hl, gi, ii, d))
                     elif glen >= 2 and d != "RSMRST_N":
@@ -751,11 +761,14 @@ def _group_output_not(r: PowerRail, hl: str, gi: int) -> bool:
 
 
 def _or_output_not(r: PowerRail, hl: str) -> bool:
-    """OR 整體 output 反相 → 繪製 NOR（negating=1）；目前 config 無 OR 級 group_inv，預留 False。"""
+    """OR 路徑（≥2 group）且每組皆單一依賴、全部 group_inv → 繪製 NOR（negating=1）。"""
     groups = r.get_hi_groups() if hl == "hi" else r.get_lo_groups()
     if len(groups) < 2:
         return False
-    return False
+    if any(len(g) >= 2 for g in groups):
+        return False
+    get_inv = r.get_hi_group_inv if hl == "hi" else r.get_lo_group_inv
+    return all(get_inv(gi) for gi in range(len(groups)))
 
 
 _LOGIC_GATE_BASE = (
@@ -863,8 +876,8 @@ def _unique_cell_fb_to_deb_sources(
     valid: set[str],
 ) -> set[str]:
     """
-    Cell fb：跨列、上游 Cell output（use=self）→ 下游 Cell H_Deb/L_Deb。
-    不含 use=hi/lo 邏輯鏈、不含進 AND/OR 的回授。
+    Cell fb（DRAWIO_RULES §八）：跨列、use=self 的 output → 下游 H_Deb/L_Deb。
+    不含 use=hi/lo 進 Deb、不含進 AND/OR。
     """
     sources: set[str] = set()
     for r in outputs:
@@ -879,7 +892,7 @@ def _unique_cell_fb_to_deb_sources(
                 if name_to_rail[d].seq_type != "output":
                     continue
                 src_row = output_to_row.get(d)
-                if src_row is None or src_row == tgt_row:
+                if src_row is None or not _is_cross_row_feedback(src_row, tgt_row):
                     continue
                 use = (
                     r.get_hi_use(gi, 0, d)
@@ -915,6 +928,200 @@ def _count_total_output_deps_to_or_path(
     valid: set[str],
 ) -> int:
     return len(_unique_output_sources_in_hilo(outputs, name_to_rail, valid, or_path_only=True))
+
+
+def _row_has_or_path(r: PowerRail) -> bool:
+    return len(r.get_hi_groups()) >= 2 or len(r.get_lo_groups()) >= 2
+
+
+def _source_row_has_or(
+    rail: str,
+    hl: str,
+    *,
+    outputs: list[PowerRail],
+    output_to_row: dict[str, int],
+) -> bool:
+    """來源列在指定 band 是否有 OR 合併（logic_out 為 OR 輸出）。"""
+    row = output_to_row.get(rail)
+    if row is None:
+        return False
+    for r in outputs:
+        if output_to_row.get(r.name) != row:
+            continue
+        groups = r.get_hi_groups() if hl == "hi" else r.get_lo_groups()
+        if len(groups) >= 2:
+            return True
+    return False
+
+
+def _count_and_or_middle_slots(
+    outputs: list[PowerRail],
+    output_to_row: dict[str, int],
+    name_to_rail: dict[str, PowerRail],
+    valid: set[str],
+) -> int:
+    """
+    AND→OR 段中間走線格（不含公式 +2 兩側 GAP）：
+    AND 轉角至後級、OR 回授至 OR 輸入（同源去重）、Cell 回授至 OR 輸入（同源去重）。
+    """
+    _, and_idx_map = _build_and_catalog(outputs)
+    and_corners: set[str] = set()
+    or_fb_or: set[tuple[str, str]] = set()
+    cell_fb_or: set[str] = set()
+
+    for tgt in outputs:
+        tgt_row = output_to_row[tgt.name]
+        if not _row_has_or_path(tgt):
+            continue
+        for hl, groups in [("hi", tgt.get_hi_groups()), ("lo", tgt.get_lo_groups())]:
+            if len(groups) < 2:
+                continue
+            for gi, group in enumerate(groups):
+                if len(group) != 1:
+                    continue
+                d = group[0]
+                if d not in valid or d in CONST_DEPS:
+                    continue
+                if name_to_rail[d].seq_type == "input":
+                    continue
+                src_row = output_to_row.get(d)
+                if src_row is None or src_row == tgt_row:
+                    continue
+                use = (
+                    tgt.get_hi_use(gi, 0, d)
+                    if hl == "hi"
+                    else tgt.get_lo_use(gi, 0, d)
+                )
+                if use not in ("hi", "lo", "self"):
+                    continue
+                if _is_cross_row_feedback(src_row, tgt_row):
+                    if use == "self" and name_to_rail[d].seq_type == "output":
+                        cell_fb_or.add(d)
+                    elif use in ("hi", "lo") and _source_row_has_or(
+                        d, use, outputs=outputs, output_to_row=output_to_row
+                    ):
+                        or_fb_or.add((d, use))
+                    elif use in ("hi", "lo"):
+                        and_corners.add(f"pas:{d}:{use}")
+                elif use in ("hi", "lo"):
+                    dep_idx = _departing_and_index(
+                        d, use, idx_map=and_idx_map, name_to_rail=name_to_rail
+                    )
+                    if dep_idx is not None:
+                        and_corners.add(f"and:{dep_idx}")
+    return len(and_corners) + len(or_fb_or) + len(cell_fb_or)
+
+
+def _count_or_cell_middle_slots(
+    outputs: list[PowerRail],
+    output_to_row: dict[str, int],
+    name_to_rail: dict[str, PowerRail],
+    valid: set[str],
+) -> int:
+    """
+    OR→Cell 段中間走線格（不含公式 +2 兩側 GAP）：
+    OR 轉角至後級、OR 回授至 OR／AND 輸入（同源去重）、Cell 回授至 Cell 輸入（同源去重）。
+    """
+    or_corners: set[tuple[str, str]] = set()
+    or_fb_or: set[tuple[str, str]] = set()
+    or_fb_and: set[tuple[str, str]] = set()
+    cell_fb_cell: set[str] = set()
+
+    for tgt in outputs:
+        tgt_row = output_to_row[tgt.name]
+        for hl, groups in [("hi", tgt.get_hi_groups()), ("lo", tgt.get_lo_groups())]:
+            for gi, group in enumerate(groups):
+                for ii, d in enumerate(group):
+                    if d not in valid or d in CONST_DEPS:
+                        continue
+                    if name_to_rail[d].seq_type == "input":
+                        continue
+                    src_row = output_to_row.get(d)
+                    if src_row is None or src_row == tgt_row:
+                        continue
+                    use = (
+                        tgt.get_hi_use(gi, ii, d)
+                        if hl == "hi"
+                        else tgt.get_lo_use(gi, ii, d)
+                    )
+                    if use not in ("hi", "lo"):
+                        continue
+                    if not _source_row_has_or(
+                        d, use, outputs=outputs, output_to_row=output_to_row
+                    ):
+                        continue
+                    if _is_cross_row_feedback(src_row, tgt_row):
+                        if len(group) >= 2:
+                            or_fb_and.add((d, use))
+                        elif _row_has_or_path(tgt):
+                            or_fb_or.add((d, use))
+                    elif src_row < tgt_row:
+                        if _row_has_or_path(tgt):
+                            or_fb_or.add((d, use))
+                            or_corners.add((d, use))
+                        else:
+                            or_corners.add((d, use))
+        for hl, groups in [("hi", tgt.get_hi_groups()), ("lo", tgt.get_lo_groups())]:
+            if len(groups) != 1:
+                continue
+            d = groups[0][0]
+            if d not in valid or d in CONST_DEPS:
+                continue
+            if name_to_rail[d].seq_type != "output":
+                continue
+            src_row = output_to_row.get(d)
+            if src_row is None or not _is_cross_row_feedback(src_row, tgt_row):
+                continue
+            use = (
+                tgt.get_hi_use(0, 0, d)
+                if hl == "hi"
+                else tgt.get_lo_use(0, 0, d)
+            )
+            if use == "self":
+                cell_fb_cell.add(d)
+
+    return len(or_corners) + len(or_fb_or) + len(or_fb_and) + len(cell_fb_cell)
+
+
+def _count_or_fb_routing_slots(
+    outputs: list[PowerRail],
+    output_to_row: dict[str, int],
+    name_to_rail: dict[str, PowerRail],
+    valid: set[str],
+) -> int:
+    """OR 目標層 FB X 通道容量（同源去重）。"""
+    or_fb_or: set[tuple[str, str]] = set()
+    cell_fb_or: set[str] = set()
+    for tgt in outputs:
+        tgt_row = output_to_row[tgt.name]
+        if not _row_has_or_path(tgt):
+            continue
+        for hl, groups in [("hi", tgt.get_hi_groups()), ("lo", tgt.get_lo_groups())]:
+            if len(groups) < 2:
+                continue
+            for gi, group in enumerate(groups):
+                if len(group) != 1:
+                    continue
+                d = group[0]
+                if d not in valid or d in CONST_DEPS:
+                    continue
+                if name_to_rail[d].seq_type == "input":
+                    continue
+                src_row = output_to_row.get(d)
+                if src_row is None or not _is_cross_row_feedback(src_row, tgt_row):
+                    continue
+                use = (
+                    tgt.get_hi_use(gi, 0, d)
+                    if hl == "hi"
+                    else tgt.get_lo_use(gi, 0, d)
+                )
+                if use == "self" and name_to_rail[d].seq_type == "output":
+                    cell_fb_or.add(d)
+                elif use in ("hi", "lo") and _source_row_has_or(
+                    d, use, outputs=outputs, output_to_row=output_to_row
+                ):
+                    or_fb_or.add((d, use))
+    return max(1, len(or_fb_or) + len(cell_fb_or))
 
 
 def _count_total_and_gates(outputs: list[PowerRail]) -> int:
@@ -1158,7 +1365,10 @@ def _build_gate_lane_indices(
             and_lane[key] = lane
         else:
             and_lane[key] = None
+    # OR 層 stub lane 在「OR→Cell gap」獨立計數（與 AND→OR gap 不同物理通道區），
+    # 故歸零重數；不可沿用 AND 的全域序，否則 OR 出口通道整批右移、擠到 Cell 欄邊界。
     or_lane: dict[tuple[str, str], int | None] = {}
+    lane = 0
     for key in or_catalog:
         if _gate_needs_stub_lane_or(
             key,
@@ -1307,7 +1517,12 @@ def _compute_row_gate_layouts(
     n_and_total = _count_total_and_gates(outputs)
     m_or_total = _count_total_or_gates(outputs)
     fb_cell_total = _count_cell_fb_to_deb(outputs, output_to_row, name_to_rail, valid)
-    fb_or_total = _count_total_output_deps_to_or_path(outputs, name_to_rail, valid)
+    and_or_middle = _count_and_or_middle_slots(
+        outputs, output_to_row, name_to_rail, valid
+    )
+    or_cell_middle = _count_or_cell_middle_slots(
+        outputs, output_to_row, name_to_rail, valid
+    )
     exempt_ao, exempt_ac, exempt_oc = _count_direct_horizontal_exempts(
         outputs,
         output_to_row,
@@ -1321,27 +1536,34 @@ def _compute_row_gate_layouts(
         or_top_y=or_top_y,
     )
     gap_and_cell = _gate_gap_width(n_and_total, fb_cell_total, exempt_ac)
-    gap_and_or = _gate_gap_width(n_and_total, fb_or_total, exempt_ao)
-    gap_or_cell = _gate_gap_width(m_or_total, fb_cell_total, exempt_oc)
+    # 走線格模型：中間格數已含轉角／回授去重，不再扣 exempt（§八 base=n 模型才扣）
+    gap_and_or = _gate_gap_width(0, and_or_middle, 0)
+    gap_or_cell = _gate_gap_width(0, or_cell_middle, 0)
+    # 全圖任一列有 OR/NOR → 所有 Cell 對齊結構 B（保留 OR 欄位），非僅有 OR 的列後移。
+    diagram_has_or = m_or_total > 0
+    or_col_x_global: int | None = None
+    cell_x_structure_b: int | None = None
+    if diagram_has_or:
+        or_col_x_global = _align40(and_col_x + AND_GATE_W + gap_and_or)
+        cell_x_structure_b = _align40(or_col_x_global + OR_GATE_W + gap_or_cell)
     layouts: dict[str, _RowGateLayout] = {}
     for r in outputs:
         m_or_row = _count_or_gates_on_row(r)
-        if m_or_row == 0:
+        if diagram_has_or:
+            assert or_col_x_global is not None and cell_x_structure_b is not None
+            layouts[r.name] = _RowGateLayout(
+                has_or=m_or_row > 0,
+                cell_start_x=cell_x_structure_b,
+                or_col_x=or_col_x_global,
+                gap_after_and=gap_and_or,
+            )
+        else:
             cell_x = _align40(and_col_x + AND_GATE_W + gap_and_cell)
             layouts[r.name] = _RowGateLayout(
                 has_or=False,
                 cell_start_x=cell_x,
                 or_col_x=None,
                 gap_after_and=gap_and_cell,
-            )
-        else:
-            or_x = _align40(and_col_x + AND_GATE_W + gap_and_or)
-            cell_x = _align40(or_x + OR_GATE_W + gap_or_cell)
-            layouts[r.name] = _RowGateLayout(
-                has_or=True,
-                cell_start_x=cell_x,
-                or_col_x=or_x,
-                gap_after_and=gap_and_or,
             )
     return layouts
 
@@ -1445,7 +1667,12 @@ def _not_source_to_not_waypoints(
 
 
 class _GateExitLanes:
-    """每顆 AND/OR/NOR 的 output：先向右 (1+n)×40pt（n=全圖 catalog 序），再轉向。"""
+    """每顆 AND/OR/NOR 的 output：先向右 (1+n)×40pt，再轉向。
+
+    n＝該閘在**所屬層的 stub lane gap 內**的本地序（AND→OR gap 與 OR→Cell gap
+    各自從頭數，見 `_build_gate_lane_indices`）；**不可**沿用跨層的全域序，否則
+    OR 出口通道會被 AND 佔掉的格數整批右推、擠到 Cell 欄邊界。同一閘的正向與回授
+    共用這條 lane。"""
 
     def __init__(self) -> None:
         self._catalog_n: dict[int, int] = {}
@@ -1517,9 +1744,14 @@ class _GateExitLanes:
         src_y: int,
         entry_x: int,
         entry_y: int,
+        *,
+        max_lx: int | None = None,
     ) -> None:
-        """跨列：先 (1+n)×40 stub lane → 垂直到 entry Y → 水平進 entry（若 lx≠entry_x）。"""
+        """跨列：先 (1+n)×40 stub lane → 垂直到 entry Y → 水平進 entry（若 lx≠entry_x）。
+        max_lx：限制 stub 不可超過此 x（保證最後一段為水平向右進入 entry）。"""
         lx = self.stub_x(entity_id, entity_right)
+        if max_lx is not None and lx > max_lx:
+            lx = _align40(max_lx)
         pts: list[tuple[int, int]] = [(lx, src_y), (lx, entry_y)]
         if entry_x != lx:
             pts.append((entry_x, entry_y))
@@ -1625,8 +1857,9 @@ def _mark_traced_layout_feedback_edge(
     name_to_rail: dict[str, PowerRail],
     inner_id_to_row: dict[int, int],
     inner_id_to_output: dict[int, str],
+    tgt_layer: str = "and",
 ) -> bool:
-    """佈局回授鍵或回溯後跨列輸出腳（RSMRST Q/~Q、AND Output）。"""
+    """佈局回授鍵或回溯後跨列輸出腳（Q use=self、~Q inv、AND Output）。"""
     if _mark_layout_feedback_edge(
         edge_ids,
         edge_id,
@@ -1656,18 +1889,27 @@ def _mark_traced_layout_feedback_edge(
         output_to_row=output_to_row,
     )
     tgt_row = output_to_row.get(tgt_rail)
-    if src_row is None or tgt_row is None or src_row == tgt_row:
+    if src_row is None or tgt_row is None:
         return False
     q_rev = {v: k for k, v in q_box_id_map.items()}
     nq_rev = {v: k for k, v in nq_box_id_map.items()}
-    if pin_id in q_rev and q_rev[pin_id] == "RSMRST_N":
+    # Cell Q：use=self 跨列皆走 Q FB profile（② 先上 60pt；含 RSMRST → 下游 hi AND）
+    if pin_id in q_rev and use_mode == "self" and src_row != tgt_row:
         edge_ids.add(edge_id)
         return True
-    if pin_id in nq_rev and nq_rev[pin_id] == "RSMRST_N":
+    # Cell ~Q：inv 跨列回授（src_row > tgt_row）
+    if pin_id in nq_rev and _is_cross_row_feedback(src_row, tgt_row):
         edge_ids.add(edge_id)
         return True
+    or_rev = {v: k for k, v in or_gate_id.items()}
+    # OR/NOR → OR/NOR：跨列 hi/lo 路徑（含下游列 OR 合併）皆走 FB
+    if tgt_layer == "or" and pin_id in or_rev and src_row != tgt_row:
+        edge_ids.add(edge_id)
+        return True
+    if not _is_cross_row_feedback(src_row, tgt_row):
+        return False
     and_rev = {v: k for k, v in and_gate_id.items()}
-    if pin_id in and_rev:
+    if tgt_layer == "and" and pin_id in and_rev:
         src_rail, src_hl, _ = and_rev[pin_id]
         if _departing_and_index(
             src_rail, src_hl, idx_map=and_idx_map, name_to_rail=name_to_rail
@@ -1701,7 +1943,7 @@ def _supplement_traced_feedback_edges(
     inner_id_to_output: dict[int, str],
     deb_tgt_row: dict[int, int],
 ) -> None:
-    """Pass 1 後補標：跨列且來自 RSMRST Q/~Q 或 departing AND 輸出腳。"""
+    """Pass 1 後補標：Cell Q（任意跨列）、~Q／AND／OR 回授邊。"""
     and_rev = {v: k for k, v in and_gate_id.items()}
     or_rev = {v: k for k, v in or_gate_id.items()}
     q_rev = {v: k for k, v in q_box_id_map.items()}
@@ -1742,13 +1984,22 @@ def _supplement_traced_feedback_edges(
             inner_id_to_output=inner_id_to_output,
             output_to_row=output_to_row,
         )
-        if src_row is None or src_row == tgt_row:
+        if src_row is None or tgt_row is None or src_row == tgt_row:
             continue
-        if src_id in q_rev and q_rev[src_id] == "RSMRST_N":
+        if src_id in and_rev and tgt_id in or_rev:
+            continue
+        if src_id in q_rev:
             feedback_auto_edge_ids.add(eid)
             continue
-        if src_id in nq_rev and nq_rev[src_id] == "RSMRST_N":
+        if src_id in nq_rev:
+            if not _is_cross_row_feedback(src_row, tgt_row):
+                continue
             feedback_auto_edge_ids.add(eid)
+            continue
+        if src_id in or_rev and tgt_id in or_rev:
+            feedback_auto_edge_ids.add(eid)
+            continue
+        if not _is_cross_row_feedback(src_row, tgt_row):
             continue
         if src_id in and_rev:
             src_rail, src_hl, _ = and_rev[src_id]
@@ -1756,6 +2007,9 @@ def _supplement_traced_feedback_edges(
                 src_rail, src_hl, idx_map=and_idx_map, name_to_rail=name_to_rail
             ) is not None:
                 feedback_auto_edge_ids.add(eid)
+                continue
+        if src_id in or_rev:
+            feedback_auto_edge_ids.add(eid)
 
 
 def _dep_source_row(
@@ -1781,14 +2035,19 @@ def _logic_gate_source_row(
     dep_name: str,
     *,
     and_gate_id: dict[tuple[str, str, int], int],
+    or_gate_id: dict[tuple[str, str], int] | None = None,
     inner_id_to_row: dict[int, int],
     inner_id_to_output: dict[int, str],
     output_to_row: dict[str, int],
 ) -> int | None:
-    """邏輯閘或 cell 所在列（AND 閘依其 rail key）。"""
+    """邏輯閘或 cell 所在列（AND／OR 閘依其 rail key）。"""
     and_rev = {v: k for k, v in and_gate_id.items()}
     if gate_id in and_rev:
         return output_to_row.get(and_rev[gate_id][0])
+    if or_gate_id is not None:
+        or_rev = {v: k for k, v in or_gate_id.items()}
+        if gate_id in or_rev:
+            return output_to_row.get(or_rev[gate_id][0])
     return _dep_source_row(
         gate_id,
         dep_name,
@@ -1810,8 +2069,10 @@ def _and_dep_effective_source_row(
     lo_logic_out_id: dict[str, int],
     q_box_id_map: dict[str, int],
     nq_box_id_map: dict[str, int],
+    and_gate_id: dict[tuple[str, str, int], int] | None = None,
+    or_gate_id: dict[tuple[str, str], int] | None = None,
 ) -> int | None:
-    """use=hi/lo 時依透傳後的邏輯來源列（如 RSMRST_N 扇出至上游 AND）。"""
+    """use=hi/lo 時依透傳後的邏輯來源列（如 RSMRST_N 扇出至上游 AND／OR）。"""
     if use_mode == "hi" and dep_name in hi_logic_out_id:
         eff_id = hi_logic_out_id[dep_name]
     elif use_mode == "lo" and dep_name in lo_logic_out_id:
@@ -1824,6 +2085,14 @@ def _and_dep_effective_source_row(
         return output_to_row.get(q_rev[eff_id])
     if eff_id in nq_rev:
         return output_to_row.get(nq_rev[eff_id])
+    if and_gate_id is not None:
+        and_rev = {v: k for k, v in and_gate_id.items()}
+        if eff_id in and_rev:
+            return output_to_row.get(and_rev[eff_id][0])
+    if or_gate_id is not None:
+        or_rev = {v: k for k, v in or_gate_id.items()}
+        if eff_id in or_rev:
+            return output_to_row.get(or_rev[eff_id][0])
     if eff_id in inner_id_to_row:
         return inner_id_to_row[eff_id]
     rail = inner_id_to_output.get(eff_id)
@@ -1907,6 +2176,8 @@ def _wire_and_dep_non_input(
         lo_logic_out_id=lo_logic_out_id,
         q_box_id_map=q_box_id_map,
         nq_box_id_map=nq_box_id_map,
+        and_gate_id=and_gate_id,
+        or_gate_id=or_gate_id,
     )
     if src_row is None:
         _, src_row = _logic_pin_row(
@@ -1985,6 +2256,7 @@ def _pass1_real_source_row(
     hi_logic_out_id: dict[str, int],
     lo_logic_out_id: dict[str, int],
     and_gate_id: dict[tuple[str, str, int], int],
+    or_gate_id: dict[tuple[str, str], int],
     q_box_id_map: dict[str, int],
     nq_box_id_map: dict[str, int],
     output_to_row: dict[str, int],
@@ -1994,6 +2266,7 @@ def _pass1_real_source_row(
     for rname, gid in {**hi_logic_out_id, **lo_logic_out_id}.items():
         logic_out_row[gid] = output_to_row[rname]
     and_rev = {v: k for k, v in and_gate_id.items()}
+    or_rev = {v: k for k, v in or_gate_id.items()}
     q_rev = {v: k for k, v in q_box_id_map.items()}
     nq_rev = {v: k for k, v in nq_box_id_map.items()}
     if real_id in q_rev:
@@ -2004,6 +2277,8 @@ def _pass1_real_source_row(
         return logic_out_row[real_id]
     if real_id in and_rev:
         return output_to_row.get(and_rev[real_id][0])
+    if real_id in or_rev:
+        return output_to_row.get(or_rev[real_id][0])
     if real_id in inner_id_to_row:
         return inner_id_to_row[real_id]
     return output_to_row.get(upstream_rail)
@@ -2021,13 +2296,16 @@ def _rewire_pass1_logic_edge(
     id_to_y_center: dict[int, int],
     output_to_row: dict[str, int],
     and_gate_id: dict[tuple[str, str, int], int],
+    or_gate_id: dict[tuple[str, str], int],
     h_deb_id_map: dict[str, int],
     l_deb_id_map: dict[str, int],
     and_col_x: int,
+    or_col_x_fn,
     row_py: list[int],
     deb_entry_x_fn,
     row_bottom_fn,
     name_to_rail: dict[str, PowerRail],
+    entry_ay: float = 0.5,
 ) -> None:
     """Pass 1 將 source 換成邏輯閘後，依 stub lane 重繞（修正 placeholder 時的 cell stub）。"""
     if geo is None:
@@ -2038,7 +2316,25 @@ def _rewire_pass1_logic_edge(
         return
     _right = gate_right_x.get(src_id, and_col_x + AND_GATE_W)
     and_rev = {v: k for k, v in and_gate_id.items()}
+    or_rev = {v: k for k, v in or_gate_id.items()}
     src_row = output_to_row.get(upstream_rail)
+
+    if tgt_id in or_rev:
+        tgt_rail, _tgt_hl = or_rev[tgt_id]
+        _ty = id_to_y_center.get(tgt_id)
+        if _ty is None:
+            return
+        # 進 OR 的入口錨點在 entryY（0.25/0.75），非閘中心；用真正入口 Y 收尾，
+        # 否則 freeze 會因 10pt 落差補出多餘折角（變 5 段）。
+        _entry_y = int(round(_ty + (entry_ay - 0.5) * OR_GATE_H))
+        or_entry_x = or_col_x_fn(tgt_rail)
+        if src_row is not None and src_row != output_to_row[tgt_rail]:
+            gate_exit_lanes.wire_via_channel(
+                geo, src_id, _right, _sy, or_entry_x, _entry_y
+            )
+        else:
+            gate_exit_lanes.wire_vertical(geo, src_id, _right, _sy, _entry_y)
+        return
 
     if tgt_id in and_rev:
         tgt_key = and_rev[tgt_id]
@@ -2169,7 +2465,7 @@ def _cell_fb_channel_base_x(
 ) -> int:
     """Cell 左側 fb 區起點（AND→Cell 或 OR→Cell gap 內、stub 之後）。"""
     lay = row_gate_layout[rail]
-    if lay.has_or and lay.or_col_x is not None:
+    if lay.or_col_x is not None:
         return lay.or_col_x + OR_GATE_W + GAP + max(0, m_or - exempt_oc) * GRID
     return and_col_x + AND_GATE_W + GAP + max(0, n_and - exempt_ac) * GRID
 
@@ -2198,13 +2494,13 @@ def _feedback_channel_x(
     tgt_rail: str,
     row_gate_layout: dict[str, _RowGateLayout],
 ) -> float:
-    """依目標層選 FB 垂直幹線 x：AND 左幹線／OR 左 fb／Cell 左 fb。"""
+    """依目標層選 FB 垂直幹線 x：AND 左幹線／OR 同 AND（AND→OR gap 內固定回授幹線專區）／Cell 左 fb。"""
     if layer == "and":
         return float(channel_x_left + slot * GRID)
     if layer == "or":
-        return float(_or_fb_channel_base_x(
-            and_col_x=and_col_x, n_and=n_and, exempt_ao=exempt_ao
-        ) + slot * GRID)
+        # 比照 AND：OR 回授幹線位於 AND→OR gap 左端（AND 右緣 + GAP 起算）的固定專區，
+        # 隨 slot 向右遞增（同 source 同 slot），停在 OR 欄之前。
+        return float(and_col_x + AND_GATE_W + GAP + slot * GRID)
     if layer == "cell":
         return float(_cell_fb_channel_base_x(
             tgt_rail,
@@ -2244,6 +2540,7 @@ def _build_feedback_source_layer_slots(
     feedback_n: int,
     fb_cell: int,
     fb_or: int,
+    and_cap: int | None = None,
 ) -> dict[tuple[int, str], int]:
     """同一 source 在每個目標層（and／or／cell）只佔 1 條 FB X 通道 → (src_id, layer) → slot。"""
     and_rev = {v: k for k, v in and_gate_id.items()}
@@ -2270,7 +2567,9 @@ def _build_feedback_source_layer_slots(
             continue
         sources_by_layer[layer].add(src_id)
     caps = {
-        "and": max(1, feedback_n),
+        # AND 回授幹線：不同 source 各佔一條 lane，cap 取 channel_x_left→AND 之間
+        # 實際可容納的 lane 數（避免不同 source 被壓到同一條 x 通道）。
+        "and": max(1, and_cap if and_cap is not None else feedback_n),
         "or": max(1, fb_or),
         "cell": max(1, fb_cell),
     }
@@ -2280,6 +2579,62 @@ def _build_feedback_source_layer_slots(
         for i, src_id in enumerate(sorted(src_ids)):
             slots[(src_id, layer)] = min(i, cap - 1)
     return slots
+
+
+def _collect_logic_gate_boxes(
+    root: ET.Element,
+) -> list[tuple[float, float, float, float]]:
+    """所有 AND/OR/NAND/NOR 邏輯閘的 (x0, x1, y0, y1) 佔位框。"""
+    boxes: list[tuple[float, float, float, float]] = []
+    for cell in root.iter("mxCell"):
+        if cell.get("vertex") != "1":
+            continue
+        sty = cell.get("style") or ""
+        if "logic_gates.logic_gate" not in sty:
+            continue
+        geo = cell.find("mxGeometry")
+        if geo is None:
+            continue
+        x = float(geo.get("x", 0))
+        y = float(geo.get("y", 0))
+        w = float(geo.get("width", 0))
+        h = float(geo.get("height", 0))
+        boxes.append((x, x + w, y, y + h))
+    return boxes
+
+
+def _first_clear_up_y(
+    start_y: float,
+    xa: float,
+    xb: float,
+    gate_boxes: list[tuple[float, float, float, float]],
+    *,
+    avoid: list[tuple[float, float, float]] | None = None,
+    max_steps: int = 60,
+) -> float:
+    """自 start_y 起一律向上（y 遞減）逐格(GRID)搜尋，回傳第一條同時滿足：
+    (1) 與 [xa, xb] 內任何閘體／閘邊不重疊；
+    (2) 不與其他 source 已佔用且 x 區間重疊的回授橫列同列；
+    的 40 對齊水平列；找不到則回傳原值。avoid 為 (y, x0, x1) 清單。"""
+    lo_x, hi_x = (xa, xb) if xa <= xb else (xb, xa)
+    crossed = [
+        (gy0, gy1)
+        for (gx0, gx1, gy0, gy1) in gate_boxes
+        if gx1 >= lo_x and gx0 <= hi_x
+    ]
+    avoid_rows = [
+        ay
+        for (ay, ax0, ax1) in (avoid or [])
+        if ax1 >= lo_x and ax0 <= hi_x
+    ]
+    y = _align40(start_y)
+    for _ in range(max_steps):
+        gate_ok = all(not (gy0 <= y <= gy1) for gy0, gy1 in crossed)
+        row_ok = all(abs(y - ar) > 1 for ar in avoid_rows)
+        if gate_ok and row_ok:
+            return float(y)
+        y -= GRID
+    return float(_align40(start_y))
 
 
 def _apply_feedback_routing(
@@ -2318,6 +2673,8 @@ def _apply_feedback_routing(
         deb_rail_by_id[nid] = rname
     for rname, nid in l_deb_id_map.items():
         deb_rail_by_id[nid] = rname
+    # AND 回授幹線專區（channel_x_left → AND 欄，需保留 ≥GAP 進閘水平段）實際可容納的 lane 數。
+    and_fb_lane_cap = max(1, (and_col_x - GAP - channel_x_left) // GRID + 1)
     source_layer_slots = _build_feedback_source_layer_slots(
         root,
         feedback_auto_edge_ids,
@@ -2327,7 +2684,46 @@ def _apply_feedback_routing(
         feedback_n=feedback_n,
         fb_cell=fb_cell,
         fb_or=fb_or,
+        and_cap=and_fb_lane_cap,
     )
+    gate_boxes = _collect_logic_gate_boxes(root)
+    # 同一 source 共用一條回授橫列；不同 source 之間（含跨層）橫列須錯開。
+    source_or_row: dict[int, float] = {}
+    used_fb_rows: list[tuple[float, float, float]] = []
+
+    # issue 3：cell 回授垂直幹線需避開「實際被佔用」的垂直車道（既有正向邊垂直段
+    # ＋ gate-profile 回授的 ① stub 車道），尤其 OR 閘 gate-exit stub。
+    occupied_vx: set[int] = set()
+    for _c in root.iter("mxCell"):
+        if _c.get("edge") != "1":
+            continue
+        _g = _c.find("mxGeometry")
+        _arr = _g.find("Array") if _g is not None else None
+        if _arr is None:
+            continue
+        _p = [(float(m.get("x")), float(m.get("y"))) for m in _arr.findall("mxPoint")]
+        for _a, _b in zip(_p, _p[1:]):
+            if abs(_a[0] - _b[0]) < 1 and abs(_a[1] - _b[1]) > 1:
+                occupied_vx.add(int(round(_a[0])))
+    for _c in root.iter("mxCell"):
+        if _c.get("edge") != "1":
+            continue
+        _eid = _c.get("id")
+        if _eid is None or _eid not in feedback_auto_edge_ids:
+            continue
+        try:
+            _sid = int(_c.get("source") or "")
+        except ValueError:
+            continue
+        if _feedback_profile(_sid, q_box_id_map=q_box_id_map, nq_box_id_map=nq_box_id_map) != "gate":
+            continue
+        _sr = gate_right_x.get(_sid)
+        if _sr is None:
+            continue
+        # gate-profile 回授 ① 一律走 catalog (1+n)×40 預留通道（每顆閘各自一條）。
+        occupied_vx.add(int(_align40(gate_exit_lanes.stub_x(_sid, _sr))))
+    assigned_cell_vx: set[int] = set()
+    source_cell_x: dict[int, float] = {}
 
     for cell in root.iter("mxCell"):
         if cell.get("edge") != "1":
@@ -2368,18 +2764,6 @@ def _apply_feedback_routing(
             right_delta = 0
             up_delta = FB_Q_UP
 
-        if profile == "gate":
-            stub_right = gate_right_x.get(
-                src_id, gate_exit_lanes.stub_x(src_id, and_col_x + AND_GATE_W)
-            )
-            p1x = float(gate_exit_lanes.stub_x(src_id, stub_right))
-        else:
-            p1x = ex + right_delta
-        p1y = ey
-        # Q／~Q／閘：第二段一律先向上（40+20pt）；第四段再依目標 Y 上／下
-        p2y = ey - up_delta
-        p2x = p1x
-
         try:
             tgt_id = int(tgt_s)
         except ValueError:
@@ -2400,6 +2784,19 @@ def _apply_feedback_routing(
             entry_x = float(deb_entry_x_fn(tgt_rail))
         else:
             continue
+
+        if profile == "gate":
+            # ① 一律走到該閘「轉角輸出」的預留 stub 通道（catalog (1+n)×40，每顆閘各自一條）；
+            # 不同 source 不共用同一 X 通道（含 OR→OR）。placement 已預留此通道。
+            stub_right = gate_right_x.get(src_id, and_col_x + AND_GATE_W)
+            p1x = float(gate_exit_lanes.stub_x(src_id, stub_right))
+        else:
+            p1x = ex + right_delta
+        p1y = ey
+        # Q／~Q／閘：第二段一律先向上（40+20pt）；第四段再依目標 Y 上／下
+        p2y = ey - up_delta
+        p2x = p1x
+
         slot = source_layer_slots.get((src_id, tgt_layer), 0)
         p3x = _feedback_channel_x(
             tgt_layer,
@@ -2414,9 +2811,37 @@ def _apply_feedback_routing(
             tgt_rail=tgt_rail,
             row_gate_layout=row_gate_layout,
         )
+        # issue 3：cell 回授垂直幹線若落在被佔用的車道（OR 閘 gate-exit stub 等），
+        # 往左（朝 OR 欄）逐格挪到無垂直線的空車道，避免與 OR 回授路線重疊。
+        if tgt_layer == "cell":
+            if src_id in source_cell_x:
+                # 同一 source 同層共用一條 X 通道（不可因避讓被拆成多條）。
+                p3x = source_cell_x[src_id]
+            else:
+                _floor_x = and_col_x + AND_GATE_W + GAP
+                _cx = int(_align40(p3x))
+                while (_cx in occupied_vx or _cx in assigned_cell_vx) and _cx - GRID >= _floor_x:
+                    _cx -= GRID
+                p3x = float(_cx)
+                assigned_cell_vx.add(_cx)
+                source_cell_x[src_id] = p3x
+
+        # OR→OR（gate profile）：② 上移量感知上下相鄰閘佔位，停到真正乾淨的列，
+        # 避免橫線壓在相鄰 OR 閘邊（密集 80pt 堆疊時 40 對齊會落在閘邊）。
+        if profile == "gate" and tgt_layer == "or":
+            if src_id in source_or_row:
+                p2y = source_or_row[src_id]
+            else:
+                p2y = _first_clear_up_y(
+                    p2y, p1x, p3x, gate_boxes, avoid=used_fb_rows
+                )
+                source_or_row[src_id] = p2y
+            p2x = p1x
         p3y = p2y
         p4x = p3x
         p4y = ty
+        # 記錄本邊橫列（y 與 x 區間），供後續其他 source 的 OR 回授避開同列重疊。
+        used_fb_rows.append((p2y, min(p1x, p3x), max(p1x, p3x)))
 
         geo = cell.find("mxGeometry")
         if geo is None:
@@ -2658,21 +3083,6 @@ def _add_edge_points(
         x = _align40(px) if do_align else round(float(px))
         y = _align40(py) if do_align else round(float(py))
         ET.SubElement(arr, "mxPoint", {"x": str(x), "y": str(y)})
-
-
-def _add_edge_waypoint(
-    geo: ET.Element,
-    cell_xy: tuple[int, int],
-    label_xy: tuple[int, int],
-    waypoint_x: int | None = None,
-    gate_right_x: int | None = None,
-    row_py: int | None = None,
-) -> None:
-    """為 cell→input 的邊加 waypoints（依 golden 原則：垂直 only，(channel_x, cy)→(channel_x, ly)）。"""
-    cy = cell_xy[1] + CELL_GROUP_H // 2
-    ly = _input_label_center_y(label_xy[1])
-    wx = waypoint_x if waypoint_x is not None else CHANNEL_X_LEFT
-    _add_edge_points(geo, [(wx, cy), (wx, ly)], align=[True, False])
 
 
 def _wire_input_to_gate(geo: ET.Element, label_xy: tuple[int, int], gate_y: int) -> None:
@@ -2944,9 +3354,6 @@ def generate_drawio(
     }
     min_cell_top_y = min(y for _, y in positions_out.values())
 
-    def _ch_left_x(dep_name: str, rail_name: str, hl: str, gi: int) -> int:
-        return channel_x_left
-
     # 記錄每個 rail 的 Hi/Lo 邏輯輸出 cell id（AND/OR 閘或直連來源），
     # 供 use_mode="hi"/"lo" 時作為出發點（而非 H_Deb/L_Deb 本身）。
     # 邊生成迴圈依拓撲序處理，確保被依賴者的 ID 在被引用前已記錄。
@@ -3001,18 +3408,15 @@ def generate_drawio(
     feedback_auto_edge_ids: set[str] = set()
     style_output_name = "text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;rounded=0;"
     style_edge_o_to_name = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;strokeColor=%s;endArrow=classic;endFill=1;" % STROKE_DEFAULT
-    # cell→input 反向標示邊：箭頭在 source(cell) 端表示「cell 取訊號」；
-    # 強制 entryX=1, entryY=0.5 讓 target 端固定連 input label 右邊中央（避免 Draw.io 自動連到左邊）。
-    style_edge_h_to_label = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.25;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;startArrow=classic;startFill=1;endArrow=none;endFill=0;strokeColor=%s;" % STROKE_DEFAULT
-    style_edge_l_to_label = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.75;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;startArrow=classic;startFill=1;endArrow=none;endFill=0;strokeColor=%s;" % STROKE_DEFAULT
     # 邏輯閘左側輸入 pin：2 輸入用 0.25/0.75，3+ 輸入均分 (對齊 mxgraph logic_gate)
     # exit_left 應只在 source 是 output cell（取 H_Deb/L_Deb 訊號）時使用；
     # source 是 input label 時 input 沒有 H/L 概念，一律從右邊出（exitX=1）。
-    _deb_placeholder_ids = set(h_deb_id_map.values()) | set(l_deb_id_map.values())
+    def _is_deb_placeholder(from_id: int) -> bool:
+        return from_id in h_deb_id_map.values() or from_id in l_deb_id_map.values()
 
     def _use_hi_lo_deb_placeholder_exit(from_id: int, use_mode: str) -> bool:
         """use=hi/lo 且來源仍為上游 H/L_Deb 佔位符時，才從左側出（Pass 1 再換成 logic out）。"""
-        return use_mode in ("hi", "lo") and from_id in _deb_placeholder_ids
+        return use_mode in ("hi", "lo") and _is_deb_placeholder(from_id)
 
     def _style_edge_to_gate_entry(entry_y: float, source_id: int, use_mode: str | None) -> str:
         is_input_src = source_id in set(in_label_id.values())
@@ -3020,7 +3424,7 @@ def generate_drawio(
         exit_left = (
             use_mode in ("hi", "lo")
             and not is_input_src
-            and source_id in _deb_placeholder_ids
+            and _is_deb_placeholder(source_id)
         )
         ex = 0 if exit_left else 1
         return (
@@ -3142,6 +3546,12 @@ def generate_drawio(
     for name, nqid in nq_box_id_map.items():
         py = positions_out[name][1]
         id_to_y_center[nqid] = py + CELL_NQ_Y + CELL_NQ_H // 2
+    for name, hid in h_deb_id_map.items():
+        py = positions_out[name][1]
+        id_to_y_center[hid] = py + CELL_H_DEB_Y + CELL_H_DEB_H // 2
+    for name, lid in l_deb_id_map.items():
+        py = positions_out[name][1]
+        id_to_y_center[lid] = py + CELL_L_DEB_Y + CELL_L_DEB_H // 2
 
     # 每個 label id 所屬的 row（僅在「不同 row」時加 waypoints，與 debug_golden 一致）
     id_to_row: dict[int, int] = {}
@@ -3213,7 +3623,7 @@ def generate_drawio(
         hi_groups = r.get_hi_groups()
         if len(hi_groups) >= 2:
             # 每筆 = (from_id, dep_name_if_direct_inv 或 None, use_mode)；後者用於 OR 邊建立時記 _inv_edges
-            group_outputs_hi: list[tuple[int, str | None, str]] = []
+            group_outputs_hi: list[tuple[int, str, str | None, str, int]] = []
             for gi, group in enumerate(hi_groups):
                 if not group:
                     continue
@@ -3224,7 +3634,9 @@ def generate_drawio(
                     if d in valid and d not in CONST_DEPS:
                         from_id = _source_id(d, inv_list[0], True, use_list[0])
                         if from_id is not None:
-                            group_outputs_hi.append((from_id, d if inv_list[0] else None, use_list[0]))
+                            group_outputs_hi.append(
+                                (from_id, d, d if inv_list[0] else None, use_list[0], gi)
+                            )
                 else:
                     key_hi = (r.name, "hi", gi)
                     if key_hi not in and_gate_id:
@@ -3294,7 +3706,7 @@ def generate_drawio(
                         geo.text = "\n            "
                     _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
                     logic_hi = and_gate_id[key_hi]
-                    group_outputs_hi.append((logic_hi, None, "self"))
+                    group_outputs_hi.append((logic_hi, r.name, None, "self", gi))
             if group_outputs_hi:
                 or_id = cell_id
                 cell_id += 1
@@ -3319,7 +3731,7 @@ def generate_drawio(
                 hi_gate_out_ids = {
                     and_gate_id[k] for k in and_gate_id if k[0] == r.name and k[1] == "hi"
                 }
-                for idx, (src_id, dep_inv, dep_um) in enumerate(sorted_hi):
+                for idx, (src_id, dep_name, dep_inv, dep_um, dep_gi) in enumerate(sorted_hi):
                     sty = _style_edge_to_gate_entry(_gate_entry_y(idx, len(sorted_hi)), src_id, dep_um)
                     eid = str(cell_id)
                     cell = ET.SubElement(root, "mxCell", {"id": eid, "style": sty, "edge": "1", "parent": "1", "source": str(src_id), "target": str(or_id)})
@@ -3337,43 +3749,61 @@ def generate_drawio(
                         # 輸入→OR：freeze_edge_routing 會補 stub waypoints
                         pass
                     else:
-                        dep_name = inner_id_to_output.get(src_id, "")
-                        src_row = _logic_gate_source_row(
+                        is_fb = _mark_traced_layout_feedback_edge(
+                            feedback_auto_edge_ids,
+                            eid,
                             src_id,
                             dep_name,
+                            dep_um,
+                            r.name,
+                            "hi",
+                            dep_gi,
+                            0,
+                            layout_feedback_dep_keys=layout_feedback_dep_keys,
+                            output_to_row=output_to_row,
+                            q_box_id_map=q_box_id_map,
+                            nq_box_id_map=nq_box_id_map,
+                            hi_logic_out_id=hi_logic_out_id,
+                            lo_logic_out_id=lo_logic_out_id,
                             and_gate_id=and_gate_id,
+                            or_gate_id=or_gate_id,
+                            and_idx_map=idx_map,
+                            name_to_rail=name_to_rail,
                             inner_id_to_row=inner_id_to_row,
                             inner_id_to_output=inner_id_to_output,
-                            output_to_row=output_to_row,
+                            tgt_layer="or",
                         )
-                        tgt_row = output_to_row[r.name]
-                        or_entry_x = _or_col_x(r.name)
-                        if src_row is not None and src_row < tgt_row:
-                            _sy = id_to_y_center[src_id]
-                            _right = _logic_source_right_x(
+                        if not is_fb:
+                            src_row = _logic_gate_source_row(
                                 src_id,
+                                dep_name,
+                                and_gate_id=and_gate_id,
+                                or_gate_id=or_gate_id,
+                                inner_id_to_row=inner_id_to_row,
                                 inner_id_to_output=inner_id_to_output,
-                                q_box_id_map=q_box_id_map,
-                                nq_box_id_map=nq_box_id_map,
-                                positions_out=positions_out,
-                                gate_right_x=gate_right_x,
-                                and_col_x=and_col_x,
+                                output_to_row=output_to_row,
                             )
-                            gate_exit_lanes.wire_via_channel(
-                                geo, src_id, _right, _sy, or_entry_x, _oy
-                            )
-                        else:
-                            _sy = id_to_y_center[src_id]
-                            _right = _logic_source_right_x(
-                                src_id,
-                                inner_id_to_output=inner_id_to_output,
-                                q_box_id_map=q_box_id_map,
-                                nq_box_id_map=nq_box_id_map,
-                                positions_out=positions_out,
-                                gate_right_x=gate_right_x,
-                                and_col_x=and_col_x,
-                            )
-                            gate_exit_lanes.wire_vertical(geo, src_id, _right, _sy, _oy)
+                            tgt_row = output_to_row[r.name]
+                            or_entry_x = _or_col_x(r.name)
+                            _sy = id_to_y_center.get(src_id)
+                            if _sy is not None:
+                                _right = _logic_source_right_x(
+                                    src_id,
+                                    inner_id_to_output=inner_id_to_output,
+                                    q_box_id_map=q_box_id_map,
+                                    nq_box_id_map=nq_box_id_map,
+                                    positions_out=positions_out,
+                                    gate_right_x=gate_right_x,
+                                    and_col_x=and_col_x,
+                                )
+                                if src_row is not None and src_row < tgt_row:
+                                    gate_exit_lanes.wire_via_channel(
+                                        geo, src_id, _right, _sy, or_entry_x, _oy
+                                    )
+                                else:
+                                    gate_exit_lanes.wire_vertical(
+                                        geo, src_id, _right, _sy, _oy
+                                    )
                     geo.text = "\n            "
                 or_out_hi = or_id
                 cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": style_or_to_cell_hi, "edge": "1", "parent": "1", "source": str(or_out_hi), "target": str(to_h_deb)})
@@ -3383,6 +3813,7 @@ def generate_drawio(
                 gate_exit_lanes.wire_via_channel(
                     geo, or_out_hi, gate_right_x[or_out_hi], id_to_y_center[or_out_hi],
                     _deb_entry_x(r.name), _deb_y,
+                    max_lx=_deb_entry_x(r.name) - GRID,
                 )
                 geo.text = "\n            "
                 hi_logic_out_id[r.name] = or_out_hi
@@ -3403,26 +3834,20 @@ def generate_drawio(
                         continue
                     _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
                     is_input_dep = name_to_rail[d].seq_type == "input"
-                    # inv=True 時統一走「正向邊」(source=來源, target=H_Deb)，方便 post-fix 插入共用 NOT。
-                    if is_input_dep and not _iv:
-                        cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": style_edge_h_to_label, "edge": "1", "parent": "1", "source": str(to_inner), "target": str(from_id)})
-                    else:
-                        _sty = (
-                            style_hi_to_cell_left
-                            if _use_hi_lo_deb_placeholder_exit(from_id, _use)
-                            else style_hi_to_cell
-                        )
-                        eid = str(cell_id)
-                        cell = ET.SubElement(root, "mxCell", {"id": eid, "style": _sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(to_h_deb)})
+                    # input→Cell 與 inv=True 一律走「正向邊」(source=來源, target=H_Deb)：
+                    # source 為 input label 者自動歸 Rule 1 正交自動（不畫反向標示邊）。
+                    _sty = (
+                        style_hi_to_cell_left
+                        if _use_hi_lo_deb_placeholder_exit(from_id, _use)
+                        else style_hi_to_cell
+                    )
+                    eid = str(cell_id)
+                    cell = ET.SubElement(root, "mxCell", {"id": eid, "style": _sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(to_h_deb)})
                     if _iv:
                         _inv_edges[str(cell_id)] = (d, _use)
                     cell_id += 1
                     geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                    if is_input_dep and not _iv:
-                        label_pos = positions_in.get(d)
-                        if label_pos:
-                            _add_edge_waypoint(geo, positions_out[r.name], label_pos, waypoint_x=_ch_left_x(d, r.name, "hi", gi), gate_right_x=_deb_entry_x(r.name), row_py=_py)
-                    elif not is_input_dep:
+                    if not is_input_dep:
                         deb_y = _py + CELL_H_DEB_Y + CELL_H_DEB_H // 2
                         src_row = _dep_source_row(
                             from_id,
@@ -3457,6 +3882,9 @@ def generate_drawio(
                             gate_exit_lanes.wire_via_channel(
                                 geo, from_id, _right, _sy, _deb_entry_x(r.name), deb_y
                             )
+                        elif src_row is not None and src_row > tgt_row:
+                            # 上行回授（含 Q／~Q）→ 交由五段凍結回授走線（依 profile）。
+                            feedback_auto_edge_ids.add(eid)
                         else:
                             _sy = id_to_y_center.get(from_id, _py + 40)
                             _right = _logic_source_right_x(
@@ -3558,7 +3986,7 @@ def generate_drawio(
 
         lo_groups = r.get_lo_groups()
         if len(lo_groups) >= 2:
-            group_outputs_lo: list[tuple[int, str | None, str]] = []
+            group_outputs_lo: list[tuple[int, str, str | None, str, int]] = []
             for gi, group in enumerate(lo_groups):
                 if not group:
                     continue
@@ -3569,7 +3997,9 @@ def generate_drawio(
                     if d in valid and d not in CONST_DEPS:
                         from_id = _source_id(d, inv_list[0], False, use_list[0])
                         if from_id is not None:
-                            group_outputs_lo.append((from_id, d if inv_list[0] else None, use_list[0]))
+                            group_outputs_lo.append(
+                                (from_id, d, d if inv_list[0] else None, use_list[0], gi)
+                            )
                 else:
                     key_lo = (r.name, "lo", gi)
                     if key_lo not in and_gate_id:
@@ -3639,7 +4069,7 @@ def generate_drawio(
                         geo.text = "\n            "
                     _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
                     logic_lo = and_gate_id[key_lo]
-                    group_outputs_lo.append((logic_lo, None, "self"))
+                    group_outputs_lo.append((logic_lo, r.name, None, "self", gi))
             if group_outputs_lo:
                 or_id = cell_id
                 cell_id += 1
@@ -3664,7 +4094,7 @@ def generate_drawio(
                 lo_gate_out_ids = {
                     and_gate_id[k] for k in and_gate_id if k[0] == r.name and k[1] == "lo"
                 }
-                for idx, (src_id, dep_inv, dep_um) in enumerate(sorted_lo):
+                for idx, (src_id, dep_name, dep_inv, dep_um, dep_gi) in enumerate(sorted_lo):
                     sty = _style_edge_to_gate_entry(_gate_entry_y(idx, len(sorted_lo)), src_id, dep_um)
                     eid = str(cell_id)
                     cell = ET.SubElement(root, "mxCell", {"id": eid, "style": sty, "edge": "1", "parent": "1", "source": str(src_id), "target": str(or_id)})
@@ -3682,43 +4112,61 @@ def generate_drawio(
                         # 輸入→OR：freeze_edge_routing 會補 stub waypoints
                         pass
                     else:
-                        dep_name = inner_id_to_output.get(src_id, "")
-                        src_row = _logic_gate_source_row(
+                        is_fb = _mark_traced_layout_feedback_edge(
+                            feedback_auto_edge_ids,
+                            eid,
                             src_id,
                             dep_name,
+                            dep_um,
+                            r.name,
+                            "lo",
+                            dep_gi,
+                            0,
+                            layout_feedback_dep_keys=layout_feedback_dep_keys,
+                            output_to_row=output_to_row,
+                            q_box_id_map=q_box_id_map,
+                            nq_box_id_map=nq_box_id_map,
+                            hi_logic_out_id=hi_logic_out_id,
+                            lo_logic_out_id=lo_logic_out_id,
                             and_gate_id=and_gate_id,
+                            or_gate_id=or_gate_id,
+                            and_idx_map=idx_map,
+                            name_to_rail=name_to_rail,
                             inner_id_to_row=inner_id_to_row,
                             inner_id_to_output=inner_id_to_output,
-                            output_to_row=output_to_row,
+                            tgt_layer="or",
                         )
-                        tgt_row = output_to_row[r.name]
-                        or_entry_x = _or_col_x(r.name)
-                        if src_row is not None and src_row < tgt_row:
-                            _sy = id_to_y_center[src_id]
-                            _right = _logic_source_right_x(
+                        if not is_fb:
+                            src_row = _logic_gate_source_row(
                                 src_id,
+                                dep_name,
+                                and_gate_id=and_gate_id,
+                                or_gate_id=or_gate_id,
+                                inner_id_to_row=inner_id_to_row,
                                 inner_id_to_output=inner_id_to_output,
-                                q_box_id_map=q_box_id_map,
-                                nq_box_id_map=nq_box_id_map,
-                                positions_out=positions_out,
-                                gate_right_x=gate_right_x,
-                                and_col_x=and_col_x,
+                                output_to_row=output_to_row,
                             )
-                            gate_exit_lanes.wire_via_channel(
-                                geo, src_id, _right, _sy, or_entry_x, _oy
-                            )
-                        else:
-                            _sy = id_to_y_center[src_id]
-                            _right = _logic_source_right_x(
-                                src_id,
-                                inner_id_to_output=inner_id_to_output,
-                                q_box_id_map=q_box_id_map,
-                                nq_box_id_map=nq_box_id_map,
-                                positions_out=positions_out,
-                                gate_right_x=gate_right_x,
-                                and_col_x=and_col_x,
-                            )
-                            gate_exit_lanes.wire_vertical(geo, src_id, _right, _sy, _oy)
+                            tgt_row = output_to_row[r.name]
+                            or_entry_x = _or_col_x(r.name)
+                            _sy = id_to_y_center.get(src_id)
+                            if _sy is not None:
+                                _right = _logic_source_right_x(
+                                    src_id,
+                                    inner_id_to_output=inner_id_to_output,
+                                    q_box_id_map=q_box_id_map,
+                                    nq_box_id_map=nq_box_id_map,
+                                    positions_out=positions_out,
+                                    gate_right_x=gate_right_x,
+                                    and_col_x=and_col_x,
+                                )
+                                if src_row is not None and src_row < tgt_row:
+                                    gate_exit_lanes.wire_via_channel(
+                                        geo, src_id, _right, _sy, or_entry_x, _oy
+                                    )
+                                else:
+                                    gate_exit_lanes.wire_vertical(
+                                        geo, src_id, _right, _sy, _oy
+                                    )
                     geo.text = "\n            "
                 or_out_lo = or_id
                 cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": style_or_to_cell_lo, "edge": "1", "parent": "1", "source": str(or_out_lo), "target": str(to_l_deb)})
@@ -3728,6 +4176,7 @@ def generate_drawio(
                 gate_exit_lanes.wire_via_channel(
                     geo, or_out_lo, gate_right_x[or_out_lo], id_to_y_center[or_out_lo],
                     _deb_entry_x(r.name), _deb_y,
+                    max_lx=_deb_entry_x(r.name) - GRID,
                 )
                 geo.text = "\n            "
                 lo_logic_out_id[r.name] = or_out_lo
@@ -3748,25 +4197,20 @@ def generate_drawio(
                         continue
                     _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
                     is_input_dep = name_to_rail[d].seq_type == "input"
-                    if is_input_dep and not _iv:
-                        cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": style_edge_l_to_label, "edge": "1", "parent": "1", "source": str(to_inner), "target": str(from_id)})
-                    else:
-                        _sty = (
-                            style_lo_to_cell_left
-                            if _use_hi_lo_deb_placeholder_exit(from_id, _use)
-                            else style_lo_to_cell
-                        )
-                        eid = str(cell_id)
-                        cell = ET.SubElement(root, "mxCell", {"id": eid, "style": _sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(to_l_deb)})
+                    # input→Cell 與 inv=True 一律走「正向邊」(source=來源, target=L_Deb)：
+                    # source 為 input label 者自動歸 Rule 1 正交自動（不畫反向標示邊）。
+                    _sty = (
+                        style_lo_to_cell_left
+                        if _use_hi_lo_deb_placeholder_exit(from_id, _use)
+                        else style_lo_to_cell
+                    )
+                    eid = str(cell_id)
+                    cell = ET.SubElement(root, "mxCell", {"id": eid, "style": _sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(to_l_deb)})
                     if _iv:
                         _inv_edges[str(cell_id)] = (d, _use)
                     cell_id += 1
                     geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                    if is_input_dep and not _iv:
-                        label_pos = positions_in.get(d)
-                        if label_pos:
-                            _add_edge_waypoint(geo, positions_out[r.name], label_pos, waypoint_x=_ch_left_x(d, r.name, "lo", gi), gate_right_x=_deb_entry_x(r.name), row_py=_py)
-                    elif not is_input_dep:
+                    if not is_input_dep:
                         deb_y = _py + CELL_L_DEB_Y + CELL_L_DEB_H // 2
                         src_row = _dep_source_row(
                             from_id,
@@ -3801,6 +4245,9 @@ def generate_drawio(
                             gate_exit_lanes.wire_via_channel(
                                 geo, from_id, _right, _sy, _deb_entry_x(r.name), deb_y
                             )
+                        elif src_row is not None and src_row > tgt_row:
+                            # 上行回授（含 Q／~Q）→ 交由五段凍結回授走線（依 profile）。
+                            feedback_auto_edge_ids.add(eid)
                         else:
                             _sy = id_to_y_center.get(from_id, _py + 40)
                             _right = _logic_source_right_x(
@@ -3918,6 +4365,7 @@ def generate_drawio(
     l_deb_ids: dict[int, str] = {nid: rname for rname, nid in l_deb_id_map.items()}
 
     and_rev_pass1 = {v: k for k, v in and_gate_id.items()}
+    or_rev_pass1 = {v: k for k, v in or_gate_id.items()}
     deb_tgt_row: dict[int, int] = {}
     for rname, nid in h_deb_id_map.items():
         deb_tgt_row[nid] = output_to_row[rname]
@@ -3978,6 +4426,7 @@ def generate_drawio(
             hi_logic_out_id=hi_logic_out_id,
             lo_logic_out_id=lo_logic_out_id,
             and_gate_id=and_gate_id,
+            or_gate_id=or_gate_id,
             q_box_id_map=q_box_id_map,
             nq_box_id_map=nq_box_id_map,
             output_to_row=output_to_row,
@@ -3985,6 +4434,8 @@ def generate_drawio(
         tgt_row: int | None = None
         if tgt_id in and_rev_pass1:
             tgt_row = output_to_row[and_rev_pass1[tgt_id][0]]
+        elif tgt_id in or_rev_pass1:
+            tgt_row = output_to_row[or_rev_pass1[tgt_id][0]]
         elif tgt_id in deb_tgt_row:
             tgt_row = deb_tgt_row[tgt_id]
         edge_id_str = edge_cell.get("id")
@@ -4013,13 +4464,16 @@ def generate_drawio(
                 id_to_y_center=id_to_y_center,
                 output_to_row=output_to_row,
                 and_gate_id=and_gate_id,
+                or_gate_id=or_gate_id,
                 h_deb_id_map=h_deb_id_map,
                 l_deb_id_map=l_deb_id_map,
                 and_col_x=and_col_x,
+                or_col_x_fn=_or_col_x,
                 row_py=row_py,
                 deb_entry_x_fn=_deb_entry_x,
                 row_bottom_fn=_row_bottom,
                 name_to_rail=name_to_rail,
+                entry_ay=_style_float(sty, "entryY", 0.5),
             )
 
     # ---- Pass 2: 為每個唯一 (d, use_mode) 建立共用 NOT 閘 ----
@@ -4104,7 +4558,9 @@ def generate_drawio(
     n_and_total = _count_total_and_gates(outputs)
     m_or_total = _count_total_or_gates(outputs)
     fb_cell_total = _count_cell_fb_to_deb(outputs, output_to_row, name_to_rail, valid)
-    fb_or_total = _count_total_output_deps_to_or_path(outputs, name_to_rail, valid)
+    fb_or_total = _count_or_fb_routing_slots(
+        outputs, output_to_row, name_to_rail, valid
+    )
     exempt_ao, exempt_ac, exempt_oc = _count_direct_horizontal_exempts(
         outputs,
         output_to_row,
