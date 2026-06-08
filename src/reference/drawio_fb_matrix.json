@@ -35,21 +35,24 @@
         "IN_B"
       ],
       "depends_on_lo": [
-        "FB_HUB"
+        "FB_HUB",
+        "RAIL_NAND"
       ],
       "depends_on_hi_inv": {
         "IN_A": false,
         "IN_B": false
       },
       "depends_on_lo_inv": {
-        "FB_HUB": true
+        "FB_HUB": true,
+        "RAIL_NAND": false
       },
       "depends_on_hi_use": {
         "IN_A": "self",
         "IN_B": "self"
       },
       "depends_on_lo_use": {
-        "FB_HUB": "self"
+        "FB_HUB": "self",
+        "RAIL_NAND": "hi"
       },
       "depends_on_hi_inv_groups": [
         [
@@ -59,7 +62,8 @@
       ],
       "depends_on_lo_inv_groups": [
         [
-          true
+          true,
+          false
         ]
       ],
       "depends_on_hi_use_groups": [
@@ -70,7 +74,8 @@
       ],
       "depends_on_lo_use_groups": [
         [
-          "self"
+          "self",
+          "hi"
         ]
       ],
       "depends_on_hi_groups": [
@@ -81,7 +86,8 @@
       ],
       "depends_on_lo_groups": [
         [
-          "FB_HUB"
+          "FB_HUB",
+          "RAIL_NAND"
         ]
       ],
       "pulse_hi": "iPulse_1us",

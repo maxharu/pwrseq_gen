@@ -9,7 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from config_models import PowerSeqConfig
 from drawio_export import (
+    AND_GATE_DY,
     GRID,
+    OR_GATE_OFFSET_HI_Y,
+    OR_GATE_OFFSET_LO_Y,
     _build_or_index_per_key,
     _feedback_y_slack_after_and,
     _feedback_y_slack_after_or,
@@ -27,11 +30,12 @@ def _load_power_outputs():
     output_to_row = {r.name: j for j, r in enumerate(outputs)}
     and_index_per_key = {}
     for j, r in enumerate(outputs):
-        idx = 0
         for hl, groups in [("hi", r.get_hi_groups()), ("lo", r.get_lo_groups())]:
+            base = OR_GATE_OFFSET_HI_Y if hl == "hi" else OR_GATE_OFFSET_LO_Y
+            idx = 0
             for gi, g in enumerate(groups):
                 if len(g) >= 2:
-                    and_index_per_key[(r.name, hl, gi)] = (j, idx)
+                    and_index_per_key[(r.name, hl, gi)] = (j, base + idx * AND_GATE_DY)
                     idx += 1
     or_index_per_key = _build_or_index_per_key(outputs)
     return outputs, valid, name_to_rail, output_to_row, and_index_per_key, or_index_per_key
@@ -53,11 +57,50 @@ def test_cell_row_slack_cross_row_fb_to_deb():
     slack = _feedback_y_slack_between_cell_rows(
         outputs, output_to_row, name_to_rail, valid
     )
-    assert all(v == GRID for v in slack.values())
-    # RSMRST→row0 經 gap 0..6；RSMRST→row4 經 4..6；PCH_PWROK→row9 經 9..10 → 去重 0..6,9,10
-    assert len(slack) == 9
-    assert sum(slack.values()) == 9 * GRID
-    assert set(slack) == {0, 1, 2, 3, 4, 5, 6, 9, 10}
+    # RSMRST_N row7：q→gap6、nq→gap5+6；Q／~Q 不共用 → gap6 累加 80pt
+    assert slack == {5: GRID, 6: 2 * GRID, 9: GRID, 10: GRID}
+    assert sum(slack.values()) == 5 * GRID
+
+
+def test_cell_row_slack_rsmrst_collects_q_and_nq_profiles():
+    """RSMRST 同時有 Q→AND 與 ~Q→Deb 跨列回授，Cell slack 須合併 q／nq profile。"""
+    outputs, valid, name_to_rail, output_to_row, _, _ = _load_power_outputs()
+    profiles: dict[str, set[str]] = {}
+    for tgt in outputs:
+        tgt_row = output_to_row[tgt.name]
+        for hl, groups in [("hi", tgt.get_hi_groups()), ("lo", tgt.get_lo_groups())]:
+            for gi, group in enumerate(groups):
+                for ii, d in enumerate(group):
+                    if d != "RSMRST_N":
+                        continue
+                    if name_to_rail[d].seq_type != "output":
+                        continue
+                    src_row = output_to_row.get(d)
+                    if src_row is None or src_row == tgt_row:
+                        continue
+                    use = (
+                        tgt.get_hi_use(gi, ii, d)
+                        if hl == "hi"
+                        else tgt.get_lo_use(gi, ii, d)
+                    )
+                    if use != "self":
+                        continue
+                    inv = (
+                        tgt.get_hi_inv(gi, ii, d)
+                        if hl == "hi"
+                        else tgt.get_lo_inv(gi, ii, d)
+                    )
+                    profiles.setdefault(d, set()).add("nq" if inv else "q")
+    assert profiles["RSMRST_N"] == {"q", "nq"}
+
+
+def test_cell_row_slack_q_and_nq_do_not_share_y_channel():
+    """同 Cell 的 Q／~Q ③ 段各佔一條 Y 走廊；同 gap 須累加而非覆寫。"""
+    outputs, valid, name_to_rail, output_to_row, _, _ = _load_power_outputs()
+    slack = _feedback_y_slack_between_cell_rows(
+        outputs, output_to_row, name_to_rail, valid
+    )
+    assert slack[6] == 2 * GRID
 
 
 def test_or_slack_empty_when_no_or_path():

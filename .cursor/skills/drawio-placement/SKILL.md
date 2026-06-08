@@ -39,7 +39,7 @@ Before any coordinates:
 
 1. Split rails: `input` labels only; `output` → one Power Sequence Cell per rail (config order = top→bottom).
 2. Scan `inv` → `inputs_with_not`, `outputs_with_not`.
-3. Build `output_to_row`, `and_index_per_key` (per-row AND stack index).
+3. Build `output_to_row`, `and_index_per_key`（列內 nominal Y offset：hi 自 `OR_GATE_OFFSET_HI_Y`、lo 自 `OR_GATE_OFFSET_LO_Y`，同 hl 多顆再 +`AND_GATE_DY`；**非** hi/lo 共用連續 idx）。
 4. Compute **Cell row slack** early: `_feedback_y_slack_between_cell_rows` (needed for `row_y_base`).
 
 ## Phase 1 — Y axis
@@ -53,8 +53,8 @@ Order matters: **Cell rows fixed first**; AND/OR chains may extend below row box
 | OR catalog | `_build_or_catalog` | global OR #1…m |
 | AND slack | `_feedback_y_slack_after_and` | gap → 40pt (dedup) |
 | OR slack | `_feedback_y_slack_after_or` | gap → 40pt (dedup) |
-| AND chain Y | `_chain_and_top_y` | `and_top_y[g]` |
-| OR chain Y | `_chain_or_top_y` | `or_top_y[g]` |
+| AND chain Y | `_chain_and_top_y` | `and_top_y[g]`（offset 為 pt，非 stack index×DY） |
+| OR chain Y | `_chain_or_top_y` | `or_top_y[g]`（新列錨定 `row_py+off` 對齊 H/L_Deb；同列 Hi→Lo 同 AND） |
 
 **Cell row spacing formula (normal row):**
 
@@ -66,7 +66,18 @@ next_y = y + h + ROW_GAP(80) + cell_row_slack[j]
 - If row has **output NOT**: next row starts at NOT bottom + `NOT_STACK_GAP`(20), not `ROW_GAP`.
 - **Default Cell–Cell visual gap** (when h=80, no slack): **80pt**.
 
-**Y slack unified rule (§10):** adjacent same-layer gap +40pt once per gap (dedup). **Input→AND does NOT count.**
+**Y slack（§10）：** AND／OR 層：相鄰同層 gap +40pt、**去重**（`_mark_y_gap`）。**Input→AND 不計。**
+
+**Cell row slack（FB ③ 段）：** 跨列 Cell **Q／~Q** 回授（`use=self`、來源 output）— 含 **~Q→Deb** 與 **Q→AND** — 僅在 ③ 段 p2y Y 走廊預留（來源列上方 1 格；~Q 可能 2 格）。**同 Cell 的 Q 與 ~Q 各一條走廊（p2y 不同，同 gap 可累加 +40）**；同 profile 多目標扇出去重。**不**沿 src→tgt 整段加寬（④ 走 X 通道）。
+
+**OR／NOR 對齊 H_Deb／L_Deb（與 AND 錨定一致）：**
+
+| hl | `OR_GATE_OFFSET_*_Y` | 對齊 Cell |
+|----|----------------------|-----------|
+| hi | `OR_GATE_OFFSET_HI_Y` = 0 | H_Deb（`CELL_H_DEB_Y`） |
+| lo | `OR_GATE_OFFSET_LO_Y` = 40 | L_Deb（`CELL_L_DEB_Y`） |
+
+`_chain_or_top_y`：**新列**首顆錨定 `row_py + off`；**同列** Hi→Lo 在 `nominal >= tops[g-1] + OR_GATE_H` 時亦用 nominal（否則鍊式下移）。測試：`TestOrDebAlignment`（`drawio_fb_matrix.json`）。
 
 Helpers inside `generate_drawio`: `_and_y_top`, `_or_y_top`, `_row_bottom`.
 
@@ -155,7 +166,9 @@ See [drawio-routing](../drawio-routing/SKILL.md). Summary:
 | Mistake | Correct approach |
 |---------|------------------|
 | Expecting Sugiyama / generic graph layout for export | Only `generate_drawio` defines coords |
-| Accumulating Y slack per edge | Dedup: one +40pt per gap |
+| Accumulating Y slack per edge on AND/OR | Dedup: one +40pt per gap (`_mark_y_gap`) |
+| Treating Cell q/nq as one +40 on same gap | Q／~Q ③ 段各一條走廊；同 gap 可 **stack** +40 |
+| OR global chain overrides row_py+off | 新列錨定 nominal；同列 Hi→Lo 同 AND 規則 |
 | Counting Input→AND in Y slack | Explicitly excluded |
 | Moving Cell rows when AND chain grows | `_chain_and_top_y` pushes AND only; Cell stays at `row_py` |
 | Fixed 40pt AND↔Cell gap | Dynamic `n+2+fb-exempt` (§8) |
@@ -165,6 +178,7 @@ See [drawio-routing](../drawio-routing/SKILL.md). Summary:
 
 ```bash
 python -m pytest tests/test_drawio_y_slack.py tests/test_drawio_matrix.py -q
+# OR↔Deb：TestOrDebAlignment；Lo AND↔L_Deb：TestLoOnlyAndPlacement
 ```
 
 Export sample: `run.bat` → inspect `output/*.xml` in Draw.io.

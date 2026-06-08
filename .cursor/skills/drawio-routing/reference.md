@@ -24,6 +24,8 @@
 | `_or_fb_channel_base_x` | or 層 FB 區起點 |
 | `_vertex_geom` / `_anchor_xy` | exit／entry 錨點 |
 | `_apply_feedback_routing` | 五段 waypoints + `_style_to_frozen_none` |
+| `_collect_logic_gate_boxes` | 閘體 bbox，供 `_first_clear_up_y` |
+| `_first_clear_up_y` | ② 動態橫列：避閘體 + `used_fb_rows` |
 | `_apply_feedback_edge_color` | 藍色；保留 Hi／Lo |
 | `_supplement_traced_feedback_edges` | 補標 RSMRST Q／~Q、departing AND |
 
@@ -31,11 +33,16 @@
 
 ```
 p1 = (p1x, ey)           # Q: p1x=ex+40; ~Q: ex+80; gate: stub_x
-p2 = (p1x, ey - up)      # ② 一律向上；Q/gate up=60, ~Q up=140
+p2 = (p1x, ey - up)      # ② 向上；Q/~Q 固定
+                         # AND→AND (src∈and_rev): _first_clear_up_y → source_and_row
+                         # OR→OR (src∈or_rev): 同上 → source_or_row
+                         # OR→AND 等跨層 gate FB: 固定 ey - FB_Q_UP
 p3 = (p3x, p2y)          # p3x = _feedback_channel_x(layer, slot[(src_id,layer)])
 p4 = (p3x, ty)
 p5 = (entry_x, ty)
 ```
+
+`_apply_feedback_routing` 內 `used_fb_rows: list[(y, x0, x1)]` 記錄已佔橫列，供後續 `_first_clear_up_y` 避開同 x 區間重疊。
 
 `fb_align`: `[(T,F), (T,T), (T,T), (T,F), (T,F)]` — 僅 ②③ 的 Y、③④ 的 X 做 `_align40`。
 
@@ -117,5 +124,9 @@ Sets: `in_label_id`, `input_not_src_ids` → `input_auto_src_ids`。
 | `test_cell_nq_feedback_second_segment_up_140pt` | ~Q ② = 140pt up |
 | `test_same_source_fb_shares_one_channel_x_per_layer` | 同 source 同層單一 `p3x` |
 | `test_hi_use_upstream_and_exits_from_gate_right` | `use=hi` + 上游 AND → `exitX=1` |
+| `test_or_to_or_feedback_uses_five_segment_routing_left_of_or_column` | OR→OR 動態 ② |
+| `test_and_to_and_feedback_uses_clear_row_for_segment_two` | AND→AND 動態 ②、③ 不壓閘 |
 | `test_drawio_export_edges_use_orthogonal_or_frozen` | Rule 1 vs 2 分工 |
 | `test_gate_exit_lanes.py` | stub、`wire_via_channel` |
+
+Fixture：`drawio_fb_matrix.json` — `RAIL_AND` lo `[FB_HUB, RAIL_NAND]`（`use=hi`）→ AND→AND gate FB。
