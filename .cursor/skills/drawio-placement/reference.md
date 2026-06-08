@@ -10,6 +10,9 @@ Source of truth: `src/drawio_export.py`, `doc/DRAWIO_RULES.md`.
 | `ROW_GAP` | 80 | Default row spacing; AND vertical step; NOT offset X |
 | `AND_GATE_W/H` | 80/40 | Gate size（`AND1.xml` 等） |
 | `AND_GATE_DY` | 80 | Same-row AND–AND spacing |
+| `OR_GATE_OFFSET_HI_Y` | 0 | Hi OR／NOR nominal Y → 對齊 H_Deb |
+| `OR_GATE_OFFSET_LO_Y` | 40 | Lo OR／NOR nominal Y → 對齊 L_Deb |
+| `OR_GATE_H` | 40 | OR／NOR 高度 |
 | `MARGIN` | 40 | Top/left margin |
 | `CELL_GROUP_H/W` | 80 | Cell inner |
 | `CELL_Q_X/Y`, `CELL_NQ_X/Y` | 60/10, 60/50 | Q／~Q 錨（`PSEQCELL.xml`；RTL `PSEQCELL.v`） |
@@ -22,14 +25,15 @@ Source of truth: `src/drawio_export.py`, `doc/DRAWIO_RULES.md`.
 
 | Function | Layer | Purpose |
 |----------|-------|---------|
-| `_feedback_y_slack_between_cell_rows` | Cell Y | Cross-row `use=self` → Deb; gap j = between row j and j+1 (0-based) |
+| `_cell_fb_segment3_y_gaps` | Cell Y | FB ③ p2y corridor gaps above source (q: 1; nq: up to 2) |
+| `_feedback_y_slack_between_cell_rows` | Cell Y | Cross-row Cell Q/~Q (`use=self`, output src): Deb or AND; q/nq separate (stack per gap) |
 | `_feedback_y_slack_after_and` | AND Y | Cross-row output→AND; Input direct to OR/NOR/Cell (not AND) |
 | `_feedback_y_slack_after_or` | OR Y | Cross-row Cell→OR input; Input/AND direct to Cell |
 | `_mark_y_gap` | AND/OR | Dedup +40pt per gap (gap ≥ 1) |
 | `_build_and_catalog` | AND | Global AND/NAND order |
 | `_build_or_catalog` | OR | Global OR/NOR order (Hi then Lo per row) |
-| `_chain_and_top_y` | AND | Chain Y with slack |
-| `_chain_or_top_y` | OR | Chain Y; same-row Hi→Lo +40; cross-row +80 + slack |
+| `_chain_and_top_y` | AND | Chain Y with slack; same-row nominal anchors to H/L_Deb when fit |
+| `_chain_or_top_y` | OR | Chain Y; new-row anchor `row_py+off` (Deb); same-row Hi→Lo like AND |
 | `_nearest_and_and_gap` | AND | Map feedback edge → AND–AND gap below |
 | `_nearest_or_or_gap` | OR | Map feedback edge → OR–OR gap below |
 | `_row_height_for_output` | Cell Y | Min row height from local AND/OR stack |
@@ -52,15 +56,19 @@ Source of truth: `src/drawio_export.py`, `doc/DRAWIO_RULES.md`.
 
 ## Y slack triggers (§10)
 
-**Dedup:** each gap gets at most one +40pt.
+**AND／OR 層：** 相鄰同層 gap 最多 +40pt（**去重**，`_mark_y_gap`）。
 
-| Layer | Triggers |
-|-------|----------|
-| **AND/NAND** | Cross-row output → AND input; Input direct to OR/NOR/Cell (`len(group)==1`) |
-| **OR/NOR** | Cross-row output → OR input (OR row, `len(group)==1`); Input direct to Cell; AND direct to Cell (no OR on row) |
-| **Cell rows** | Cross-row Cell output `use=self` → downstream Deb; all row gaps on path |
+**Cell row 層：** ③ 段 p2y 走廊；**q 與 nq 不共用**；同一 gap 可 **累加** 多個 +40（例：RSMRST gap 6 = 80pt）。
+
+| Layer | Triggers | Dedup |
+|-------|----------|-------|
+| **AND/NAND** | Cross-row output → AND input; Input direct to OR/NOR/Cell (`len(group)==1`) | per gap |
+| **OR/NOR** | Cross-row output → OR input (OR row, `len(group)==1`); Input direct to Cell; AND direct to Cell (no OR on row) | per gap |
+| **Cell rows** | Cross-row Cell Q/~Q `use=self` (→ Deb or AND); **③ p2y** above source (q: 1 gap; nq: up to 2) | per profile; q+nq stack |
 
 **Excluded:** Input → AND (feeds via label x+40 bus).
+
+**power.json 範例（Cell row）：** `{5: 40, 6: 80, 9: 40, 10: 40}`（RSMRST q+nq on gap 6）。
 
 ## X gap formula (§8)
 
@@ -81,7 +89,7 @@ segment_pt = max(0, base + 2 + fb - exempt) × 40
 | Name | Content |
 |------|---------|
 | `output_to_row` | rail name → row index |
-| `and_index_per_key` | `(rail, hl, gi)` → `(row_j, and_idx_on_row)` |
+| `and_index_per_key` | `(rail, hl, gi)` → `(row_j, nominal_y_off_pt)` — hi: `OR_GATE_OFFSET_HI_Y`+idx×`AND_GATE_DY`；lo: `OR_GATE_OFFSET_LO_Y`+idx×`AND_GATE_DY` |
 | `or_index_per_key` | `(rail, hl)` → `(row_j, nominal_offset_y)` |
 | `idx_map` / `or_idx_map` | catalog key → global gate number |
 | `row_py` | copy of `row_y_base` (Cell anchor Y) |
@@ -92,18 +100,10 @@ segment_pt = max(0, base + 2 + fb - exempt) × 40
 ## Draw order (Phase 4)
 
 1. Input labels (+ input NOT vertices)
-2. For each output: inner, H_Deb, L_Deb, O, name label, O→name edge
+2. For each output: inner, H_Deb, L_Deb, Q, ~Q, name label, Q→name edge
 3. Per output, Hi then Lo: AND gates → OR (if ≥2 groups) → wires to Deb
 4. `_GateExitLanes` — stub lane **n** skips gates with only one horizontal direct output
 5. `use=hi/lo` passthrough — emit: logic_out already → `exitX=1`; Deb placeholder → `exitX=0` then Pass 1 swap (see drawio-routing skill)
-
-## Files
-
-| Layer | Gaps | Total extra Y |
-|-------|------|---------------|
-| AND | 8 | 320pt |
-| Cell rows | 9 (0–6, 9, 10) | 360pt |
-| OR | 0 | (no OR path) |
 
 ## Files
 
@@ -119,4 +119,5 @@ segment_pt = max(0, base + 2 + fb - exempt) × 40
 | `src/drawio_export_options.py` | Wire overlap options |
 | `src/drawio_edge_freeze.py` | Export finale: `freeze_edge_routing`, `restore_orthogonal_auto_routing` |
 | `tests/test_drawio_y_slack.py` | Y slack unit tests |
-| `tests/test_drawio_matrix.py` | FB matrix / gate style / routing tests |
+| `tests/test_drawio_matrix.py` | FB matrix / gate style / routing；`TestOrDebAlignment`（OR↔Deb） |
+| `src/reference/drawio_fb_matrix.json` | OR／NOR 回授矩陣範例 config |

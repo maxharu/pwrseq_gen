@@ -71,9 +71,21 @@ description: >-
 
 | ① | ② |
 |---|---|
-| 右至 **stub X**（與閘→下一級同一 `(1+n)×40` 通道） | 向上 60pt（`FB_Q_UP`） |
+| 右至 **stub X**（與閘→下一級同一 `(1+n)×40` 通道） | 名義向上 60pt（`FB_Q_UP`）；**AND→AND**／**OR→OR** 另用 `_first_clear_up_y` 動態避讓相鄰閘 |
 
 其後 ③④⑤ 同 Cell FB。
+
+#### gate profile ② 上移：誰動態、誰固定 ★
+
+| 來源 → 目標 | ② `p2y` | 快取 |
+|-------------|---------|------|
+| **AND → AND** | `_first_clear_up_y`（自 `ey−60` 向上逐格） | `source_and_row[src_id]` |
+| **OR → OR** | 同上 | `source_or_row[src_id]` |
+| OR→AND、AND→OR、gate→Cell | 固定 `ey − FB_Q_UP`（60pt） | — |
+
+條件：`profile=="gate"` **且** `src_id ∈ and_rev`（AND→AND）或 `src_id ∈ or_rev`（OR→OR）。僅看目標層 `and`／`or` 不夠——跨層 gate→AND（例：OR→AND）仍 60pt。
+
+> ★ **`_first_clear_up_y`**：在 `[p1x, p3x]` 水平區間內避開閘體 box，並避開 `used_fb_rows` 中 x 區間重疊的既有回授橫列；同 source 多目標共用 `source_and_row`／`source_or_row`。
 
 > ★ **OR→OR 不可用短 stub**：① 一律走該閘 catalog `stub_x(src)`（`(1+n)×40`，每顆閘各自一條），**不要**用 `src_right+40` 之類的共用短 stub——否則多條 OR 回授會擠在同一 OR 層 X 通道。placement 已為每顆閘預留此通道。`_apply_feedback_routing` 的 `profile == "gate"` 分支對所有目標層（含 or）統一用 `stub_x`。
 
@@ -119,6 +131,10 @@ cell `p3x` 基準算出後可能落在 OR→Cell gap 內**已被佔用**的垂�
 | `test_cell_nq_feedback_second_segment_up_140pt` | ~Q ② 向上 140pt |
 | `test_same_source_fb_shares_one_channel_x_per_layer` | 同 source 同層僅 1 個 `p3x` |
 | `test_hi_use_upstream_and_exits_from_gate_right` | `use=hi` 且上游 AND 已存在 → `exitX=1` |
+| `test_or_to_or_feedback_uses_five_segment_routing_left_of_or_column` | OR→OR 五段、② 動態、`p3x` 在 OR 左緣左側 |
+| `test_and_to_and_feedback_uses_clear_row_for_segment_two` | AND→AND 五段、② 向上、③ 不壓閘體 |
+
+矩陣範例：`src/reference/drawio_fb_matrix.json` 中 `RAIL_AND` lo 雙輸入 `[FB_HUB, RAIL_NAND]`（`RAIL_NAND` `use=hi`）產生 **RAIL_NAND hi AND → RAIL_AND lo AND** 跨列 gate FB。
 
 ---
 
@@ -235,6 +251,7 @@ generate_drawio() 主圖 + NOT Pass 1–3
 
 - [ ] 新 FB 邊已加入 `feedback_auto_edge_ids`？
 - [ ] Q／~Q／gate：①② 距離、② **一律向上**？
+- [ ] 動態 ② 僅 **AND→AND**（`src∈and_rev`）／**OR→OR**（`src∈or_rev`）；OR→AND 等跨層仍 60pt？
 - [ ] 同 source 同層共用 1 條 `p3x`（`_build_feedback_source_layer_slots`）？
 - [ ] 佈局 `feedback_n`／`fb_cell`／`fb_or` 與走線 slot 容量一致？
 - [ ] input 在 `input_auto_src_ids`；非 FB 閘邊仍 Rule 2 三型態？

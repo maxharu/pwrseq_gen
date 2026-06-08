@@ -761,6 +761,20 @@ def _feedback_y_slack_after_or(
     return slack
 
 
+def _cell_fb_segment3_y_gaps(src_row: int, profile: str) -> list[int]:
+    """FB ③ 段 p2y 水平走廊所需 Y 通道 gap（0-based：row j 與 j+1 之間）。
+
+    僅在來源列上方 1～2 格預留；④ 段垂直幹線走 X 通道，不沿 src→tgt 整段加寬。
+    profile: ``q``（FB_Q_UP=60）或 ``nq``（FB_NQ_UP=140，可能需第二格）。
+    """
+    gaps: list[int] = []
+    if src_row >= 1:
+        gaps.append(src_row - 1)
+    if profile == "nq" and src_row >= 2:
+        gaps.append(src_row - 2)
+    return gaps
+
+
 def _feedback_y_slack_between_cell_rows(
     outputs: list[PowerRail],
     output_to_row: dict[str, int],
@@ -768,35 +782,47 @@ def _feedback_y_slack_between_cell_rows(
     valid: set[str],
 ) -> dict[int, int]:
     """
-    Cell 層：相鄰兩列間隙 +40pt（去重）。
-    觸發：跨列 Cell output（use=self）→ 下游 H_Deb／L_Deb。
+    Cell 層：相鄰兩列間隙 +40pt（同一 gap 可累加）。
+    觸發：跨列 Cell Q／~Q 回授（use=self、來源為 output）— 含 ~Q→Deb 與 Q→AND。
+    僅在 FB ③ 段 p2y 水平走廊（來源列上方 1～2 gap）預留 Y 通道。
+    同一來源 Q 與 ~Q 各佔一條走廊（p2y 不同，不共用）；同 profile 多目標扇出去重。
     gap j 表示 row j 與 row j+1 之間（0-based）。
     """
-    slack: dict[int, int] = {}
+    src_profiles: dict[str, set[str]] = {}
     for tgt in outputs:
         tgt_row = output_to_row[tgt.name]
         for hl, groups in [("hi", tgt.get_hi_groups()), ("lo", tgt.get_lo_groups())]:
             for gi, group in enumerate(groups):
-                if len(group) != 1:
-                    continue
-                d = group[0]
-                if d not in valid or d in CONST_DEPS:
-                    continue
-                if name_to_rail[d].seq_type != "output":
-                    continue
-                src_row = output_to_row.get(d)
-                if src_row is None or src_row == tgt_row:
-                    continue
-                use = (
-                    tgt.get_hi_use(gi, 0, d)
-                    if hl == "hi"
-                    else tgt.get_lo_use(gi, 0, d)
-                )
-                if use != "self":
-                    continue
-                lo_row, hi_row = sorted((src_row, tgt_row))
-                for gap in range(lo_row, hi_row):
-                    slack[gap] = GRID
+                for ii, d in enumerate(group):
+                    if d not in valid or d in CONST_DEPS:
+                        continue
+                    if name_to_rail[d].seq_type != "output":
+                        continue
+                    src_row = output_to_row.get(d)
+                    if src_row is None or src_row == tgt_row:
+                        continue
+                    use = (
+                        tgt.get_hi_use(gi, ii, d)
+                        if hl == "hi"
+                        else tgt.get_lo_use(gi, ii, d)
+                    )
+                    if use != "self":
+                        continue
+                    inv = (
+                        tgt.get_hi_inv(gi, ii, d)
+                        if hl == "hi"
+                        else tgt.get_lo_inv(gi, ii, d)
+                    )
+                    profile = "nq" if inv else "q"
+                    src_profiles.setdefault(d, set()).add(profile)
+
+    slack: dict[int, int] = {}
+    for d, profiles in src_profiles.items():
+        src_row = output_to_row[d]
+        for profile in sorted(profiles):
+            for gap in _cell_fb_segment3_y_gaps(src_row, profile):
+                if gap >= 0:
+                    slack[gap] = slack.get(gap, 0) + GRID
     return slack
 
 
@@ -807,21 +833,25 @@ def _chain_and_top_y(
     feedback_y_slack: dict[int, int],
     name_to_rail: dict[str, PowerRail] | None = None,
 ) -> dict[int, int]:
-    """依 global 序鍊式定位 AND／NAND；slack 只加在相鄰兩顆之間的對應 gap。"""
+    """依 global 序鍊式定位 AND／NAND；slack 只加在相鄰兩顆之間的對應 gap。
+
+    and_index_per_key 第二欄為列內 nominal Y offset（pt）：hi 自 OR_GATE_OFFSET_HI_Y、
+    lo 自 OR_GATE_OFFSET_LO_Y，同 hl 多顆再 +idx*AND_GATE_DY。
+    """
     tops: dict[int, int] = {}
     for g, key in enumerate(catalog, start=1):
         row_j, ai = and_index_per_key[key]
         py = row_py[row_j]
+        nominal = py + ai
         if g == 1:
-            tops[g] = py + ai * AND_GATE_DY
+            tops[g] = nominal
             continue
-        prev_row, prev_ai = and_index_per_key[catalog[g - 2]]
+        prev_row, _ = and_index_per_key[catalog[g - 2]]
         extra = feedback_y_slack.get(g - 1, 0)
-        if row_j == prev_row and ai > 0:
-            tops[g] = tops[g - 1] + AND_GATE_DY + extra
+        chain = tops[g - 1] + AND_GATE_DY + extra
+        if row_j == prev_row and nominal >= tops[g - 1] + AND_GATE_H:
+            tops[g] = nominal
         else:
-            nominal = py + ai * AND_GATE_DY
-            chain = tops[g - 1] + AND_GATE_DY + extra
             tops[g] = max(nominal, chain)
     return tops
 
@@ -832,7 +862,11 @@ def _chain_or_top_y(
     or_index_per_key: dict[tuple[str, str], tuple[int, int]],
     feedback_y_slack: dict[int, int],
 ) -> dict[int, int]:
-    """依 global 序鍊式定位 OR／NOR；slack 只加在相鄰兩顆之間的對應 gap。"""
+    """依 global 序鍊式定位 OR／NOR；slack 只加在相鄰兩顆之間的對應 gap。
+
+    與 ``_chain_and_top_y`` 對齊：新列首顆錨定 ``row_py+off``（H_Deb／L_Deb）；
+    同列 Hi→Lo 在 nominal 放得下時亦錨定 nominal，否則鍊式下移。
+    """
     tops: dict[int, int] = {}
     for g, key in enumerate(catalog, start=1):
         row_j, off = or_index_per_key[key]
@@ -844,11 +878,15 @@ def _chain_or_top_y(
         prev_row, prev_off = or_index_per_key[catalog[g - 2]]
         extra = feedback_y_slack.get(g - 1, 0)
         if row_j == prev_row:
-            step = off - prev_off
-            tops[g] = tops[g - 1] + step + extra
+            if nominal >= tops[g - 1] + OR_GATE_H:
+                tops[g] = nominal
+            else:
+                tops[g] = max(
+                    nominal,
+                    tops[g - 1] + (off - prev_off) + extra,
+                )
         else:
-            chain = tops[g - 1] + ROW_GAP + extra
-            tops[g] = max(nominal, chain)
+            tops[g] = nominal
     return tops
 
 
@@ -2779,6 +2817,7 @@ def _apply_feedback_routing(
     )
     gate_boxes = _collect_logic_gate_boxes(root)
     # 同一 source 共用一條回授橫列；不同 source 之間（含跨層）橫列須錯開。
+    source_and_row: dict[int, float] = {}
     source_or_row: dict[int, float] = {}
     used_fb_rows: list[tuple[float, float, float]] = []
 
@@ -2917,9 +2956,18 @@ def _apply_feedback_routing(
                 assigned_cell_vx.add(_cx)
                 source_cell_x[src_id] = p3x
 
-        # OR→OR（gate profile）：② 上移量感知上下相鄰閘佔位，停到真正乾淨的列，
-        # 避免橫線壓在相鄰 OR 閘邊（密集 80pt 堆疊時 40 對齊會落在閘邊）。
-        if profile == "gate" and tgt_layer == "or":
+        # AND→AND／OR→OR（gate profile）：② 上移量感知上下相鄰閘佔位，停到真正乾淨的列，
+        # 避免橫線壓在相鄰閘邊（密集 80pt 堆疊時 40 對齊會落在閘邊）。
+        if profile == "gate" and tgt_layer == "and" and src_id in and_rev:
+            if src_id in source_and_row:
+                p2y = source_and_row[src_id]
+            else:
+                p2y = _first_clear_up_y(
+                    p2y, p1x, p3x, gate_boxes, avoid=used_fb_rows
+                )
+                source_and_row[src_id] = p2y
+            p2x = p1x
+        elif profile == "gate" and tgt_layer == "or" and src_id in or_rev:
             if src_id in source_or_row:
                 p2y = source_or_row[src_id]
             else:
@@ -3265,15 +3313,13 @@ def generate_drawio(
     for j, r in enumerate(outputs):
         hi_groups = r.get_hi_groups()
         lo_groups = r.get_lo_groups()
-        idx = 0
-        for gi, g in enumerate(hi_groups):
-            if len(g) >= 2:
-                and_index_per_key[(r.name, "hi", gi)] = (j, idx)
-                idx += 1
-        for gi, g in enumerate(lo_groups):
-            if len(g) >= 2:
-                and_index_per_key[(r.name, "lo", gi)] = (j, idx)
-                idx += 1
+        for hl, groups in [("hi", hi_groups), ("lo", lo_groups)]:
+            base = OR_GATE_OFFSET_HI_Y if hl == "hi" else OR_GATE_OFFSET_LO_Y
+            idx = 0
+            for gi, g in enumerate(groups):
+                if len(g) >= 2:
+                    and_index_per_key[(r.name, hl, gi)] = (j, base + idx * AND_GATE_DY)
+                    idx += 1
 
     or_index_per_key = _build_or_index_per_key(outputs)
     cell_row_slack = _feedback_y_slack_between_cell_rows(

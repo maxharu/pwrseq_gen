@@ -10,6 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from config_models import PowerSeqConfig
 from drawio_export import (
+    AND_GATE_H,
+    OR_GATE_H,
     CELL_GROUP_H,
     CELL_GROUP_W,
     CELL_H_DEB_Y,
@@ -18,6 +20,7 @@ from drawio_export import (
     CELL_Q_X,
     STROKE_DEFAULT,
     STROKE_FEEDBACK,
+    STROKE_LO,
     _GATE_ENTRY_AY,
     _GATE_STYLE_AND,
     _GATE_STYLE_NAND,
@@ -33,6 +36,12 @@ from drawio_export import (
     _style_float,
     _unique_cell_fb_to_deb_sources,
     generate_drawio,
+)
+
+DEMO_JSON = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "doc",
+    "demo_json.json",
 )
 
 MATRIX_JSON = os.path.join(
@@ -322,6 +331,70 @@ class TestDrawioFbMatrix:
             seen += 1
         assert seen >= 4, f"預期至少 4 條 OR→OR FB，得 {seen}"
 
+    def test_and_to_and_feedback_uses_clear_row_for_segment_two(self):
+        """AND→AND gate FB：② 動態避讓相鄰閘，③ 橫線不壓閘體。"""
+        with open(MATRIX_JSON, encoding="utf-8") as f:
+            cfg = PowerSeqConfig.from_dict(json.load(f))
+        root = ET.fromstring(generate_drawio(cfg))
+        and_col = min(
+            int(float(c.find("mxGeometry").get("x", 0)))
+            for c in root.iter("mxCell")
+            if c.get("vertex") == "1"
+            and "operation=and" in (c.get("style") or "")
+        )
+        and_ids = {
+            c.get("id")
+            for c in root.iter("mxCell")
+            if c.get("vertex") == "1"
+            and "logic_gates.logic_gate" in (c.get("style") or "")
+            and "operation=and" in (c.get("style") or "")
+        }
+        gate_boxes = [
+            (
+                float(c.find("mxGeometry").get("x", 0)),
+                float(c.find("mxGeometry").get("x", 0))
+                + float(c.find("mxGeometry").get("width", 0)),
+                float(c.find("mxGeometry").get("y", 0)),
+                float(c.find("mxGeometry").get("y", 0))
+                + float(c.find("mxGeometry").get("height", 0)),
+            )
+            for c in root.iter("mxCell")
+            if c.get("vertex") == "1"
+            and "logic_gates.logic_gate" in (c.get("style") or "")
+        ]
+        seen = 0
+        for cell in root.iter("mxCell"):
+            if cell.get("edge") != "1":
+                continue
+            if cell.get("source") not in and_ids or cell.get("target") not in and_ids:
+                continue
+            if STROKE_FEEDBACK not in (cell.get("style") or ""):
+                continue
+            sty = cell.get("style") or ""
+            assert "edgeStyle=none" in sty, f"edge {cell.get('id')} 應凍結 edgeStyle=none"
+            geo = cell.find("mxGeometry")
+            arr = geo.find("Array") if geo is not None else None
+            assert arr is not None, f"edge {cell.get('id')} 缺少 waypoints"
+            pts = arr.findall("mxPoint")
+            assert len(pts) >= 5, f"edge {cell.get('id')} 應有五段 waypoints"
+            p1y = float(pts[0].get("y"))
+            p2x = float(pts[1].get("x"))
+            p2y = float(pts[1].get("y"))
+            p3x = float(pts[2].get("x"))
+            assert p2y < p1y, f"edge {cell.get('id')}: gate FB ② 應向上"
+            assert p3x <= and_col, (
+                f"edge {cell.get('id')}: p3x={p3x} 應在目標 AND 左緣 {and_col} 左側"
+            )
+            lo_x, hi_x = sorted((p2x, p3x))
+            for gx0, gx1, gy0, gy1 in gate_boxes:
+                if gx1 >= lo_x and gx0 <= hi_x:
+                    assert not (gy0 <= p2y <= gy1), (
+                        f"edge {cell.get('id')}: ③ 橫線 y={p2y} 壓在閘 "
+                        f"[{gx0},{gx1}]x[{gy0},{gy1}] 上"
+                    )
+            seen += 1
+        assert seen >= 1, f"預期至少 1 條 AND→AND FB，得 {seen}"
+
     def test_nor_try_or_output_feedback_to_orfb_or_is_blue(self):
         """OR 層 #5/#6（RAIL_NOR_TRY hi/lo）回授至 RAIL_ORFB OR 應為藍色 FB。"""
         with open(MATRIX_JSON, encoding="utf-8") as f:
@@ -461,3 +534,159 @@ class TestDrawioFbMatrix:
             assert ay == _GATE_ENTRY_AY, (
                 f"edge {c.get('id')} into gate must use entryY={_GATE_ENTRY_AY}, got {ay}"
             )
+
+
+def _output_name_y(root: ET.Element, name: str) -> float:
+    for c in root.iter("mxCell"):
+        if (c.get("value") or "").strip() != name:
+            continue
+        g = c.find("mxGeometry")
+        if g is None or float(g.get("x", 0)) < 2000:
+            continue
+        return float(g.get("y", 0))
+    raise AssertionError(f"output name {name!r} not found")
+
+
+def _deb_center_y_by_rail(root: ET.Element, rail: str, hl: str) -> float:
+    name_y = _output_name_y(root, rail)
+    deb_val = "H_Deb" if hl == "hi" else "L_Deb"
+    for c in root.iter("mxCell"):
+        if (c.get("value") or "").strip() != deb_val:
+            continue
+        g = c.find("mxGeometry")
+        if g is None:
+            continue
+        dy = abs(float(g.get("y", 0)) - name_y)
+        if dy < 80:
+            return float(g.get("y", 0)) + 10
+    raise AssertionError(f"{rail} {deb_val} not found")
+
+
+def _deb_id_by_rail(root: ET.Element, rail: str, hl: str) -> str:
+    name_y = _output_name_y(root, rail)
+    deb_val = "H_Deb" if hl == "hi" else "L_Deb"
+    for c in root.iter("mxCell"):
+        if (c.get("value") or "").strip() != deb_val:
+            continue
+        g = c.find("mxGeometry")
+        if g is None:
+            continue
+        if abs(float(g.get("y", 0)) - name_y) < 80:
+            return c.get("id") or ""
+    raise AssertionError(f"{rail} {deb_val} not found")
+
+
+def _matrix_rail_name_y(root: ET.Element, rail: str) -> float:
+    """fb matrix 圖幅較小，output name 的 x 可能 < 2000。"""
+    for c in root.iter("mxCell"):
+        if (c.get("value") or "").strip() != rail:
+            continue
+        g = c.find("mxGeometry")
+        if g is not None:
+            return float(g.get("y", 0))
+    raise AssertionError(f"output name {rail!r} not found")
+
+
+def _matrix_deb_center_y(root: ET.Element, rail: str, hl: str) -> float:
+    name_y = _matrix_rail_name_y(root, rail)
+    deb_val = "H_Deb" if hl == "hi" else "L_Deb"
+    for c in root.iter("mxCell"):
+        if (c.get("value") or "").strip() != deb_val:
+            continue
+        g = c.find("mxGeometry")
+        if g is None:
+            continue
+        if abs(float(g.get("y", 0)) - name_y) < 80:
+            return float(g.get("y", 0)) + 10
+    raise AssertionError(f"{rail} {deb_val} not found")
+
+
+class TestOrDebAlignment:
+    """OR／NOR 須對齊同列 H_Deb／L_Deb（與 AND 錨定規則一致）。"""
+
+    @pytest.fixture
+    def matrix_root(self):
+        with open(MATRIX_JSON, encoding="utf-8") as f:
+            cfg = PowerSeqConfig.from_dict(json.load(f))
+        return ET.fromstring(generate_drawio(cfg))
+
+    @pytest.mark.parametrize("rail,hl", [("RAIL_NOR_TRY", "hi"), ("RAIL_NOR_TRY", "lo")])
+    def test_or_center_aligns_with_deb(self, matrix_root, rail, hl):
+        root = matrix_root
+        deb_cy = _matrix_deb_center_y(root, rail, hl)
+        name_y = _matrix_rail_name_y(root, rail)
+        nor = hl == "lo" and rail == "RAIL_NOR_TRY"
+        or_gates = [
+            c
+            for c in root.iter("mxCell")
+            if c.get("vertex") == "1"
+            and "operation=or" in (c.get("style") or "")
+            and (("negating=1" in (c.get("style") or "")) == nor)
+            and c.find("mxGeometry") is not None
+        ]
+        matched = None
+        for c in or_gates:
+            g = c.find("mxGeometry")
+            ay = float(g.get("y", 0))
+            cy = ay + OR_GATE_H / 2
+            if abs(cy - deb_cy) < 3 and abs(ay - name_y) < 120:
+                matched = c
+                break
+        assert matched is not None, f"{rail} {hl} OR/NOR at {deb_cy} not found"
+        g = matched.find("mxGeometry")
+        cy = float(g.get("y", 0)) + OR_GATE_H / 2
+        assert abs(cy - deb_cy) < 3, f"{rail} {hl} gate center {cy} != Deb {deb_cy}"
+
+
+class TestLoOnlyAndPlacement:
+    """Lo-only AND（無同列 hi AND）須對齊 L_Deb，不可佔 hi 槽位。"""
+
+    @pytest.fixture
+    def demo_root(self):
+        with open(DEMO_JSON, encoding="utf-8") as f:
+            cfg = PowerSeqConfig.from_dict(json.load(f))
+        return ET.fromstring(generate_drawio(cfg))
+
+    @pytest.mark.parametrize("rail", ["PVCCIO_EN", "PVCC1V8_EN"])
+    def test_lo_and_center_aligns_with_l_deb(self, demo_root, rail):
+        root = demo_root
+        l_deb_cy = _deb_center_y_by_rail(root, rail, "lo")
+        h_deb_cy = _deb_center_y_by_rail(root, rail, "hi")
+        name_y = _output_name_y(root, rail)
+
+        and_gates = [
+            c
+            for c in root.iter("mxCell")
+            if c.get("vertex") == "1"
+            and "operation=and" in (c.get("style") or "")
+            and c.find("mxGeometry") is not None
+        ]
+        lo_and = None
+        for c in and_gates:
+            g = c.find("mxGeometry")
+            ay = float(g.get("y", 0))
+            cy = ay + AND_GATE_H / 2
+            if abs(cy - l_deb_cy) < 3 and abs(ay - name_y) < 120:
+                lo_and = c
+                break
+        assert lo_and is not None, f"{rail} lo AND at L_Deb height not found"
+        g = lo_and.find("mxGeometry")
+        cy = float(g.get("y", 0)) + AND_GATE_H / 2
+        assert abs(cy - l_deb_cy) < 3, f"{rail} lo AND center {cy} != L_Deb {l_deb_cy}"
+        assert abs(cy - h_deb_cy) > 10, f"{rail} lo AND must not sit on H_Deb center"
+
+    @pytest.mark.parametrize("rail", ["PVCC1V8_EN"])
+    def test_lo_and_to_l_deb_horizontal_when_aligned(self, demo_root, rail):
+        root = demo_root
+        l_deb_id = _deb_id_by_rail(root, rail, "lo")
+        lo_edges = [
+            c
+            for c in root.iter("mxCell")
+            if c.get("edge") == "1"
+            and c.get("target") == l_deb_id
+            and STROKE_LO in (c.get("style") or "")
+        ]
+        assert len(lo_edges) == 1, f"{rail} expected 1 lo→L_Deb edge"
+        geo = lo_edges[0].find("mxGeometry")
+        pts = geo.find("Array") if geo is not None else None
+        assert pts is None, f"{rail} lo AND→L_Deb should be horizontal (no stub waypoints)"

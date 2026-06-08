@@ -10,7 +10,7 @@ import pytest
 from config_models import PowerSeqConfig
 from validator import validate
 from verilog_generator import generate_verilog
-from drawio_export import STROKE_FEEDBACK, generate_drawio
+from drawio_export import STROKE_FEEDBACK, STROKE_HI, STROKE_LO, generate_drawio
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -210,26 +210,23 @@ class TestFullPipeline:
                     diagonals.append((c.get("id"), sid, tid, i))
         assert diagonals == [], f"diagonal segments: {diagonals[:10]}"
 
-    def test_non_feedback_lo_deb_keeps_emit_waypoints(self):
-        """非佈局回授 Lo→Deb 保留 Rule 2 emit waypoints，不被 FB 五段覆寫。"""
+    def test_non_feedback_lo_deb_not_overwritten_by_fb_routing(self):
+        """非佈局回授 Lo→Deb 不被 FB 五段覆寫（同 Y 對齊時可無 waypoints）。"""
         json_path = os.path.join(OUTPUT_DIR, "power.json")
         if not os.path.exists(json_path):
             pytest.skip("power.json not found")
         with open(json_path, encoding="utf-8") as f:
             cfg = PowerSeqConfig.from_dict(json.load(f))
         root = ET.fromstring(generate_drawio(cfg))
-        rule2_lo = 0
+        lo_to_deb = 0
         for cell in root.findall(".//mxCell[@edge='1']"):
             sty = cell.get("style") or ""
-            if "blockThin" not in sty or "#dc2626" not in sty:
+            if "blockThin" not in sty or STROKE_LO not in sty:
                 continue
             if STROKE_FEEDBACK in sty:
                 continue
-            geo = cell.find("mxGeometry")
-            if geo is None or geo.find("Array") is None:
-                continue
-            rule2_lo += 1
-        assert rule2_lo > 0, "expected non-feedback Lo→Deb edges with frozen waypoints"
+            lo_to_deb += 1
+        assert lo_to_deb > 0, "expected non-feedback Lo→Deb edges"
 
     def test_pch_p1v25a_lo_and_from_rsmrst_nq_not_q(self):
         """PCH_P1V25A Lo = inv(RSMRST) & inv(PG)；第一腳從 RSMRST ~Q 輸出腳扇出，非 Q。"""
@@ -444,7 +441,7 @@ class TestFullPipeline:
                 for c in root.iter("mxCell")
                 if c.get("edge") == "1"
                 and c.get("target") == hid
-                and "#059669" in (c.get("style") or "")
+                and STROKE_HI in (c.get("style") or "")
             ]
             assert len(hi_edges) == 1, f"{rail} expected 1 hi→H_Deb edge, got {len(hi_edges)}"
             sty = hi_edges[0].get("style") or ""
