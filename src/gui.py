@@ -1,7 +1,12 @@
 """
-Power Sequence Config GUI v1.2
+Power Sequence Config GUI v1.3
 
-主要改善（相對 v1.1）：
+v1.3（相對 v1.2）：
+- Draw.io：邏輯閘改 *1.xml（numInputs=1）、Cell 對齊 PSEQCELL.v／PSEQCELL.xml（含連接點）
+- 工具列 Generate／Export 改為下拉選單（快捷鍵不變）
+- 走線鎖定精簡為 drawio_edge_freeze；移除未使用 layout／golden2 比對
+
+v1.2（相對 v1.1）：
 - Hi/Lo/Force Cond 三段抽象為 CondSectionFrame，去除 ~500 行重複（B1）
 - Hi/Lo/Force 改 Tab 顯示，節點展開後高度減半（B2）
 - 三段以顏色語意區分：Hi=綠 / Lo=紅 / Force=琥珀（A1）
@@ -2043,7 +2048,7 @@ class HelpDialog(ctk.CTkToplevel):
 class PowerSeqGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self._base_title = "Power Sequence Config v1.2"
+        self._base_title = "Power Sequence Config v1.3"
         self.title(self._base_title)
         self.geometry("1400x850")
         self.minsize(1000, 650)

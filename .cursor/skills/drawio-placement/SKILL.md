@@ -26,7 +26,7 @@ config.rails
   → Phase 1  Y placement (row_y_base, AND/OR chains, input_row_y)
   → Phase 2  X placement (input band, trunks, and_col_x, per-row cell_start_x)
   → Phase 3  Channel alloc (left trunk x)
-  → Phase 4  Emit vertices (input → PWRCELL Q/~Q → AND → OR → edges)
+  → Phase 4  Emit vertices (input → PSEQCELL Q/~Q → AND → OR → edges)
   → Phase 5  Wire routing (_GateExitLanes, waypoints; FB 僅標記)
   → Post-fix NOT (3 passes) + _apply_feedback_routing (Rule 3)
 ```
@@ -114,7 +114,7 @@ positions_in[name] = (ix, input_row_y)
 
 ## Phase 4–5 — Draw & route
 
-Emit order: input labels (+ input NOT) → PWRCELL（inner + H/L_Deb + **Q** + **~Q**）+ name → per-row Hi/Lo logic (AND then OR) → edges.
+Emit order: input labels (+ input NOT) → PSEQCELL（inner + H/L_Deb + **Q** + **~Q**；RTL `PSEQCELL.v`）+ name → per-row Hi/Lo logic (AND then OR) → edges.
 
 Routing emit: `_GateExitLanes`（非回授）、回授邊只進 `feedback_auto_edge_ids`（waypoints 延後）。**Rule 3** 五段凍結見 [drawio-routing](../drawio-routing/SKILL.md)。
 

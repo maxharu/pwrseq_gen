@@ -96,6 +96,22 @@ class TestGenerateVerilog:
         assert "PSEQCELL" in out
         assert "wire a;" in out  # internal sig is lowercased
 
+    def test_pseqcell_parameters_match_reference(self):
+        """PSEQCELL 實例參數須對齊 src/reference/PSEQCELL.v。"""
+        cfg = PowerSeqConfig(rails=[
+            PowerRail(
+                "A",
+                depends_on_hi=["__HIGH__"],
+                recover=3,
+                force_val=0,
+                cycle_sync=0,
+            ),
+        ])
+        out = generate_verilog(cfg)
+        assert ".RECOVER(2'b11)" in out
+        assert ".FORCE(0)" in out
+        assert ".CYCLE_SYNC(0)" in out
+
     def test_has_deb_for_input_with_debounce(self):
         cfg = PowerSeqConfig(rails=[
             PowerRail("A", seq_type="input", deb_enable=True),

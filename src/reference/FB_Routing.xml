@@ -11,7 +11,7 @@
           <mxGeometry height="100" width="520" x="40" y="40" as="geometry" />
         </mxCell>
 
-        <!-- Cell 簡圖：inner + Q + ~Q（對齊 PWRCELL.xml 相對位置） -->
+        <!-- Cell 簡圖：inner + Q + ~Q（對齊 PSEQCELL.xml 相對位置） -->
         <mxCell id="inner" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="" vertex="1">
           <mxGeometry height="80" width="80" x="400" y="400" as="geometry" />
         </mxCell>
