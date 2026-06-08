@@ -52,6 +52,14 @@ MATRIX_JSON = os.path.join(
 )
 
 
+def _is_h_deb_vertex(cell: ET.Element) -> bool:
+    return cell.get("vertex") == "1" and (cell.get("style") or "") == _PSEQCELL_STYLE_H_DEB
+
+
+def _is_l_deb_vertex(cell: ET.Element) -> bool:
+    return cell.get("vertex") == "1" and (cell.get("style") or "") == _PSEQCELL_STYLE_L_DEB
+
+
 class TestDrawioFbMatrix:
     def test_matrix_generates_without_error(self):
         with open(MATRIX_JSON, encoding="utf-8") as f:
@@ -98,7 +106,7 @@ class TestDrawioFbMatrix:
         root = ET.fromstring(generate_drawio(cfg))
         h_deb_x: list[int] = []
         for c in root.iter("mxCell"):
-            if c.get("vertex") != "1" or c.get("value") != "H_Deb":
+            if not _is_h_deb_vertex(c):
                 continue
             geo = c.find("mxGeometry")
             assert geo is not None
@@ -235,7 +243,7 @@ class TestDrawioFbMatrix:
         cell_col = min(
             int(float(c.find("mxGeometry").get("x", 0)))
             for c in root.iter("mxCell")
-            if c.get("vertex") == "1" and c.get("value") == "H_Deb"
+            if _is_h_deb_vertex(c)
         )
         assert (or_col - and_col - 80) // 40 == 7
         assert (cell_col - or_col - 80) // 40 == 8
@@ -484,19 +492,27 @@ class TestDrawioFbMatrix:
         with open(MATRIX_JSON, encoding="utf-8") as f:
             cfg = PowerSeqConfig.from_dict(json.load(f))
         root = ET.fromstring(generate_drawio(cfg))
-        by_value: dict[str, str] = {}
+        by_role: dict[str, str] = {}
         for c in root.iter("mxCell"):
             if c.get("vertex") != "1":
                 continue
+            sty = c.get("style") or ""
             val = (c.get("value") or "").strip()
-            if val in ("", "H_Deb", "L_Deb", "Q", "~Q"):
-                key = val or "inner"
-                by_value.setdefault(key, c.get("style") or "")
-        assert by_value.get("inner") == _PSEQCELL_STYLE_INNER
-        assert by_value.get("H_Deb") == _PSEQCELL_STYLE_H_DEB
-        assert by_value.get("L_Deb") == _PSEQCELL_STYLE_L_DEB
-        assert by_value.get("Q") == _PSEQCELL_STYLE_Q
-        assert by_value.get("~Q") == _PSEQCELL_STYLE_Q
+            if sty == _PSEQCELL_STYLE_INNER:
+                by_role.setdefault("inner", sty)
+            elif sty == _PSEQCELL_STYLE_H_DEB:
+                by_role.setdefault("h_deb", sty)
+            elif sty == _PSEQCELL_STYLE_L_DEB:
+                by_role.setdefault("l_deb", sty)
+            elif val == "Q":
+                by_role.setdefault("q", sty)
+            elif val == "~Q":
+                by_role.setdefault("nq", sty)
+        assert by_role.get("inner") == _PSEQCELL_STYLE_INNER
+        assert by_role.get("h_deb") == _PSEQCELL_STYLE_H_DEB
+        assert by_role.get("l_deb") == _PSEQCELL_STYLE_L_DEB
+        assert by_role.get("q") == _PSEQCELL_STYLE_Q
+        assert by_role.get("nq") == _PSEQCELL_STYLE_Q
 
     def test_logic_gate_styles_match_reference_xml(self):
         """匯出 AND/NAND/OR/NOR 的 style 須與 reference/*1.xml 一致。"""
@@ -549,9 +565,9 @@ def _output_name_y(root: ET.Element, name: str) -> float:
 
 def _deb_center_y_by_rail(root: ET.Element, rail: str, hl: str) -> float:
     name_y = _output_name_y(root, rail)
-    deb_val = "H_Deb" if hl == "hi" else "L_Deb"
+    pred = _is_h_deb_vertex if hl == "hi" else _is_l_deb_vertex
     for c in root.iter("mxCell"):
-        if (c.get("value") or "").strip() != deb_val:
+        if not pred(c):
             continue
         g = c.find("mxGeometry")
         if g is None:
@@ -559,21 +575,21 @@ def _deb_center_y_by_rail(root: ET.Element, rail: str, hl: str) -> float:
         dy = abs(float(g.get("y", 0)) - name_y)
         if dy < 80:
             return float(g.get("y", 0)) + 10
-    raise AssertionError(f"{rail} {deb_val} not found")
+    raise AssertionError(f"{rail} {hl} deb not found")
 
 
 def _deb_id_by_rail(root: ET.Element, rail: str, hl: str) -> str:
     name_y = _output_name_y(root, rail)
-    deb_val = "H_Deb" if hl == "hi" else "L_Deb"
+    pred = _is_h_deb_vertex if hl == "hi" else _is_l_deb_vertex
     for c in root.iter("mxCell"):
-        if (c.get("value") or "").strip() != deb_val:
+        if not pred(c):
             continue
         g = c.find("mxGeometry")
         if g is None:
             continue
         if abs(float(g.get("y", 0)) - name_y) < 80:
             return c.get("id") or ""
-    raise AssertionError(f"{rail} {deb_val} not found")
+    raise AssertionError(f"{rail} {hl} deb not found")
 
 
 def _matrix_rail_name_y(root: ET.Element, rail: str) -> float:
@@ -589,16 +605,16 @@ def _matrix_rail_name_y(root: ET.Element, rail: str) -> float:
 
 def _matrix_deb_center_y(root: ET.Element, rail: str, hl: str) -> float:
     name_y = _matrix_rail_name_y(root, rail)
-    deb_val = "H_Deb" if hl == "hi" else "L_Deb"
+    pred = _is_h_deb_vertex if hl == "hi" else _is_l_deb_vertex
     for c in root.iter("mxCell"):
-        if (c.get("value") or "").strip() != deb_val:
+        if not pred(c):
             continue
         g = c.find("mxGeometry")
         if g is None:
             continue
         if abs(float(g.get("y", 0)) - name_y) < 80:
             return float(g.get("y", 0)) + 10
-    raise AssertionError(f"{rail} {deb_val} not found")
+    raise AssertionError(f"{rail} {hl} deb not found")
 
 
 class TestOrDebAlignment:

@@ -118,6 +118,35 @@ _PSEQCELL_STYLE_L_DEB = "rounded=1;whiteSpace=wrap;html=1;"
 _PSEQCELL_STYLE_Q = "rounded=1;whiteSpace=wrap;html=1;"
 
 
+def _parse_pulse_period(pulse_name: str) -> tuple[int, str] | None:
+    """iPulse_1us → (1, 'us')；iPulse_2ms → (2, 'ms')。"""
+    if not pulse_name or pulse_name in ("default", "High"):
+        return None
+    s = pulse_name[7:] if pulse_name.startswith("iPulse_") else pulse_name
+    if s.endswith("us"):
+        try:
+            return int(s[:-2]), "us"
+        except ValueError:
+            return None
+    if s.endswith("ms"):
+        try:
+            return int(s[:-2]), "ms"
+        except ValueError:
+            return None
+    return None
+
+
+def _deb_time_label(cycle: int, pulse: str) -> str:
+    """PSEQCELL debounce 總時間：cycle × pulse 週期；cycle≤0 或 High/default → 0s。"""
+    if cycle <= 0:
+        return "0s"
+    parsed = _parse_pulse_period(pulse)
+    if parsed is None:
+        return "0s"
+    period, unit = parsed
+    return f"{cycle * period}{unit}"
+
+
 def _load_pseqcell_layout() -> None:
     """自 reference/PSEQCELL.xml 載入 Cell 幾何與 style（含連接點 points；RTL 見 PSEQCELL.v）。"""
     global CELL_GROUP_W, CELL_GROUP_H, CELL_INNER_X, CELL_INNER_W, CELL_INNER_H
@@ -3618,7 +3647,8 @@ def generate_drawio(
         })
 
         h_deb = ET.SubElement(root, "mxCell", {
-            "id": str(h_deb_id), "parent": "1", "style": _PSEQCELL_STYLE_H_DEB, "value": "H_Deb", "vertex": "1"
+            "id": str(h_deb_id), "parent": "1", "style": _PSEQCELL_STYLE_H_DEB,
+            "value": _deb_time_label(r.cycle_hi, r.pulse_hi), "vertex": "1",
         })
         ET.SubElement(h_deb, "mxGeometry", {
             "height": str(CELL_H_DEB_H), "width": str(CELL_H_DEB_W),
@@ -3626,7 +3656,8 @@ def generate_drawio(
         })
 
         l_deb = ET.SubElement(root, "mxCell", {
-            "id": str(l_deb_id), "parent": "1", "style": _PSEQCELL_STYLE_L_DEB, "value": "L_Deb", "vertex": "1"
+            "id": str(l_deb_id), "parent": "1", "style": _PSEQCELL_STYLE_L_DEB,
+            "value": _deb_time_label(r.cycle_lo, r.pulse_lo), "vertex": "1",
         })
         ET.SubElement(l_deb, "mxGeometry", {
             "height": str(CELL_L_DEB_H), "width": str(CELL_L_DEB_W),

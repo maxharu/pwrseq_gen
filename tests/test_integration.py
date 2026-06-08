@@ -10,7 +10,14 @@ import pytest
 from config_models import PowerSeqConfig
 from validator import validate
 from verilog_generator import generate_verilog
-from drawio_export import STROKE_FEEDBACK, STROKE_HI, STROKE_LO, generate_drawio
+from drawio_export import (
+    STROKE_FEEDBACK,
+    STROKE_HI,
+    STROKE_LO,
+    _PSEQCELL_STYLE_H_DEB,
+    _PSEQCELL_STYLE_L_DEB,
+    generate_drawio,
+)
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -416,7 +423,7 @@ class TestFullPipeline:
 
         h_deb_by_rail: dict[str, str] = {}
         for cell in root.iter("mxCell"):
-            if (cell.get("value") or "").strip() != "H_Deb":
+            if cell.get("vertex") != "1" or (cell.get("style") or "") != _PSEQCELL_STYLE_H_DEB:
                 continue
             g = cell.find("mxGeometry")
             if g is None:
@@ -424,7 +431,9 @@ class TestFullPipeline:
             y = float(g.get("y", 0))
             for c2 in root.iter("mxCell"):
                 name = (c2.get("value") or "").strip()
-                if not name or name in ("H_Deb", "L_Deb", "Q", "~Q"):
+                if not name or name in ("Q", "~Q"):
+                    continue
+                if (c2.get("style") or "") in (_PSEQCELL_STYLE_H_DEB, _PSEQCELL_STYLE_L_DEB):
                     continue
                 g2 = c2.find("mxGeometry")
                 if g2 is None or float(g2.get("x", 0)) < 2000:
@@ -462,7 +471,8 @@ class TestFullPipeline:
         deb_ids = {
             c.get("id")
             for c in root.iter("mxCell")
-            if c.get("vertex") == "1" and (c.get("value") or "").strip() in ("H_Deb", "L_Deb")
+            if c.get("vertex") == "1"
+            and (c.get("style") or "") in (_PSEQCELL_STYLE_H_DEB, _PSEQCELL_STYLE_L_DEB)
         }
         fb_src_ids: set[str] = set()
         for cell in root.iter("mxCell"):
