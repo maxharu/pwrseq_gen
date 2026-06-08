@@ -10,7 +10,7 @@
 | `FB_NQ_UP` | `3 * GRID + 20` (140) | ~Q ②上移（> Q 60pt） |
 | `STROKE_FEEDBACK` | `#2563eb` | 回授邊預設藍 |
 
-參考：`src/reference/FB_Routing.xml`、`src/reference/PWRCELL.xml`。
+參考：`src/reference/FB_Routing.xml`、`src/reference/PSEQCELL.xml`（RTL `PSEQCELL.v`）。
 
 ## Rule 3 — `_apply_feedback_routing`
 

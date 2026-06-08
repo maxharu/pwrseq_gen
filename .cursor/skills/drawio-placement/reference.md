@@ -12,7 +12,7 @@ Source of truth: `src/drawio_export.py`, `doc/DRAWIO_RULES.md`.
 | `AND_GATE_DY` | 80 | Same-row AND–AND spacing |
 | `MARGIN` | 40 | Top/left margin |
 | `CELL_GROUP_H/W` | 80 | Cell inner |
-| `CELL_Q_X/Y`, `CELL_NQ_X/Y` | 60/10, 60/50 | Q／~Q 錨（PWRCELL.xml） |
+| `CELL_Q_X/Y`, `CELL_NQ_X/Y` | 60/10, 60/50 | Q／~Q 錨（`PSEQCELL.xml`；RTL `PSEQCELL.v`） |
 | `FB_Q_RIGHT/UP` | 40, 60 | Q 回授 ①②（routing） |
 | `FB_NQ_RIGHT/UP` | 80, 140 | ~Q 回授 ①②（routing） |
 | `OUTPUT_NAME_GAP` | 120 | Cell right → name label |
@@ -109,6 +109,8 @@ segment_pt = max(0, base + 2 + fb - exempt) × 40
 
 | Path | Role |
 |------|------|
+| `src/reference/PSEQCELL.v` | Power Sequence Cell RTL（`iHi`／`iLo`／`iForce`／`o`） |
+| `src/reference/PSEQCELL.xml` | Cell Draw.io 幾何（inner／H_Deb／L_Deb／Q／~Q） |
 | `src/reference/AND1.xml` | AND 元件（`numInputs=1`） |
 | `src/reference/NAND1.xml` | NAND（`group_inv`） |
 | `src/reference/OR1.xml` | OR 元件 |

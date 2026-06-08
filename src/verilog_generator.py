@@ -365,7 +365,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
             lines.append("")
 
         # PSEQCELL instances (per-rail pulse selection)
-        # Parameter order: INIT, WIDTH, CYCLE_HI, CYCLE_LO, CYCLE_FORCE, OD
+        # Parameter order per src/reference/PSEQCELL.v
         ps_specs = []
         for r in sequenced:
             s = _internal_sig(r.name)
@@ -393,7 +393,9 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
             r = p["rail"]
             inst = (
                 f"    PSEQCELL #(.INIT({r.init}), .WIDTH(1), .CYCLE_HI({r.cycle_hi}), "
-                f".CYCLE_LO({r.cycle_lo}), .CYCLE_FORCE({r.cycle_force}), .OD({r.od})) "
+                f".CYCLE_LO({r.cycle_lo}), .CYCLE_FORCE({r.cycle_force}), "
+                f".RECOVER(2'b{r.recover:02b}), .FORCE({r.force_val}), "
+                f".CYCLE_SYNC({r.cycle_sync}), .OD({r.od})) "
                 f"{p['u'].ljust(w_u)} (.iRst(iRst), .iClk_Core(iClk_Core), "
                 f".iPulse_Hi({p['ph'].ljust(w_ph)}), "
                 f".iPulse_Lo({p['pl'].ljust(w_pl)}), "

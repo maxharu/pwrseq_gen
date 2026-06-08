@@ -25,7 +25,7 @@ description: >-
 | 檔案 | 內容 |
 |------|------|
 | `src/reference/FB_Routing.xml` | Cell FB 五段、Q／~Q 走廊、**同層扇出共用水平段** |
-| `src/reference/PWRCELL.xml` | Cell 錨點：Q 對齊 H_Deb、~Q 對齊 L_Deb |
+| `src/reference/PSEQCELL.xml` | Cell 錨點：Q 對齊 H_Deb、~Q 對齊 L_Deb（RTL `PSEQCELL.v`） |
 
 ---
 
@@ -52,7 +52,7 @@ description: >-
 
 ### Cell FB：Q 與 ~Q
 
-| 腳 | PWRCELL 位置 | 何時為 FB 來源 |
+| 腳 | PSEQCELL 位置 | 何時為 FB 來源 |
 |----|--------------|----------------|
 | **Q** | inner 右側、H_Deb 列 | `use=self`、**非 inv**（例：RSMRST → 下游 hi AND） |
 | **~Q** | inner 右側、L_Deb 列 | **inv** 跨列回授（Pass 2：`not_gate_id` 直接綁 ~Q，不畫實體 output NOT） |

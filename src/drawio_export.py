@@ -4,7 +4,7 @@ Export Power Sequence dependency as Draw.io XML.
 版面與樣式依專案內 DRAWIO_RULES.md 實作，摘要如下：
 - 規則一（輸入）：label 與 input NOT 皆 **rotation=90**；依 config 由**右→左**每欄 40pt，若**前一個** input 有 NOT 則下一個再左 40pt；垂直錨點見 `INPUT_NOT.xml`（NOT 底邊在**最上 Cell 上緣之上 40pt**、40pt 對齊；label 在 NOT 上方）；NOT **左 20pt**；走線**先下後右**。
 - 規則二（邏輯閘）：X 三層 ①AND/NAND→②OR/NOR（若有）→③Cell；② 在 ① 後、③ 前，不同欄；AND/NAND、OR/NOR 垂直＝global catalog 鍊＋Y slack（去重）；Cell 列距＋回授 slack；`group_inv`→NAND/NOR；閘 output 先右走 **40×n**。
-- 規則三（PWRCELL）：5 個獨立 cells（inner + H_Deb + L_Deb + Q + ~Q），無 group；連到 H_Deb 實心綠、連到 L_Deb 實心紅。
+- 規則三（PSEQCELL）：5 個獨立 cells（inner + H_Deb + L_Deb + Q + ~Q），無 group；對應 PSEQCELL.v 之 iHi/iLo/iForce/o；連到 H_Deb 實心綠、連到 L_Deb 實心紅。
 - 規則四（輸出）：直接從 O 矩形右側拉一條水平邊到輸出名稱文字框，無小圓圈、無轉角。
 - 規則五（連接線）：線寬 2pt、交叉處弧線跳接（jumpStyle=arc）、一律實線；預設黑、Hi 綠、Lo 紅；正交、少交叉；不穿越元件；**相同 source 允許水平重疊、垂直不重疊**，不同 source 則水平/垂直皆錯開；**source/destination 一律水平連接，水平段至少 40pt**；waypoint 處與輸入同高可不對齊 40pt。
 - 規則六：不同 source 走線不重疊、箭頭與分岔清楚；常數見 DRAWIO_RULES.md。
@@ -29,10 +29,10 @@ DEP_HIGH = "__HIGH__"
 DEP_LOW = "__LOW__"
 CONST_DEPS = {DEP_HIGH, DEP_LOW}
 
-# Power Sequence Cell 尺寸（依 PWRCELL.xml 範本：無 group，inner + H/L_Deb + Q/~Q 內嵌 inner 右側）
-CELL_GROUP_W = 80   # cell 整體視覺寬度（= inner 寬，無額外右側空間）
+# Power Sequence Cell 尺寸（RTL：PSEQCELL.v；Draw.io 幾何：PSEQCELL.xml）
+CELL_GROUP_W = 80
 CELL_GROUP_H = 80
-CELL_INNER_X = 0    # inner 相對 cell 原點的 x（過去用 group 時為 40）
+CELL_INNER_X = 0
 CELL_INNER_W = 80
 CELL_INNER_H = 80
 CELL_H_DEB_W = 50
@@ -43,11 +43,11 @@ CELL_H_DEB_Y = 10
 CELL_L_DEB_Y = 50
 CELL_Q_W = 20
 CELL_Q_H = 20
-CELL_Q_X = 60       # Q 貼 inner 右側（對齊 H_Deb 列）
+CELL_Q_X = 60
 CELL_Q_Y = CELL_H_DEB_Y
 CELL_NQ_W = 20
 CELL_NQ_H = 20
-CELL_NQ_X = 60      # ~Q 對齊 L_Deb 列；右緣即 inv 輸出錨點
+CELL_NQ_X = 60
 CELL_NQ_Y = CELL_L_DEB_Y
 # 版面規則：欄位水平間距 GAP（40pt）；列距／NOT 等仍用 ROW_GAP（80pt）
 GRID = 40
@@ -82,14 +82,14 @@ OUTPUT_NAME_NOT_EXTRA = ROW_GAP       # 任一 output 用 O 側 NOT 時，全列
 OUTPUT_NAME_OFFSET_X = CELL_GROUP_W + OUTPUT_NAME_GAP  # 預設參考（無 output NOT）
 # 輸出名稱 y 與 Q 垂直置中對齊，使 Q→名稱為水平直線
 OUTPUT_NAME_OFFSET_Y = CELL_Q_Y + CELL_Q_H // 2 - INPUT_LABEL_H // 2
-# 連接線顏色：Hi 實心綠、Lo 實心紅、預設實心黑（一律實線，以顏色區分 Hi/Lo）
-STROKE_HI = "#059669"
-STROKE_LO = "#dc2626"
+# 連接線顏色：Hi 實心紅、Lo 實心綠、Feedback 實心藍、預設實心黑（一律實線）
+STROKE_HI = "#ff0000"
+STROKE_LO = "#008000"
 STROKE_DEFAULT = "#000000"
-STROKE_FEEDBACK = "#2563eb"
-# 走線：線寬 2pt、交叉處弧線跳接（Draw.io jumpStyle=arc）
+STROKE_FEEDBACK = "#0000ff"
+# 走線：線寬 2pt、交叉處留白跳接（Draw.io jumpStyle=gap）
 EDGE_STROKE_WIDTH = 2
-EDGE_JUMP_STYLE = "arc"
+EDGE_JUMP_STYLE = "gap"
 EDGE_JUMP_SIZE = 6
 AND_GATE_W = 80
 AND_GATE_H = 40
@@ -112,6 +112,83 @@ NOT_STACK_GAP = INPUT_LABEL_H  # 下一列放在 NOT 下方時的間距
 _REFERENCE_DIR = Path(__file__).resolve().parent / "reference"
 
 
+_PSEQCELL_STYLE_INNER = "rounded=0;whiteSpace=wrap;html=1;"
+_PSEQCELL_STYLE_H_DEB = "rounded=1;whiteSpace=wrap;html=1;"
+_PSEQCELL_STYLE_L_DEB = "rounded=1;whiteSpace=wrap;html=1;"
+_PSEQCELL_STYLE_Q = "rounded=1;whiteSpace=wrap;html=1;"
+
+
+def _load_pseqcell_layout() -> None:
+    """自 reference/PSEQCELL.xml 載入 Cell 幾何與 style（含連接點 points；RTL 見 PSEQCELL.v）。"""
+    global CELL_GROUP_W, CELL_GROUP_H, CELL_INNER_X, CELL_INNER_W, CELL_INNER_H
+    global CELL_H_DEB_W, CELL_H_DEB_H, CELL_L_DEB_W, CELL_L_DEB_H
+    global CELL_H_DEB_Y, CELL_L_DEB_Y
+    global CELL_Q_W, CELL_Q_H, CELL_Q_X, CELL_Q_Y
+    global CELL_NQ_W, CELL_NQ_H, CELL_NQ_X, CELL_NQ_Y
+    global _PSEQCELL_STYLE_INNER, _PSEQCELL_STYLE_H_DEB, _PSEQCELL_STYLE_L_DEB, _PSEQCELL_STYLE_Q
+
+    path = _REFERENCE_DIR / "PSEQCELL.xml"
+    parts: dict[str, tuple[int, int, int, int]] = {}
+    styles: dict[str, str] = {}
+    group_w = group_h = 0
+    for cell in ET.parse(path).getroot().iter("mxCell"):
+        if cell.get("vertex") != "1":
+            continue
+        style = cell.get("style") or ""
+        if style.startswith("group"):
+            geo = cell.find("mxGeometry")
+            if geo is not None:
+                group_w = int(float(geo.get("width", 0)))
+                group_h = int(float(geo.get("height", 0)))
+            continue
+        geo = cell.find("mxGeometry")
+        if geo is None:
+            continue
+        w = int(float(geo.get("width", 0)))
+        h = int(float(geo.get("height", 0)))
+        x = int(float(geo.get("x", 0) or 0))
+        y = int(float(geo.get("y", 0) or 0))
+        val = (cell.get("value") or "").strip()
+        if val == "H_Deb":
+            parts["h_deb"] = (x, y, w, h)
+            styles["h_deb"] = style
+        elif val == "L_Deb":
+            parts["l_deb"] = (x, y, w, h)
+            styles["l_deb"] = style
+        elif val == "Q":
+            parts["q"] = (x, y, w, h)
+            styles["q"] = style
+        elif val == "~Q":
+            parts["nq"] = (x, y, w, h)
+            styles["nq"] = style
+        elif not val and "rounded=0" in style:
+            parts["inner"] = (x, y, w, h)
+            styles["inner"] = style
+
+    required = ("inner", "h_deb", "l_deb", "q", "nq")
+    missing = [k for k in required if k not in parts]
+    if missing:
+        raise ValueError(f"PSEQCELL.xml missing parts: {missing}")
+
+    ix, _iy, iw, ih = parts["inner"]
+    CELL_INNER_X = ix
+    CELL_INNER_W, CELL_INNER_H = iw, ih
+    _, hy, hw, hh = parts["h_deb"]
+    CELL_H_DEB_W, CELL_H_DEB_H, CELL_H_DEB_Y = hw, hh, hy
+    _, ly, lw, lh = parts["l_deb"]
+    CELL_L_DEB_W, CELL_L_DEB_H, CELL_L_DEB_Y = lw, lh, ly
+    qx, qy, qw, qh = parts["q"]
+    CELL_Q_X, CELL_Q_Y, CELL_Q_W, CELL_Q_H = qx, qy, qw, qh
+    nx, ny, nw, nh = parts["nq"]
+    CELL_NQ_X, CELL_NQ_Y, CELL_NQ_W, CELL_NQ_H = nx, ny, nw, nh
+    CELL_GROUP_W = group_w or iw
+    CELL_GROUP_H = group_h or ih
+    _PSEQCELL_STYLE_INNER = styles["inner"]
+    _PSEQCELL_STYLE_H_DEB = styles["h_deb"]
+    _PSEQCELL_STYLE_L_DEB = styles["l_deb"]
+    _PSEQCELL_STYLE_Q = styles["q"]
+
+
 def _load_logic_gate_style(xml_name: str) -> str:
     """自 reference/*1.xml 讀取 logic_gate 的 mxCell style（AND1／NAND1／OR1／NOR1）。"""
     path = _REFERENCE_DIR / xml_name
@@ -128,6 +205,7 @@ _GATE_STYLE_AND = _load_logic_gate_style("AND1.xml")
 _GATE_STYLE_NAND = _load_logic_gate_style("NAND1.xml")
 _GATE_STYLE_OR = _load_logic_gate_style("OR1.xml")
 _GATE_STYLE_NOR = _load_logic_gate_style("NOR1.xml")
+_load_pseqcell_layout()
 # 由欄位推算的相對偏移（AND 在左、OR 在右，generate_drawio 內動態計算 and_col_x / or_col_x）
 AND_GATE_DY = ROW_GAP           # 多個 AND 垂直間距 80pt
 # OR 閘與該行 Cell 同高，放在左側（不放到 Cell 下方）
@@ -3128,7 +3206,7 @@ def generate_drawio(
     options: DrawioExportOptions | None = None,
 ) -> str:
     """
-    Generate Draw.io XML per PWRCELL.xml:
+    Generate Draw.io XML per PSEQCELL.xml（RTL：PSEQCELL.v）:
     - Only output rails become nodes (Power Sequence Cell: inner + H_Deb + L_Deb + Q + ~Q，無 group）。
     - Input rails are text labels only; 反相一律用共用 NOT 閘呈現（非舊版 ~Name 文字）。
 
@@ -3407,8 +3485,6 @@ def generate_drawio(
     ET.SubElement(root, "mxCell", {"id": "0"})
     ET.SubElement(root, "mxCell", {"id": "1", "parent": "0"})
 
-    style_inner = "rounded=0;whiteSpace=wrap;html=1;"
-    style_deb = "rounded=1;whiteSpace=wrap;html=1;"
     style_input_label = (
         "text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;"
         "align=right;verticalAlign=middle;rounded=0;direction=east;rotation=90;"
@@ -3470,8 +3546,7 @@ def generate_drawio(
             "as": "geometry"
         })
 
-    # 2) Output 節點：依 PWRCELL.xml — inner + H/L_Deb + Q + ~Q + name + Q→name
-    style_q_box = "rounded=1;whiteSpace=wrap;html=1;"
+    # 2) Output 節點：依 PSEQCELL.xml — inner + H/L_Deb + Q + ~Q + name + Q→name
     for r in outputs:
         px, py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
         inner_id = cell_id; cell_id += 1
@@ -3489,7 +3564,7 @@ def generate_drawio(
 
         # 先放 inner（底層），再放 H_Deb/L_Deb/Q/~Q（上層），確保 z-order
         inner = ET.SubElement(root, "mxCell", {
-            "id": str(inner_id), "parent": "1", "style": style_inner, "value": "", "vertex": "1"
+            "id": str(inner_id), "parent": "1", "style": _PSEQCELL_STYLE_INNER, "value": "", "vertex": "1"
         })
         ET.SubElement(inner, "mxGeometry", {
             "height": str(CELL_INNER_H), "width": str(CELL_INNER_W),
@@ -3497,7 +3572,7 @@ def generate_drawio(
         })
 
         h_deb = ET.SubElement(root, "mxCell", {
-            "id": str(h_deb_id), "parent": "1", "style": style_deb, "value": "H_Deb", "vertex": "1"
+            "id": str(h_deb_id), "parent": "1", "style": _PSEQCELL_STYLE_H_DEB, "value": "H_Deb", "vertex": "1"
         })
         ET.SubElement(h_deb, "mxGeometry", {
             "height": str(CELL_H_DEB_H), "width": str(CELL_H_DEB_W),
@@ -3505,7 +3580,7 @@ def generate_drawio(
         })
 
         l_deb = ET.SubElement(root, "mxCell", {
-            "id": str(l_deb_id), "parent": "1", "style": style_deb, "value": "L_Deb", "vertex": "1"
+            "id": str(l_deb_id), "parent": "1", "style": _PSEQCELL_STYLE_L_DEB, "value": "L_Deb", "vertex": "1"
         })
         ET.SubElement(l_deb, "mxGeometry", {
             "height": str(CELL_L_DEB_H), "width": str(CELL_L_DEB_W),
@@ -3513,14 +3588,14 @@ def generate_drawio(
         })
 
         q_box = ET.SubElement(root, "mxCell", {
-            "id": str(q_box_id), "parent": "1", "style": style_q_box, "value": "Q", "vertex": "1"
+            "id": str(q_box_id), "parent": "1", "style": _PSEQCELL_STYLE_Q, "value": "Q", "vertex": "1"
         })
         ET.SubElement(q_box, "mxGeometry", {
             "height": str(CELL_Q_H), "width": str(CELL_Q_W),
             "x": str(px + CELL_Q_X), "y": str(py + CELL_Q_Y), "as": "geometry"
         })
         nq_box = ET.SubElement(root, "mxCell", {
-            "id": str(nq_box_id), "parent": "1", "style": style_q_box, "value": "~Q", "vertex": "1"
+            "id": str(nq_box_id), "parent": "1", "style": _PSEQCELL_STYLE_Q, "value": "~Q", "vertex": "1"
         })
         ET.SubElement(nq_box, "mxGeometry", {
             "height": str(CELL_NQ_H), "width": str(CELL_NQ_W),

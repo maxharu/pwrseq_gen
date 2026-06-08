@@ -10,6 +10,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from config_models import PowerSeqConfig
 from drawio_export import (
+    CELL_GROUP_H,
+    CELL_GROUP_W,
+    CELL_H_DEB_Y,
+    CELL_L_DEB_Y,
+    CELL_NQ_X,
+    CELL_Q_X,
     STROKE_DEFAULT,
     STROKE_FEEDBACK,
     _GATE_ENTRY_AY,
@@ -17,6 +23,10 @@ from drawio_export import (
     _GATE_STYLE_NAND,
     _GATE_STYLE_NOR,
     _GATE_STYLE_OR,
+    _PSEQCELL_STYLE_H_DEB,
+    _PSEQCELL_STYLE_INNER,
+    _PSEQCELL_STYLE_L_DEB,
+    _PSEQCELL_STYLE_Q,
     _count_and_or_middle_slots,
     _count_cell_fb_to_deb,
     _count_or_cell_middle_slots,
@@ -385,6 +395,35 @@ class TestDrawioFbMatrix:
             assert STROKE_FEEDBACK not in (c.get("style") or ""), (
                 f"正向跨列邊 {c.get('id')} 不應為回授藍色"
             )
+
+    def test_pseqcell_layout_loaded_from_reference_xml(self):
+        """Cell 幾何須自 PSEQCELL.xml 載入（對應 PSEQCELL.v）。"""
+        assert CELL_GROUP_W == 80 and CELL_GROUP_H == 80
+        assert CELL_Q_X == 60 and CELL_NQ_X == 60
+        assert CELL_H_DEB_Y == 10 and CELL_L_DEB_Y == 50
+
+    def test_pseqcell_vertex_styles_match_reference_xml(self):
+        """Cell 各部件 style（含 points 連接點）須與 PSEQCELL.xml 一致。"""
+        assert "points=" in _PSEQCELL_STYLE_H_DEB
+        assert "points=" in _PSEQCELL_STYLE_L_DEB
+        assert "points=" in _PSEQCELL_STYLE_Q
+        assert _PSEQCELL_STYLE_H_DEB != _PSEQCELL_STYLE_L_DEB
+        with open(MATRIX_JSON, encoding="utf-8") as f:
+            cfg = PowerSeqConfig.from_dict(json.load(f))
+        root = ET.fromstring(generate_drawio(cfg))
+        by_value: dict[str, str] = {}
+        for c in root.iter("mxCell"):
+            if c.get("vertex") != "1":
+                continue
+            val = (c.get("value") or "").strip()
+            if val in ("", "H_Deb", "L_Deb", "Q", "~Q"):
+                key = val or "inner"
+                by_value.setdefault(key, c.get("style") or "")
+        assert by_value.get("inner") == _PSEQCELL_STYLE_INNER
+        assert by_value.get("H_Deb") == _PSEQCELL_STYLE_H_DEB
+        assert by_value.get("L_Deb") == _PSEQCELL_STYLE_L_DEB
+        assert by_value.get("Q") == _PSEQCELL_STYLE_Q
+        assert by_value.get("~Q") == _PSEQCELL_STYLE_Q
 
     def test_logic_gate_styles_match_reference_xml(self):
         """匯出 AND/NAND/OR/NOR 的 style 須與 reference/*1.xml 一致。"""
