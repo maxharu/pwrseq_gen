@@ -3336,7 +3336,7 @@ class PowerSeqGUI(ctk.CTk):
             try:
                 cfg2 = self._collect_config()
                 cfg2.wavedrom_scenario = scenario.to_dict()
-                text = generate_wavedrom_json(cfg2, scenario)
+                text = generate_wavedrom_json(cfg2, scenario, output_filename=path)
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(text)
                 self._status_msg(f"Exported WaveDrom: {os.path.basename(path)}", level="success")

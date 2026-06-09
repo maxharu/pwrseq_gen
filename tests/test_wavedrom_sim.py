@@ -293,6 +293,9 @@ class TestSimulate:
         assert doc.get("config", {}).get("skin") == "narrow"
         assert doc.get("config", {}).get("hscale", 1) == 1
         assert "Author: Haru" in doc["head"]["text"]
+        assert "PWRSEQ_TOP" in doc["head"]["text"]
+        doc_named = generate_wavedrom(cfg, output_filename=r"C:\out\my_seq_chart.json")
+        assert doc_named["head"]["text"].startswith("my_seq_chart (")
         doc2 = generate_wavedrom(
             cfg,
             WaveDromScenario(steps=20, hscale=3, inputs={}),
