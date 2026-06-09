@@ -1895,14 +1895,33 @@ class ValidationPanel(ctk.CTkFrame):
 # ============================================================
 
 PREVIEW_LANGS = ("Verilog", "C")
+PREVIEW_FONT_FAMILY = FONT_MONO[0]
+PREVIEW_FONT_SIZE_DEFAULT = FONT_MONO[1]
+PREVIEW_FONT_SIZES = (8, 10, 12, 14, 16, 18, 20, 24)
+
+
+def _preview_font(size: int) -> tuple:
+    return (PREVIEW_FONT_FAMILY, size)
 
 
 class PreviewPanel(ctk.CTkFrame):
     """右側預覽面板：Verilog 或 C read-only text，內建主題化捲軸。"""
 
-    def __init__(self, master, on_lang_change: Optional[Callable[[], None]] = None, **kwargs):
+    def __init__(
+        self,
+        master,
+        on_lang_change: Optional[Callable[[], None]] = None,
+        on_font_size_change: Optional[Callable[[int], None]] = None,
+        initial_font_size: Optional[int] = None,
+        **kwargs,
+    ):
         super().__init__(master, **kwargs)
         self.on_lang_change = on_lang_change
+        self.on_font_size_change = on_font_size_change
+        if initial_font_size in PREVIEW_FONT_SIZES:
+            self._font_size = initial_font_size
+        else:
+            self._font_size = PREVIEW_FONT_SIZE_DEFAULT
         self._build_ui()
 
     def _build_ui(self):
@@ -1916,9 +1935,21 @@ class PreviewPanel(ctk.CTkFrame):
             command=self._on_lang_selected,
         )
         self._lang_menu.pack(side="left", padx=(S_SM, 0))
+        size_frame = ctk.CTkFrame(header, fg_color="transparent")
+        size_frame.pack(side="left", padx=(S_SM, 0))
+        ctk.CTkLabel(size_frame, text="Font", font=FONT_HINT).pack(side="left", padx=(0, S_XS))
+        self._font_size_var = tk.StringVar(value=str(self._font_size))
+        self._font_menu = ctk.CTkOptionMenu(
+            size_frame,
+            values=[str(s) for s in PREVIEW_FONT_SIZES],
+            variable=self._font_size_var,
+            width=60,
+            command=self._on_font_size_selected,
+        )
+        self._font_menu.pack(side="left")
         self._status = ctk.CTkLabel(header, text="", font=FONT_HINT, text_color="gray")
         self._status.pack(side="right")
-        self._text = ctk.CTkTextbox(self, font=FONT_MONO, wrap="none",
+        self._text = ctk.CTkTextbox(self, font=_preview_font(self._font_size), wrap="none",
                                     activate_scrollbars=True)
         self._text.pack(fill="both", expand=True, padx=S_SM, pady=(S_XS, S_SM))
         self._text.configure(state="disabled")
@@ -1929,6 +1960,27 @@ class PreviewPanel(ctk.CTkFrame):
         self._update_title()
         if self.on_lang_change:
             self.on_lang_change()
+
+    def _on_font_size_selected(self, value: str):
+        try:
+            size = int(value)
+        except ValueError:
+            return
+        if size not in PREVIEW_FONT_SIZES:
+            return
+        self.set_font_size(size)
+
+    def set_font_size(self, size: int):
+        if size not in PREVIEW_FONT_SIZES:
+            size = PREVIEW_FONT_SIZE_DEFAULT
+        self._font_size = size
+        self._font_size_var.set(str(size))
+        self._text.configure(font=_preview_font(size))
+        if self.on_font_size_change:
+            self.on_font_size_change(size)
+
+    def get_font_size(self) -> int:
+        return self._font_size
 
     def _update_title(self):
         lang = self.get_lang()
@@ -2149,13 +2201,53 @@ class StatusBar(ctk.CTkFrame):
             self._msg_after_id = self.after(auto_clear_ms, lambda: self._msg_lbl.configure(text=""))
 
 
+_PWRSEQ_USER_DIR = os.path.join(os.path.expanduser("~"), ".pwrseq_gen")
+
+
+class GuiSettings:
+    """GUI 偏好設定，儲存於 ~/.pwrseq_gen/gui_settings.json。"""
+
+    def __init__(self):
+        self._path = os.path.join(_PWRSEQ_USER_DIR, "gui_settings.json")
+        self._data: dict = self._load()
+
+    def _load(self) -> dict:
+        try:
+            with open(self._path, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _save(self) -> None:
+        try:
+            os.makedirs(_PWRSEQ_USER_DIR, exist_ok=True)
+            with open(self._path, "w", encoding="utf-8") as f:
+                json.dump(self._data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def get_preview_font_size(self) -> int:
+        try:
+            size = int(self._data.get("preview_font_size", PREVIEW_FONT_SIZE_DEFAULT))
+        except (TypeError, ValueError):
+            return PREVIEW_FONT_SIZE_DEFAULT
+        return size if size in PREVIEW_FONT_SIZES else PREVIEW_FONT_SIZE_DEFAULT
+
+    def set_preview_font_size(self, size: int) -> None:
+        if size not in PREVIEW_FONT_SIZES:
+            return
+        self._data["preview_font_size"] = size
+        self._save()
+
+
 class RecentFiles:
     """Recent files 儲存於 ~/.pwrseq_gen/recent.json，最多 8 個。"""
 
     MAX = 8
 
     def __init__(self):
-        self._dir = os.path.join(os.path.expanduser("~"), ".pwrseq_gen")
+        self._dir = _PWRSEQ_USER_DIR
         self._path = os.path.join(self._dir, "recent.json")
         self._items: list[str] = self._load()
 
@@ -2238,6 +2330,7 @@ class PowerSeqGUI(ctk.CTk):
         self._preview_after_id: Optional[str] = None
         self._editor_change_after_id: Optional[str] = None
         self._current_path: Optional[str] = None
+        self._gui_settings = GuiSettings()
         self._recent = RecentFiles()
         self._tooltips: list[Tooltip] = []  # 強引用，避免 GC
         self._wavedrom_dialog = None
@@ -2452,6 +2545,8 @@ class PowerSeqGUI(ctk.CTk):
         self.preview = PreviewPanel(
             self.preview_wrap, fg_color="transparent",
             on_lang_change=self._schedule_preview,
+            on_font_size_change=self._gui_settings.set_preview_font_size,
+            initial_font_size=self._gui_settings.get_preview_font_size(),
         )
         self.preview.pack(fill="both", expand=True)
 
