@@ -26,6 +26,7 @@ v1.2（相對 v1.1）：
 import json
 import os
 import tkinter as tk
+from dataclasses import asdict
 from tkinter import filedialog, messagebox
 from typing import Callable, Optional
 
@@ -265,12 +266,25 @@ class CondSectionFrame(ctk.CTkFrame):
             border_width=1,
             corner_radius=6,
         )
-        frame.pack(fill="x", pady=S_XS, padx=(S_LG, 0))
+        frame.pack(fill="x", pady=S_XS, padx=(S_LG, S_SM))
 
         header = ctk.CTkFrame(frame, fg_color="transparent")
         header.pack(fill="x", padx=S_SM, pady=S_XS)
 
-        handle = ctk.CTkLabel(header, text="\u2261", width=18,
+        # 右側 Inv 須先 pack，否則左側元件會把右緣擠掉（Tk pack 順序）
+        if self.show_group_inv:
+            inv_init = bool(self.group_inv[gi]) if gi < len(self.group_inv) else False
+            gvar = ctk.BooleanVar(value=inv_init)
+            self.group_inv_vars[gi] = gvar
+            gvar.trace_add("write", lambda *_a, g=gi: self._on_group_inv_changed(g))
+            ctk.CTkCheckBox(
+                header, text="Inv", variable=gvar, width=100,
+            ).pack(side="right", padx=(S_SM, 0))
+
+        left_hdr = ctk.CTkFrame(header, fg_color="transparent")
+        left_hdr.pack(side="left", fill="x", expand=True)
+
+        handle = ctk.CTkLabel(left_hdr, text="\u2261", width=18,
                               text_color=("gray40", "gray70"), cursor="hand2")
         handle.pack(side="left", padx=(0, S_SM))
         handle.bind("<ButtonPress-1>",
@@ -280,28 +294,19 @@ class CondSectionFrame(ctk.CTkFrame):
         handle.bind("<ButtonRelease-1>",
                     lambda _e: self._on_group_drag_release())
 
-        ctk.CTkLabel(header, text=f"Group {gi + 1}",
+        ctk.CTkLabel(left_hdr, text=f"Group {gi + 1}",
                      text_color=self.theme["text"],
                      font=FONT_CHIP, width=60).pack(side="left", padx=(0, S_SM))
 
         dep_options = self.get_dep_options() or [""]
-        combo = ctk.CTkComboBox(header, values=dep_options, width=140)
+        combo = ctk.CTkComboBox(left_hdr, values=dep_options, width=140)
         combo.pack(side="left", padx=(0, S_SM))
         combo.set(dep_options[0])
 
-        ctk.CTkButton(header, text="+ Add", width=60,
+        ctk.CTkButton(left_hdr, text="+ Add", width=60,
                       command=lambda g=gi: self._add_cond_to_group(g)).pack(side="left", padx=(0, S_SM))
-        ctk.CTkButton(header, text="Del Group", width=80,
+        ctk.CTkButton(left_hdr, text="Del Group", width=80,
                       command=lambda g=gi: self._remove_group(g)).pack(side="left")
-
-        if self.show_group_inv:
-            inv_init = bool(self.group_inv[gi]) if gi < len(self.group_inv) else False
-            gvar = ctk.BooleanVar(value=inv_init)
-            self.group_inv_vars[gi] = gvar
-            gvar.trace_add("write", lambda *_a, g=gi: self._on_group_inv_changed(g))
-            ctk.CTkCheckBox(
-                header, text="Inv Group", variable=gvar, width=80,
-            ).pack(side="right", padx=(S_SM, 0))
 
         list_frame = ctk.CTkFrame(frame, fg_color="transparent")
         # list_frame 在首列加入時才 pack
@@ -853,15 +858,54 @@ class RailEditorFrame(ctk.CTkFrame):
         self.on_rename = on_rename
         self.on_type_change = on_type_change
         self.on_change = on_change
+        self._preview_snapshot = ""
 
         self._build_ui()
+        self._preview_snapshot = self._rail_snapshot()
+
+    def _rail_snapshot(self) -> str:
+        return json.dumps(asdict(self.get_rail()), sort_keys=True, ensure_ascii=False)
 
     def _fire_change(self, *_):
-        if self.on_change is not None:
-            try:
-                self.on_change()
-            except Exception:
-                pass
+        self._notify_editor_change(preview=False)
+
+    def _sync_preview_if_changed(self) -> bool:
+        """內容與上次 preview 不同時更新 snapshot 並觸發 preview。回傳是否有變更。"""
+        try:
+            current = self._rail_snapshot()
+        except Exception:
+            self._notify_editor_change(preview=True)
+            return True
+        if current == self._preview_snapshot:
+            return False
+        self._preview_snapshot = current
+        self._notify_editor_change(preview=True)
+        return True
+
+    def _fire_commit(self, *_):
+        """輸入框 Enter 或焦點離開：內容有變才更新 preview。"""
+        if not self._sync_preview_if_changed():
+            self._notify_editor_change(preview=False)
+
+    def _fire_live(self, *_):
+        """Checkbox / 下拉 / Condition 變更：內容有變才更新 preview。"""
+        if not self._sync_preview_if_changed():
+            self._notify_editor_change(preview=False)
+
+    def _notify_editor_change(self, *, preview: bool):
+        if self.on_change is None:
+            return
+        try:
+            self.on_change(preview=preview)
+        except TypeError:
+            self.on_change()
+
+    def _bind_entry_preview_commit(self, entry):
+        entry.bind("<FocusOut>", self._fire_commit)
+        entry.bind("<Return>", self._fire_commit)
+
+    def _bind_widget_preview_commit(self, widget):
+        widget.bind("<FocusOut>", self._fire_commit)
 
     # ---- helpers ----
     def _dep_options(self) -> list[str]:
@@ -931,21 +975,38 @@ class RailEditorFrame(ctk.CTkFrame):
         self.entry_hi = ctk.CTkEntry(grid_t, width=100)
         self.entry_hi.insert(0, str(self.rail.cycle_hi))
         self.entry_hi.grid(row=0, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self.entry_hi.bind("<FocusOut>", self._fire_change)
+        self._bind_entry_preview_commit(self.entry_hi)
 
         ctk.CTkLabel(grid_t, text="CYCLE_LO:", font=FONT_BODY).grid(
             row=0, column=2, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_lo = ctk.CTkEntry(grid_t, width=100)
         self.entry_lo.insert(0, str(self.rail.cycle_lo))
         self.entry_lo.grid(row=0, column=3, sticky="w", pady=2)
-        self.entry_lo.bind("<FocusOut>", self._fire_change)
+        self._bind_entry_preview_commit(self.entry_lo)
+
+        ctk.CTkLabel(grid_t, text="CYCLE_FORCE:", font=FONT_BODY).grid(
+            row=1, column=0, sticky="w", padx=(0, S_SM), pady=2)
+        self.entry_cycle_force = ctk.CTkEntry(grid_t, width=100)
+        self.entry_cycle_force.insert(0, str(getattr(self.rail, "cycle_force", 2)))
+        self.entry_cycle_force.grid(row=1, column=1, sticky="w", padx=(0, S_LG), pady=2)
+        self._bind_entry_preview_commit(self.entry_cycle_force)
 
         ctk.CTkLabel(grid_t, text="INIT:", font=FONT_BODY).grid(
-            row=1, column=0, sticky="w", padx=(0, S_SM), pady=2)
+            row=2, column=0, sticky="w", padx=(0, S_SM), pady=2)
         self.var_pseq_init = ctk.StringVar(value="1" if getattr(self.rail, "init", 0) == 1 else "0")
-        ctk.CTkComboBox(grid_t, values=["0", "1"], variable=self.var_pseq_init, width=100).grid(
-            row=1, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self.var_pseq_init.trace_add("write", self._fire_change)
+        cmb_pseq_init = ctk.CTkComboBox(grid_t, values=["0", "1"], variable=self.var_pseq_init, width=100)
+        cmb_pseq_init.grid(row=2, column=1, sticky="w", padx=(0, S_LG), pady=2)
+        self.var_pseq_init.trace_add("write", self._fire_live)
+        self._bind_widget_preview_commit(cmb_pseq_init)
+
+        ctk.CTkLabel(grid_t, text="FORCE:", font=FONT_BODY).grid(
+            row=2, column=2, sticky="w", padx=(0, S_SM), pady=2)
+        self.var_force_val = ctk.StringVar(
+            value="1" if getattr(self.rail, "force_val", 0) == 1 else "0")
+        cmb_force_val = ctk.CTkComboBox(grid_t, values=["0", "1"], variable=self.var_force_val, width=100)
+        cmb_force_val.grid(row=2, column=3, sticky="w", pady=2)
+        self.var_force_val.trace_add("write", self._fire_live)
+        self._bind_widget_preview_commit(cmb_force_val)
 
         pulses = self._pulse_values(
             getattr(self.rail, "pulse_hi", "iPulse_1us"),
@@ -953,25 +1014,28 @@ class RailEditorFrame(ctk.CTkFrame):
             getattr(self.rail, "pulse_force", "iPulse_1us"),
         )
         ctk.CTkLabel(grid_t, text="Timing Hi:", font=FONT_BODY).grid(
-            row=2, column=0, sticky="w", padx=(0, S_SM), pady=2)
+            row=3, column=0, sticky="w", padx=(0, S_SM), pady=2)
         self.var_pulse_hi = ctk.StringVar(value=getattr(self.rail, "pulse_hi", "iPulse_1us") or "iPulse_1us")
-        ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_hi, width=130).grid(
-            row=2, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self.var_pulse_hi.trace_add("write", self._fire_change)
+        cmb_pulse_hi = ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_hi, width=130)
+        cmb_pulse_hi.grid(row=3, column=1, sticky="w", padx=(0, S_LG), pady=2)
+        self.var_pulse_hi.trace_add("write", self._fire_live)
+        self._bind_widget_preview_commit(cmb_pulse_hi)
 
         ctk.CTkLabel(grid_t, text="Timing Lo:", font=FONT_BODY).grid(
-            row=2, column=2, sticky="w", padx=(0, S_SM), pady=2)
+            row=3, column=2, sticky="w", padx=(0, S_SM), pady=2)
         self.var_pulse_lo = ctk.StringVar(value=getattr(self.rail, "pulse_lo", "iPulse_1us") or "iPulse_1us")
-        ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_lo, width=130).grid(
-            row=2, column=3, sticky="w", pady=2)
-        self.var_pulse_lo.trace_add("write", self._fire_change)
+        cmb_pulse_lo = ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_lo, width=130)
+        cmb_pulse_lo.grid(row=3, column=3, sticky="w", pady=2)
+        self.var_pulse_lo.trace_add("write", self._fire_live)
+        self._bind_widget_preview_commit(cmb_pulse_lo)
 
         ctk.CTkLabel(grid_t, text="Timing Force:", font=FONT_BODY).grid(
-            row=3, column=0, sticky="w", padx=(0, S_SM), pady=2)
+            row=4, column=0, sticky="w", padx=(0, S_SM), pady=2)
         self.var_pulse_force = ctk.StringVar(value=getattr(self.rail, "pulse_force", "iPulse_1us") or "iPulse_1us")
-        ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_force, width=130).grid(
-            row=3, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self.var_pulse_force.trace_add("write", self._fire_change)
+        cmb_pulse_force = ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_force, width=130)
+        cmb_pulse_force.grid(row=4, column=1, sticky="w", padx=(0, S_LG), pady=2)
+        self.var_pulse_force.trace_add("write", self._fire_live)
+        self._bind_widget_preview_commit(cmb_pulse_force)
 
         # --- Conditions (output only) ---
         self.cond_wrap, cond_body = self._make_section("Conditions")
@@ -1011,7 +1075,7 @@ class RailEditorFrame(ctk.CTkFrame):
                 initial_inv_flat=init_inv_flat,
                 initial_use_flat=init_use_flat,
                 initial_group_inv=init_group_inv,
-                on_change=self._fire_change,
+                on_change=self._fire_live,
                 get_self_name=lambda: self.rail.name,
             )
             sec.pack(fill="both", expand=True, padx=S_SM, pady=S_SM)
@@ -1037,36 +1101,38 @@ class RailEditorFrame(ctk.CTkFrame):
         self.entry_deb_cycle_hi = ctk.CTkEntry(grid_d, width=100)
         self.entry_deb_cycle_hi.insert(0, str(getattr(self.rail, "deb_cycle_hi", 2)))
         self.entry_deb_cycle_hi.grid(row=0, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self.entry_deb_cycle_hi.bind("<FocusOut>", self._fire_change)
+        self._bind_entry_preview_commit(self.entry_deb_cycle_hi)
 
         ctk.CTkLabel(grid_d, text="CYCLE_LO:", font=FONT_BODY).grid(
             row=0, column=2, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_deb_cycle_lo = ctk.CTkEntry(grid_d, width=100)
         self.entry_deb_cycle_lo.insert(0, str(getattr(self.rail, "deb_cycle_lo", 2)))
         self.entry_deb_cycle_lo.grid(row=0, column=3, sticky="w", pady=2)
-        self.entry_deb_cycle_lo.bind("<FocusOut>", self._fire_change)
+        self._bind_entry_preview_commit(self.entry_deb_cycle_lo)
 
         ctk.CTkLabel(grid_d, text="CYCLE_SYNC:", font=FONT_BODY).grid(
             row=1, column=0, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_deb_cycle_sync = ctk.CTkEntry(grid_d, width=100)
         self.entry_deb_cycle_sync.insert(0, str(getattr(self.rail, "deb_cycle_sync", 2)))
         self.entry_deb_cycle_sync.grid(row=1, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self.entry_deb_cycle_sync.bind("<FocusOut>", self._fire_change)
+        self._bind_entry_preview_commit(self.entry_deb_cycle_sync)
 
         ctk.CTkLabel(grid_d, text="INIT:", font=FONT_BODY).grid(
             row=1, column=2, sticky="w", padx=(0, S_SM), pady=2)
         self.var_deb_init = ctk.StringVar(value="1" if getattr(self.rail, "deb_init", 0) == 1 else "0")
-        ctk.CTkComboBox(grid_d, values=["0", "1"], variable=self.var_deb_init, width=100).grid(
-            row=1, column=3, sticky="w", pady=2)
-        self.var_deb_init.trace_add("write", self._fire_change)
+        cmb_deb_init = ctk.CTkComboBox(grid_d, values=["0", "1"], variable=self.var_deb_init, width=100)
+        cmb_deb_init.grid(row=1, column=3, sticky="w", pady=2)
+        self.var_deb_init.trace_add("write", self._fire_live)
+        self._bind_widget_preview_commit(cmb_deb_init)
 
         ctk.CTkLabel(grid_d, text="Timing Deb:", font=FONT_BODY).grid(
             row=2, column=0, sticky="w", padx=(0, S_SM), pady=2)
         deb_pulses = self._pulse_values(getattr(self.rail, "deb_pulse", "iPulse_1us"))
         self.var_deb_pulse = ctk.StringVar(value=getattr(self.rail, "deb_pulse", "iPulse_1us") or "iPulse_1us")
-        ctk.CTkComboBox(grid_d, values=deb_pulses, variable=self.var_deb_pulse, width=130).grid(
-            row=2, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self.var_deb_pulse.trace_add("write", self._fire_change)
+        cmb_deb_pulse = ctk.CTkComboBox(grid_d, values=deb_pulses, variable=self.var_deb_pulse, width=130)
+        cmb_deb_pulse.grid(row=2, column=1, sticky="w", padx=(0, S_LG), pady=2)
+        self.var_deb_pulse.trace_add("write", self._fire_live)
+        self._bind_widget_preview_commit(cmb_deb_pulse)
 
         self._on_type_toggle(initial=True)
 
@@ -1074,6 +1140,7 @@ class RailEditorFrame(ctk.CTkFrame):
             self.entry_name,
             self.entry_hi,
             self.entry_lo,
+            self.entry_cycle_force,
             self.entry_deb_cycle_hi,
             self.entry_deb_cycle_lo,
             self.entry_deb_cycle_sync,
@@ -1100,7 +1167,7 @@ class RailEditorFrame(ctk.CTkFrame):
             self.timing_wrap.pack_forget()
             self.cond_wrap.pack_forget()
             self.deb_wrap.pack(fill="x", pady=(0, S_SM))
-            self._on_deb_toggle()
+            self._on_deb_toggle(initial=initial)
         else:
             self.deb_wrap.pack_forget()
             self.timing_wrap.pack(fill="x", pady=(0, S_SM))
@@ -1110,12 +1177,13 @@ class RailEditorFrame(ctk.CTkFrame):
             self._old_type = self.var_type.get()
             self.on_type_change(self.rail.name, old, self.var_type.get())
 
-    def _on_deb_toggle(self):
+    def _on_deb_toggle(self, initial: bool = False):
         if self.var_deb_enable.get():
             self.deb_params.pack(fill="x")
         else:
             self.deb_params.pack_forget()
-        self._fire_change()
+        if not initial:
+            self._fire_live()
 
     # ---- collect ----
     def get_rail(self) -> PowerRail:
@@ -1151,7 +1219,7 @@ class RailEditorFrame(ctk.CTkFrame):
             hi_use_groups = lo_use_groups = force_use_groups = []
             hi_group_inv = lo_group_inv = force_group_inv = []
 
-        return PowerRail(
+        rail = PowerRail(
             name=rail_name,
             seq_type=seq_type,
             depends_on=flat_hi,
@@ -1187,13 +1255,16 @@ class RailEditorFrame(ctk.CTkFrame):
             deb_pulse=self.var_deb_pulse.get() if seq_type == "input" else "iPulse_1us",
             cycle_hi=cycle_hi,
             cycle_lo=cycle_lo,
-            cycle_force=self.rail.cycle_force,
+            cycle_force=_safe_int(self.entry_cycle_force.get(), self.rail.cycle_force)
+            if seq_type != "input" else 2,
             recover=self.rail.recover,
             init=1 if (seq_type != "input" and self.var_pseq_init.get() == "1") else 0,
-            force_val=self.rail.force_val,
+            force_val=1 if (seq_type != "input" and self.var_force_val.get() == "1") else 0,
             cycle_sync=self.rail.cycle_sync,
             od=self.rail.od,
         )
+        self.rail = rail
+        return rail
 
 
 # ============================================================
@@ -1261,7 +1332,10 @@ class CollapsibleRailFrame(ctk.CTkFrame):
         else:
             chips.append((f"HI:{self.rail.cycle_hi}", COND_THEME["hi"]["text"], None))
             chips.append((f"LO:{self.rail.cycle_lo}", COND_THEME["lo"]["text"], None))
+            chips.append((f"F:{self.rail.cycle_force}", COND_THEME["force"]["text"], None))
             chips.append((f"INIT:{getattr(self.rail, 'init', 0)}", None, None))
+            if getattr(self.rail, "force_val", 0) == 1:
+                chips.append(("FORCE:1", COND_THEME["force"]["text"], None))
         for text, fg, bg in chips:
             c = make_chip(self._chips_holder, text, fg=fg, bg=bg)
             c.pack(side="left", padx=(0, S_XS))
@@ -1306,9 +1380,9 @@ class CollapsibleRailFrame(ctk.CTkFrame):
             self._update_ui()
 
     def get_rail(self) -> PowerRail:
-        if self.editor is None:
-            return self.rail
-        return self.editor.get_rail()
+        if self.editor is not None:
+            self.rail = self.editor.get_rail()
+        return self.rail
 
 
 # ============================================================
@@ -1762,8 +1836,10 @@ class PreviewPanel(ctk.CTkFrame):
                                     activate_scrollbars=True)
         self._text.pack(fill="both", expand=True, padx=S_SM, pady=(S_XS, S_SM))
         self._text.configure(state="disabled")
+        self._last_code = ""
 
     def _on_lang_selected(self, _value: str):
+        self._last_code = ""
         self._update_title()
         if self.on_lang_change:
             self.on_lang_change()
@@ -1777,10 +1853,20 @@ class PreviewPanel(ctk.CTkFrame):
         return v if v in PREVIEW_LANGS else "Verilog"
 
     def _set_text(self, content: str):
+        if content == self._last_code:
+            return
+        tb = self._text._textbox
+        yfrac, xfrac = tb.yview()[0], tb.xview()[0]
         self._text.configure(state="normal")
-        self._text.delete("1.0", "end")
-        self._text.insert("1.0", content)
+        tb.delete("1.0", "end")
+        tb.insert("1.0", content)
+        try:
+            tb.yview_moveto(yfrac)
+            tb.xview_moveto(xfrac)
+        except Exception:
+            pass
         self._text.configure(state="disabled")
+        self._last_code = content
 
     def set_code(self, code: str, status: str = ""):
         self._update_title()
@@ -1793,6 +1879,7 @@ class PreviewPanel(ctk.CTkFrame):
 
     def set_error(self, msg: str):
         self._update_title()
+        self._last_code = ""
         self._set_text(f"// 無法預覽：\n// {msg}")
         self._status.configure(text="error", text_color=("#cf222e", "#ff7b72"))
 
@@ -2072,6 +2159,7 @@ class PowerSeqGUI(ctk.CTk):
         self._bind_shortcuts()
         self.bind("<FocusIn>", self._raise_modal_dialogs_if_open, add="+")
         self._refresh_all()
+        self.after_idle(self._apply_paned_layout)
 
     # ---- UI ----
     def _tt(self, widget, text: str):
@@ -2233,9 +2321,9 @@ class PowerSeqGUI(ctk.CTk):
         self.pulse_panel.entry.bind(
             "<FocusIn>", lambda _e: self._disarm_node_list_delete(), add="+")
 
-        # middle
+        # middle — stretch="never"：視窗變寬時不把額外空間給編輯區
         mid = ctk.CTkFrame(paned, fg_color="transparent")
-        paned.add(mid, minsize=480, stretch="always")
+        paned.add(mid, minsize=480, stretch="never")
         mid.grid_rowconfigure(2, weight=1)
         mid.grid_columnconfigure(0, weight=1)
 
@@ -2268,9 +2356,9 @@ class PowerSeqGUI(ctk.CTk):
         )
         self.validation.grid(row=3, column=0, sticky="ew", pady=(S_SM, 0))
 
-        # right (preview)
-        self.preview_wrap = ctk.CTkFrame(paned, fg_color=("gray90", "gray17"), width=380)
-        paned.add(self.preview_wrap, minsize=240, stretch="never", width=380)
+        # right (preview) — 預設略窄，把空間留給中間編輯區（Inv 等）
+        self.preview_wrap = ctk.CTkFrame(paned, fg_color=("gray90", "gray17"), width=320)
+        paned.add(self.preview_wrap, minsize=240, stretch="always", width=320)
         self.preview = PreviewPanel(
             self.preview_wrap, fg_color="transparent",
             on_lang_change=self._schedule_preview,
@@ -2395,40 +2483,37 @@ class PowerSeqGUI(ctk.CTk):
         self._redo_btn.configure(state="normal" if self._redo_stack else "disabled")
 
     # ---- live update from rail editor (cond / cycle / pulse / debounce) ----
-    def _on_editor_change(self):
-        """RailEditor 內任何欄位變動：debounced 更新 header summary、preview、validation。
-        並標記 dirty，但不 push undo（避免每次 keystroke 都產生 snapshot）。"""
+    def _on_editor_change(self, preview: bool = False):
+        """RailEditor 欄位變動：debounced 更新 header chip / validation。
+        preview=True 時（Enter 或焦點離開）才更新右側 preview。"""
         if not self._dirty:
             self._mark_dirty()
+        if preview:
+            self._collect_config()
         if self._editor_change_after_id is not None:
             try:
                 self.after_cancel(self._editor_change_after_id)
             except Exception:
                 pass
         self._editor_change_after_id = self.after(250, self._apply_editor_change)
+        if preview:
+            self._schedule_preview()
 
     def _apply_editor_change(self):
         self._editor_change_after_id = None
-        # 更新所有 header summary（cycle/init/deb 變動會改變 chip）
-        for cf in self.collapsible_frames:
-            if cf.editor is not None:
-                # 用 widget 最新值更新 cf.rail，再 refresh header
-                try:
-                    cf.rail = cf.editor.get_rail()
-                except Exception:
-                    pass
-                cf.update_summary()
-        # 更新左側 list（順帶若 name 也變過則同步）
-        primary = self.node_list.get_primary()
-        # node_list 顯示是用 self.config_obj.rails 的 name；name 變動已透過 _handle_rename
-        # 走另一條路徑，這裡只更新 cycle/init 等 chip，list 不需重建
+        cfg = self._collect_config()
+        for i, cf in enumerate(self.collapsible_frames):
+            if i < len(cfg.rails):
+                cf.rail = cfg.rails[i]
+            cf.update_summary()
         self._update_validation()
-        self._schedule_preview()
 
     # ---- collect ----
     def _collect_config(self) -> PowerSeqConfig:
+        rails = [cf.get_rail() for cf in self.collapsible_frames]
+        self.config_obj.rails = rails
         return PowerSeqConfig(
-            rails=[cf.get_rail() for cf in self.collapsible_frames],
+            rails=rails,
             module_name=self.config_obj.module_name,
             clock_freq_mhz=self.config_obj.clock_freq_mhz,
             pulse_period_ns=self.config_obj.pulse_period_ns,
@@ -2655,6 +2740,33 @@ class PowerSeqGUI(ctk.CTk):
     def _toggle_inspect(self):
         self._inspect_mode = bool(self._inspect_var.get())
         self._apply_inspect_mode()
+
+    # 三欄預設寬度（geometry 1400x850、paned 扣 body_wrap 左右 padx）
+    _REF_PANED_WIDTH = 1400 - 2 * S_MD
+    _DEFAULT_LEFT_WIDTH = 260
+    _DEFAULT_MID_WIDTH = 800
+    _DEFAULT_PREVIEW_WIDTH = 320
+    _PANED_SASH_TOTAL = 8  # sashwidth=4 × 2
+
+    def _apply_paned_layout(self):
+        """套用預設欄寬：中間編輯區固定較寬；視窗更寬時多出的空間給 preview。"""
+        paned = self._paned
+        try:
+            paned.update_idletasks()
+            total = paned.winfo_width()
+            if total < 200:
+                return
+            left = self._DEFAULT_LEFT_WIDTH
+            extra = max(0, total - self._REF_PANED_WIDTH)
+            preview = max(240, self._DEFAULT_PREVIEW_WIDTH + extra)
+            mid = total - left - preview - self._PANED_SASH_TOTAL
+            if mid < 480:
+                mid = 480
+                preview = max(240, total - left - mid - self._PANED_SASH_TOTAL)
+            _, y1 = paned.sash_coord(1)
+            paned.sash_place(1, left + mid, y1)
+        except (tk.TclError, AttributeError):
+            pass
 
     def _toggle_preview(self):
         self._show_preview = bool(self._preview_var.get())
