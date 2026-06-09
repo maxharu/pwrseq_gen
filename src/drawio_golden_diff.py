@@ -158,6 +158,10 @@ def _classify_vertex(style: str, value: str, w: float, h: float) -> str:
         return "Q"
     if value == "~Q":
         return "QN"
+    if value.startswith("H:"):
+        return "H_Deb"
+    if value.startswith("L:"):
+        return "L_Deb"
     if value in ("H_Deb", "L_Deb"):
         return value
     if value and "align=left" in style:

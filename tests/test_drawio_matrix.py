@@ -30,6 +30,8 @@ from drawio_export import (
     _PSEQCELL_STYLE_INNER,
     _PSEQCELL_STYLE_L_DEB,
     _PSEQCELL_STYLE_Q,
+    _deb_port_label,
+    _deb_time_text,
     _count_and_or_middle_slots,
     _count_cell_fb_to_deb,
     _count_or_cell_middle_slots,
@@ -50,6 +52,32 @@ MATRIX_JSON = os.path.join(
     "reference",
     "drawio_fb_matrix.json",
 )
+
+
+class TestDebPortLabels:
+    def test_deb_port_label_format(self):
+        assert _deb_time_text(2, "iPulse_1us") == "2us"
+        assert _deb_port_label("H", 2, "iPulse_1us") == "H: 2us"
+        assert _deb_port_label("L", 0, "iPulse_1us") == "L: 0s"
+
+    def test_exported_h_l_deb_labels_and_align(self):
+        with open(MATRIX_JSON, encoding="utf-8") as f:
+            cfg = PowerSeqConfig.from_dict(json.load(f))
+        root = ET.fromstring(generate_drawio(cfg))
+        h_vals: list[str] = []
+        l_vals: list[str] = []
+        for c in root.iter("mxCell"):
+            sty = c.get("style") or ""
+            val = (c.get("value") or "").strip()
+            if sty == _PSEQCELL_STYLE_H_DEB:
+                h_vals.append(val)
+                assert val.startswith("H:"), val
+                assert "align=left" in sty
+            elif sty == _PSEQCELL_STYLE_L_DEB:
+                l_vals.append(val)
+                assert val.startswith("L:"), val
+                assert "align=left" in sty
+        assert h_vals and l_vals
 
 
 def _is_h_deb_vertex(cell: ET.Element) -> bool:
