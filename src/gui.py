@@ -62,9 +62,9 @@ S_XS, S_SM, S_MD, S_LG = 2, 4, 8, 16
 # fonts
 FONT_TITLE = ("", 14, "bold")
 FONT_SECTION = ("", 12, "bold")
-FONT_BODY = ("", 11)
-FONT_CHIP = ("", 10, "bold")
-FONT_HINT = ("", 10)
+FONT_BODY = ("", 12)
+FONT_CHIP = ("", 12, "bold")
+FONT_HINT = ("", 12)
 FONT_MONO = ("Consolas", 12)
 
 # Hi / Lo / Force 色彩語意（與 Draw.io 輸出可同步）

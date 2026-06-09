@@ -19,3 +19,7 @@ node_modules/
 
 # CodeGraph local index
 .codegraph/
+
+# Local generated output and documentation assets
+output/
+doc/
