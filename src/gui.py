@@ -41,7 +41,6 @@ from validator import validate
 from verilog_generator import generate_verilog
 from c_generator import generate_c
 from wavedrom_export import generate_wavedrom_json
-from wavedrom_scenario_io import resolve_scenario
 from wavedrom_sim import WaveDromScenario
 from wavedrom_dialog import WaveDromExportDialog
 
@@ -66,7 +65,7 @@ FONT_SECTION = ("", 12, "bold")
 FONT_BODY = ("", 11)
 FONT_CHIP = ("", 10, "bold")
 FONT_HINT = ("", 10)
-FONT_MONO = ("Consolas", 10)
+FONT_MONO = ("Consolas", 12)
 
 # Hi / Lo / Force 色彩語意（與 Draw.io 輸出可同步）
 COND_THEME = {
@@ -1399,6 +1398,8 @@ class NodeListPanel(ctk.CTkFrame):
                  on_select: Callable[[int], None],
                  on_reorder: Callable[[int, int], None],
                  on_multi_change: Callable[[set[int]], None],
+                 on_add: Callable[[], None],
+                 on_delete_btn: Callable[[], None],
                  on_delete: Callable[[], None],
                  on_activate: Callable[[], None],
                  on_disarm: Callable[[], None],
@@ -1407,6 +1408,8 @@ class NodeListPanel(ctk.CTkFrame):
         self.on_select = on_select
         self.on_reorder = on_reorder
         self.on_multi_change = on_multi_change
+        self.on_add = on_add
+        self.on_delete_btn = on_delete_btn
         self.on_delete = on_delete
         self.on_activate = on_activate
         self.on_disarm = on_disarm
@@ -1421,22 +1424,57 @@ class NodeListPanel(ctk.CTkFrame):
         self._build_ui()
 
     def _build_ui(self):
-        ctk.CTkLabel(self, text="Sequence Node", font=FONT_TITLE).pack(pady=(S_MD, S_SM))
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(4, weight=0)
+
+        ctk.CTkLabel(self, text="Sequence Node", font=FONT_TITLE).grid(
+            row=0, column=0, sticky="ew", padx=S_SM, pady=(S_MD, S_SM))
         self.search_var = ctk.StringVar()
         self.search_entry = ctk.CTkEntry(self, placeholder_text="Search node (Ctrl+F)",
                                          textvariable=self.search_var)
-        self.search_entry.pack(fill="x", padx=S_SM, pady=(0, S_SM))
+        self.search_entry.grid(row=1, column=0, sticky="ew", padx=S_SM, pady=(0, S_SM))
         self.search_entry.bind("<FocusIn>", lambda _e: self.on_disarm(), add="+")
         self.search_var.trace_add("write", lambda *_: self._render())
 
         self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.scroll.pack(fill="both", expand=True, padx=S_XS, pady=S_XS)
+        self.scroll.grid(row=2, column=0, sticky="nsew", padx=S_XS, pady=0)
 
         self.multi_status = ctk.CTkLabel(self, text="", font=FONT_HINT, text_color="gray")
-        self.multi_status.pack(fill="x", padx=S_SM)
+        self.multi_status.grid(row=3, column=0, sticky="ew", padx=S_SM, pady=0)
+
+        self._btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        self._btn_row.grid(row=4, column=0, sticky="ew", padx=S_SM, pady=(S_XS, S_SM))
+        self._btn_row.columnconfigure(0, weight=1)
+        self._btn_row.columnconfigure(1, weight=1)
+        ctk.CTkButton(self._btn_row, text="+ Add", command=self.on_add).grid(
+            row=0, column=0, sticky="ew", padx=(0, S_XS))
+        ctk.CTkButton(self._btn_row, text="- Delete", command=self.on_delete_btn).grid(
+            row=0, column=1, sticky="ew", padx=(S_XS, 0))
 
         self.bind("<Delete>", self._on_delete_key)
         self.scroll.bind("<Delete>", self._on_delete_key)
+        self.bind("<Configure>", self._on_panel_configure, add="+")
+
+    def _on_panel_configure(self, event=None):
+        if event is not None and event.widget is not self:
+            return
+        self.after_idle(self._sync_scroll_height)
+
+    def _sync_scroll_height(self):
+        """CTkScrollableFrame 需手動對齊 grid 分配高度，才會貼近下方 Add/Delete。"""
+        try:
+            self.update_idletasks()
+            bottom = self._btn_row.winfo_y()
+            if self.multi_status.winfo_ismapped():
+                bottom = min(bottom, self.multi_status.winfo_y())
+            h = bottom - self.scroll.winfo_y() - 2
+            if h < 40:
+                return
+            if int(self.scroll.cget("height")) != int(h):
+                self.scroll.configure(height=int(h))
+        except Exception:
+            pass
 
     def _on_delete_key(self, _event):
         if not self._selected:
@@ -1476,6 +1514,7 @@ class NodeListPanel(ctk.CTkFrame):
                 continue
             self._make_row(idx, rail)
         self._update_multi_status()
+        self.after_idle(self._sync_scroll_height)
 
     def _apply_row_bgs(self):
         """輕量更新：只改既有 row 的 fg_color，不 destroy/重建。
@@ -1491,8 +1530,11 @@ class NodeListPanel(ctk.CTkFrame):
         n = len(self._selected)
         if n <= 1:
             self.multi_status.configure(text="")
+            self.multi_status.grid_remove()
         else:
             self.multi_status.configure(text=f"{n} nodes selected")
+            self.multi_status.grid(row=3, column=0, sticky="ew", padx=S_SM, pady=0)
+        self.after_idle(self._sync_scroll_height)
 
     def _row_bg(self, idx: int) -> tuple[str, str]:
         if idx == self._primary_idx and idx in self._selected:
@@ -1681,22 +1723,30 @@ class NodeListPanel(ctk.CTkFrame):
 # ============================================================
 
 class PulsePanel(ctk.CTkFrame):
-    """左側 Pulse 訊號管理區。"""
+    """左側 Pulse 訊號管理區（列式 UI，風格對齊 NodeListPanel）。"""
+
+    _ROW_H = 30
+    _MAX_SCROLL_H = 150  # 約 5 列；超出可捲動
 
     def __init__(self, master, on_change: Callable[[list[str]], None], **kwargs):
         super().__init__(master, **kwargs)
         self.on_change = on_change
         self._pulses: list[str] = ["iPulse_1us"]
+        self._selected_idx: Optional[int] = None
+        self._row_widgets: dict[int, ctk.CTkFrame] = {}
         self._build_ui()
+        self._render()
 
     def _build_ui(self):
-        ctk.CTkLabel(self, text="Timing Signals", font=FONT_TITLE).pack(pady=(S_MD, S_SM))
+        ctk.CTkLabel(self, text="Timing Signals", font=FONT_TITLE).pack(pady=(S_XS, S_SM))
         self.entry = ctk.CTkEntry(self, placeholder_text="New signal (Enter to add)")
         self.entry.pack(fill="x", padx=S_SM, pady=(0, S_SM))
         self.entry.bind("<Return>", lambda _e: self._on_add())
         self.entry.bind("<KP_Enter>", lambda _e: self._on_add())
-        self.listbox = tk.Listbox(self, font=FONT_MONO, selectmode="single", height=4)
-        self.listbox.pack(fill="x", padx=S_SM, pady=(0, S_SM))
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll.pack(fill="x", padx=S_XS, pady=(0, S_SM))
+
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.pack(fill="x", padx=S_SM, pady=(0, S_SM))
         btn_row.columnconfigure(0, weight=1)
@@ -1706,11 +1756,47 @@ class PulsePanel(ctk.CTkFrame):
         ctk.CTkButton(btn_row, text="- Delete", command=self._on_del).grid(
             row=0, column=1, sticky="ew", padx=(S_XS, 0))
 
+    def _row_bg(self, idx: int) -> tuple[str, str]:
+        if idx == self._selected_idx:
+            return ("#cfe0ff", "#264c80")
+        return ("gray86", "gray22")
+
+    def _update_scroll_height(self):
+        n = max(1, len(self._pulses))
+        h = min(max(self._ROW_H + 6, n * self._ROW_H + 6), self._MAX_SCROLL_H)
+        try:
+            self.scroll.configure(height=h)
+        except Exception:
+            pass
+
+    def _render(self):
+        for w in self.scroll.winfo_children():
+            w.destroy()
+        self._row_widgets.clear()
+        for idx, name in enumerate(self._pulses):
+            bg = self._row_bg(idx)
+            row = ctk.CTkFrame(self.scroll, fg_color=bg, corner_radius=4, height=28)
+            row.pack(fill="x", pady=1, padx=S_XS)
+            self._row_widgets[idx] = row
+            lbl = ctk.CTkLabel(row, text=name, font=FONT_MONO, anchor="w")
+            lbl.pack(side="left", fill="x", expand=True, padx=(S_SM, S_SM), pady=2)
+            for w in (row, lbl):
+                w.bind("<ButtonPress-1>", lambda _e, i=idx: self._on_row_press(i))
+        self._update_scroll_height()
+
+    def _on_row_press(self, idx: int):
+        self._selected_idx = idx
+        for i, row in self._row_widgets.items():
+            try:
+                row.configure(fg_color=self._row_bg(i))
+            except Exception:
+                pass
+
     def set_pulses(self, pulses: list[str]):
         self._pulses = list(pulses) if pulses else ["iPulse_1us"]
-        self.listbox.delete(0, tk.END)
-        for p in self._pulses:
-            self.listbox.insert(tk.END, p)
+        if self._selected_idx is not None and self._selected_idx >= len(self._pulses):
+            self._selected_idx = None
+        self._render()
 
     def _on_add(self):
         name = self.entry.get().strip()
@@ -1725,15 +1811,15 @@ class PulsePanel(ctk.CTkFrame):
         self.entry.delete(0, tk.END)
 
     def _on_del(self):
-        sel = self.listbox.curselection()
-        if not sel:
+        if self._selected_idx is None:
             messagebox.showinfo("Notice", "Select a pulse to delete")
             return
-        idx = sel[0]
+        idx = self._selected_idx
         if len(self._pulses) <= 1:
             messagebox.showwarning("Notice", "At least one pulse required")
             return
         new_list = [p for i, p in enumerate(self._pulses) if i != idx]
+        self._selected_idx = None
         self.on_change(new_list)
 
 
@@ -1808,7 +1894,7 @@ class ValidationPanel(ctk.CTkFrame):
 # PreviewPanel — 右側 Verilog / C 即時預覽（C1）
 # ============================================================
 
-PREVIEW_LANGS = ("Verilog", "C", "WaveDrom")
+PREVIEW_LANGS = ("Verilog", "C")
 
 
 class PreviewPanel(ctk.CTkFrame):
@@ -2145,6 +2231,8 @@ class PowerSeqGUI(ctk.CTk):
         self._topmost = False
         self._inspect_mode = False
         self._show_preview = True
+        self._preview_pane_in_paned = False
+        self._paned_sash_drag = False
         self._undo_stack: list[str] = []
         self._redo_stack: list[str] = []
         self._preview_after_id: Optional[str] = None
@@ -2160,6 +2248,7 @@ class PowerSeqGUI(ctk.CTk):
         self.bind("<FocusIn>", self._raise_modal_dialogs_if_open, add="+")
         self._refresh_all()
         self.after_idle(self._apply_paned_layout)
+        self.after_idle(self.node_list._sync_scroll_height)
 
     # ---- UI ----
     def _tt(self, widget, text: str):
@@ -2189,16 +2278,6 @@ class PowerSeqGUI(ctk.CTk):
         # ----- Toolbar -----
         toolbar = ctk.CTkFrame(self, fg_color="transparent")
         toolbar.pack(fill="x", padx=S_MD, pady=(S_MD, S_SM))
-
-        # group: edit
-        b_add = ctk.CTkButton(toolbar, text="+ Add", width=70, command=self._add_rail)
-        b_add.pack(side="left", padx=(0, S_XS))
-        self._tt(b_add, "Add new node  (Ctrl+N)")
-        b_del = ctk.CTkButton(toolbar, text="- Delete", width=80, command=self._delete_selected)
-        b_del.pack(side="left", padx=(0, S_SM))
-        self._tt(b_del, "Delete selected nodes  (Del)")
-
-        self._sep(toolbar)
 
         # group: file
         self._open_btn = ctk.CTkButton(toolbar, text="Open", width=70, command=self._load_json)
@@ -2295,29 +2374,39 @@ class PowerSeqGUI(ctk.CTk):
         sash_bg = "#374151"
         paned = tk.PanedWindow(
             body_wrap, orient=tk.HORIZONTAL,
-            sashrelief="flat", sashwidth=4,
+            sashrelief="flat",
+            sashwidth=self._PANED_SASH_WIDTH,
+            showhandle=True,
+            handlesize=self._PANED_SASH_HANDLE_SIZE,
             bg=sash_bg, bd=0,
             opaqueresize=False,
         )
         paned.pack(fill="both", expand=True)
         self._paned = paned
+        self._bind_paned_sash_interaction()
 
-        # left
+        # left — 節點列表撐滿上方；Timing Signals 固定貼底，避免中間空白
         left_wrap = ctk.CTkFrame(paned, fg_color=("gray90", "gray17"), width=260)
         paned.add(left_wrap, minsize=200, stretch="never", width=260)
+        left_wrap.grid_rowconfigure(0, weight=1)
+        left_wrap.grid_rowconfigure(1, weight=0)
+        left_wrap.grid_columnconfigure(0, weight=1)
+
+        self.pulse_panel = PulsePanel(left_wrap, on_change=self._on_pulses_changed)
+        self.pulse_panel.grid(row=1, column=0, sticky="ew", padx=S_XS, pady=(0, S_SM))
 
         self.node_list = NodeListPanel(
-            left_wrap, on_select=self._on_node_selected,
+            left_wrap, fg_color="transparent",
+            on_select=self._on_node_selected,
             on_reorder=self._on_node_reordered,
             on_multi_change=self._on_multi_changed,
+            on_add=self._add_rail,
+            on_delete_btn=self._delete_selected,
             on_delete=self._delete_selected_from_node_list,
             on_activate=self._arm_node_list_delete,
             on_disarm=self._disarm_node_list_delete,
         )
-        self.node_list.pack(fill="both", expand=True)
-
-        self.pulse_panel = PulsePanel(left_wrap, on_change=self._on_pulses_changed)
-        self.pulse_panel.pack(fill="x")
+        self.node_list.grid(row=0, column=0, sticky="nsew", padx=S_XS, pady=(S_XS, 0))
         self.pulse_panel.entry.bind(
             "<FocusIn>", lambda _e: self._disarm_node_list_delete(), add="+")
 
@@ -2359,6 +2448,7 @@ class PowerSeqGUI(ctk.CTk):
         # right (preview) — 預設略窄，把空間留給中間編輯區（Inv 等）
         self.preview_wrap = ctk.CTkFrame(paned, fg_color=("gray90", "gray17"), width=320)
         paned.add(self.preview_wrap, minsize=240, stretch="always", width=320)
+        self._preview_pane_in_paned = True
         self.preview = PreviewPanel(
             self.preview_wrap, fg_color="transparent",
             on_lang_change=self._schedule_preview,
@@ -2411,9 +2501,6 @@ class PowerSeqGUI(ctk.CTk):
         if not self._node_list_delete_armed:
             return
         if not self.node_list.get_selection():
-            return
-        focused = self.focus_get()
-        if isinstance(focused, tk.Listbox):
             return
         self._delete_selected_from_node_list()
         return "break"
@@ -2746,7 +2833,85 @@ class PowerSeqGUI(ctk.CTk):
     _DEFAULT_LEFT_WIDTH = 260
     _DEFAULT_MID_WIDTH = 800
     _DEFAULT_PREVIEW_WIDTH = 320
-    _PANED_SASH_TOTAL = 8  # sashwidth=4 × 2
+    _PANED_SASH_WIDTH = 8
+    _PANED_SASH_HANDLE_SIZE = 12
+    _PANED_SASH_HIT_PAD = 4
+    _PANED_SASH_CURSOR = "sb_h_double_arrow"
+
+    def _paned_sash_total(self) -> int:
+        try:
+            sw = int(self._paned.cget("sashwidth"))
+            n = max(0, len(self._paned.panes()) - 1)
+            return n * sw
+        except tk.TclError:
+            return 2 * self._PANED_SASH_WIDTH
+
+    def _paned_sash_at(self, x: int) -> int | None:
+        """回傳 x 座標附近的 sash 索引（加大 hit 區域）。"""
+        paned = self._paned
+        try:
+            sw = int(paned.cget("sashwidth"))
+            half = sw // 2 + self._PANED_SASH_HIT_PAD
+            for idx in range(len(paned.panes()) - 1):
+                sx, _ = paned.sash_coord(idx)
+                if abs(x - sx) <= half:
+                    return idx
+        except tk.TclError:
+            pass
+        return None
+
+    def _pointer_over_paned_sash(self) -> bool:
+        paned = self._paned
+        try:
+            px = paned.winfo_pointerx() - paned.winfo_rootx()
+            return self._paned_sash_at(px) is not None
+        except tk.TclError:
+            return False
+
+    def _update_paned_hover_cursor(self, _event=None):
+        """依全域座標判斷是否在分隔線上；僅該區域顯示 ↔。"""
+        if self._paned_sash_drag:
+            return
+        try:
+            cur = self._PANED_SASH_CURSOR if self._pointer_over_paned_sash() else ""
+            self.configure(cursor=cur)
+        except tk.TclError:
+            pass
+
+    def _bind_paned_sash_interaction(self):
+        """加寬 sash 仍難點中時，用座標判斷；拖曳全程維持 ↔ 游標。"""
+        paned = self._paned
+
+        def _on_press(event):
+            if self._paned_sash_at(event.x) is None:
+                return
+            self._paned_sash_drag = True
+            self.configure(cursor=self._PANED_SASH_CURSOR)
+            self._paned_drag_motion_bind = self.bind_all("<B1-Motion>", _on_drag, add="+")
+            self._paned_drag_release_bind = self.bind_all("<ButtonRelease-1>", _on_release, add="+")
+
+        def _on_drag(_event):
+            if self._paned_sash_drag:
+                self.configure(cursor=self._PANED_SASH_CURSOR)
+
+        def _on_release(_event):
+            if not self._paned_sash_drag:
+                return
+            self._paned_sash_drag = False
+            for bid in (getattr(self, "_paned_drag_motion_bind", None),
+                        getattr(self, "_paned_drag_release_bind", None)):
+                if bid:
+                    try:
+                        self.unbind(bid)
+                    except tk.TclError:
+                        pass
+            self._paned_drag_motion_bind = None
+            self._paned_drag_release_bind = None
+            self.configure(cursor="")
+            self._update_paned_hover_cursor()
+
+        self.bind("<Motion>", self._update_paned_hover_cursor, add="+")
+        paned.bind("<ButtonPress-1>", _on_press, add="+")
 
     def _apply_paned_layout(self):
         """套用預設欄寬：中間編輯區固定較寬；視窗更寬時多出的空間給 preview。"""
@@ -2759,10 +2924,11 @@ class PowerSeqGUI(ctk.CTk):
             left = self._DEFAULT_LEFT_WIDTH
             extra = max(0, total - self._REF_PANED_WIDTH)
             preview = max(240, self._DEFAULT_PREVIEW_WIDTH + extra)
-            mid = total - left - preview - self._PANED_SASH_TOTAL
+            sash_total = self._paned_sash_total()
+            mid = total - left - preview - sash_total
             if mid < 480:
                 mid = 480
-                preview = max(240, total - left - mid - self._PANED_SASH_TOTAL)
+                preview = max(240, total - left - mid - sash_total)
             _, y1 = paned.sash_coord(1)
             paned.sash_place(1, left + mid, y1)
         except (tk.TclError, AttributeError):
@@ -2770,11 +2936,24 @@ class PowerSeqGUI(ctk.CTk):
 
     def _toggle_preview(self):
         self._show_preview = bool(self._preview_var.get())
+        paned = self._paned
         if self._show_preview:
-            self.preview_wrap.pack(side="left", fill="y", padx=(S_MD, 0))
+            if not self._preview_pane_in_paned:
+                paned.add(
+                    self.preview_wrap,
+                    minsize=240,
+                    stretch="always",
+                    width=self._DEFAULT_PREVIEW_WIDTH,
+                )
+                self._preview_pane_in_paned = True
+            self.after_idle(self._apply_paned_layout)
             self._schedule_preview()
-        else:
-            self.preview_wrap.pack_forget()
+        elif self._preview_pane_in_paned:
+            try:
+                paned.forget(self.preview_wrap)
+            except tk.TclError:
+                pass
+            self._preview_pane_in_paned = False
 
     def _schedule_preview(self):
         if not self._show_preview:
@@ -2803,9 +2982,6 @@ class PowerSeqGUI(ctk.CTk):
             lang = self.preview.get_lang()
             if lang == "C":
                 code = generate_c(cfg, output_filename=self._preview_c_filename())
-            elif lang == "WaveDrom":
-                scenario = resolve_scenario(cfg, self._current_path)
-                code = generate_wavedrom_json(cfg, scenario)
             else:
                 v_path = None
                 if self._current_path and self._current_path.lower().endswith(".json"):
