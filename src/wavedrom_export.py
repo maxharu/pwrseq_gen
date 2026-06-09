@@ -4,6 +4,7 @@ Build WaveJSON from PowerSeqConfig + WaveDromScenario (WaveDrom skill aligned).
 from __future__ import annotations
 
 import json
+import os
 import string
 
 from config_models import PowerRail, PowerSeqConfig
@@ -31,6 +32,14 @@ def _port_name(name: str, prefix: str) -> str:
 def _port_for_rail(rail: PowerRail) -> str:
     prefix = "i" if rail.seq_type == "input" else "o"
     return _port_name(rail.name, prefix)
+
+
+def _head_title_from_filename(output_filename: str | None, fallback: str) -> str:
+    """WaveDrom head 第一行標題：有輸出檔名時用檔名（不含副檔名）。"""
+    if not output_filename:
+        return fallback
+    name = os.path.splitext(os.path.basename(output_filename))[0]
+    return name if name else fallback
 
 
 def _head_every(steps: int) -> int:
@@ -384,6 +393,8 @@ def validate_wavedrom_doc(doc: dict, steps: int | None = None) -> list[str]:
 def generate_wavedrom(
     config: PowerSeqConfig,
     scenario: WaveDromScenario | None = None,
+    *,
+    output_filename: str | None = None,
 ) -> dict:
     """Produce WaveJSON: flat lanes, skin narrow (minimal vertical gap)."""
     scenario = scenario or default_scenario_for_config(config)
@@ -415,11 +426,12 @@ def generate_wavedrom(
         signals = [{"name": "_empty", "wave": "0"}]
 
     edges = _build_condition_edges(config, result, lanes_by_port)
+    head_title = _head_title_from_filename(output_filename, config.module_name)
 
     doc: dict = {
         "head": {
             "text": (
-                f"{config.module_name} ({steps} steps, hscale="
+                f"{head_title} ({steps} steps, hscale="
                 f"{_norm_hscale(scenario.hscale)}, i*=in o*=out)\n"
                 f"Author: {WAVEDROM_AUTHOR}"
             ),
@@ -451,6 +463,11 @@ def generate_wavedrom_json(
     config: PowerSeqConfig,
     scenario: WaveDromScenario | None = None,
     *,
+    output_filename: str | None = None,
     indent: int = 2,
 ) -> str:
-    return json.dumps(generate_wavedrom(config, scenario), indent=indent, ensure_ascii=False)
+    return json.dumps(
+        generate_wavedrom(config, scenario, output_filename=output_filename),
+        indent=indent,
+        ensure_ascii=False,
+    )
