@@ -97,11 +97,8 @@ class PowerRail:
     cycle_hi: int = 8
     cycle_lo: int = 4
     cycle_force: int = 2
-    recover: int = 3  # 2'b11
     init: int = 0
     force_val: int = 0
-    cycle_sync: int = 0
-    od: int = 0
 
     @property
     def has_pseqcell(self) -> bool:
@@ -378,9 +375,6 @@ def _rail_to_dict(rail: PowerRail) -> dict:
             "pulse_hi": rail.pulse_hi,
             "pulse_lo": rail.pulse_lo,
             "pulse_force": rail.pulse_force,
-            "recover": rail.recover,
-            "cycle_sync": rail.cycle_sync,
-            "od": rail.od,
         }
     )
     for kind in ("hi", "lo", "force"):
@@ -502,11 +496,8 @@ class PowerSeqConfig:
                 cycle_hi=r.get("cycle_hi", 8),
                 cycle_lo=r.get("cycle_lo", 4),
                 cycle_force=r.get("cycle_force", 2),
-                recover=r.get("recover", 3),
                 init=r.get("init", 0),
                 force_val=r.get("force_val", 0),
-                cycle_sync=r.get("cycle_sync", 0),
-                od=r.get("od", 0),
                 hi_mode=r.get("hi_mode", "depends"),
                 hi_wave=r.get("hi_wave", "0"),
                 hi_groups=r.get("hi_groups") or [],

@@ -1521,11 +1521,8 @@ class RailEditorFrame(ctk.CTkFrame):
             cycle_lo=cycle_lo,
             cycle_force=_safe_int(self.entry_cycle_force.get(), self.rail.cycle_force)
             if seq_type != "input" else 2,
-            recover=self.rail.recover,
             init=1 if (seq_type != "input" and self.var_pseq_init.get() == "1") else 0,
             force_val=1 if (seq_type != "input" and self.var_force_val.get() == "1") else 0,
-            cycle_sync=self.rail.cycle_sync,
-            od=self.rail.od,
         )
         if seq_type == "input":
             apply_input_wave_dict(rail, self.get_input_wave_spec().to_dict())

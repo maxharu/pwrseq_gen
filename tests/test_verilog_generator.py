@@ -102,10 +102,7 @@ class TestGenerateVerilog:
             PowerRail(
                 "A",
                 depends_on_hi=["__HIGH__"],
-                recover=3,
                 force_val=0,
-                cycle_sync=2,
-                od=1,
             ),
         ])
         out = generate_verilog(cfg)
