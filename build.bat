@@ -4,7 +4,7 @@ REM 請先執行: pip install -r requirements.txt
 REM            pip install -r requirements-build.txt
 
 echo ========================================
-echo Power Sequence Generator - 打包 EXE
+echo Power Sequence Generator - 打包單一 EXE
 echo ========================================
 echo.
 

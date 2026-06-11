@@ -51,7 +51,7 @@ class TestPowerSeqConfig:
         cfg = PowerSeqConfig.from_dict({})
         assert cfg.rails == []
         assert cfg.module_name == "PWRSEQ_TOP"
-        assert cfg.pulses == ["iPulse_1us"]
+        assert cfg.pulses == ["Pulse_1us"]
 
     def test_from_dict_with_rails(self):
         d = {
@@ -97,7 +97,61 @@ class TestPowerSeqConfig:
         assert cfg2.module_name == cfg.module_name
         assert len(cfg2.rails) == len(cfg.rails)
 
+    def test_to_dict_omits_legacy_fields(self):
+        cfg = PowerSeqConfig.from_dict(
+            {
+                "rails": [
+                    {"name": "IN", "seq_type": "Input", "deb_enable": True},
+                    {
+                        "name": "OUT",
+                        "seq_type": "Output",
+                        "depends_on_hi": ["IN"],
+                        "depends_on_hi_inv": {"IN": True},
+                        "cycle_hi": 3,
+                    },
+                ]
+            }
+        )
+        out = cfg.to_dict()
+        inp = out["rails"][0]
+        assert "depends_on" not in inp
+        assert "depends_on_hi" not in inp
+        assert "cycle_hi" not in inp
+        assert inp["deb_enable"] is True
+        outp = out["rails"][1]
+        assert "depends_on" not in outp
+        assert "depends_on_hi" not in outp
+        assert outp["depends_on_hi_groups"] == [["IN"]]
+        assert outp["depends_on_hi_inv_groups"] == [[True]]
+
     def test_from_dict_pulses(self):
         d = {"pulses": ["iPulse_1us", "iPulse_1ms"], "rails": []}
         cfg = PowerSeqConfig.from_dict(d)
-        assert cfg.pulses == ["iPulse_1us", "iPulse_1ms"]
+        assert cfg.pulses == ["Pulse_1us", "Pulse_1ms"]
+
+    def test_migrate_legacy_wavedrom_inputs_to_rails(self):
+        cfg = PowerSeqConfig.from_dict(
+            {
+                "rails": [
+                    {"name": "EKEY", "seq_type": "Input", "deb_enable": True},
+                ],
+                "wavedrom_scenario": {
+                    "steps": 50,
+                    "inputs": {
+                        "EKEY": {
+                            "hi_mode": "custom",
+                            "lo_mode": "constant_0",
+                            "hi_wave": "01",
+                        }
+                    },
+                },
+            }
+        )
+        ekey = cfg.rails[0]
+        assert ekey.hi_mode == "custom"
+        assert ekey.hi_wave == "01"
+        out = cfg.to_dict()
+        assert out["wavedrom_scenario"] == {"steps": 50}
+        assert out["rails"][0]["hi_mode"] == "custom"
+        assert out["rails"][0]["hi_wave"] == "01"
+        assert "inputs" not in out.get("wavedrom_scenario", {})

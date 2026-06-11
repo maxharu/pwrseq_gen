@@ -4,7 +4,7 @@ WaveDrom 時序模擬：依使用者定義的 input 波形 + output 依賴/cycle
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from config_models import PowerSeqConfig, PowerRail
+from config_models import PowerSeqConfig, PowerRail, DEFAULT_PULSE, normalize_pulse_name
 
 DEP_HIGH = "__HIGH__"
 DEP_LOW = "__LOW__"
@@ -128,7 +128,8 @@ def _pulse_scale_units(pulse_name: str) -> int:
     """相對於 1us 的倍率（用於判斷第幾步該 pulse tick）。"""
     if not pulse_name or pulse_name in ("default", "High"):
         return 1
-    s = pulse_name.replace("iPulse_", "").lower()
+    ui = normalize_pulse_name(pulse_name)
+    s = ui[6:] if ui.startswith("Pulse_") else ui.lower()
     if s.endswith("us"):
         try:
             return max(1, int(s[:-2]))
@@ -481,12 +482,12 @@ def _pulses_active_at_step(step: int, pulses: list[str]) -> set[str]:
     """每步以最細 pulse 為時間格，較慢 pulse 依比例 tick。"""
     active: set[str] = set()
     base_scale = _finest_pulse_scale(pulses)
-    for p in pulses or ["iPulse_1us"]:
+    for p in pulses or [DEFAULT_PULSE]:
         scale = max(1, _pulse_scale_units(p))
         rel = max(1, scale // base_scale)
         if step % rel == 0:
             active.add(p)
-    return active or {"iPulse_1us"}
+    return active or {DEFAULT_PULSE}
 
 
 class _PermitGpioFsm:
@@ -567,7 +568,7 @@ class _OutputFsm:
         self._fsm._armed_lo = 0
 
     def _pulse_active(self, pulse_name: str, active_pulses: set[str]) -> bool:
-        return (pulse_name or "iPulse_1us") in active_pulses
+        return (pulse_name or DEFAULT_PULSE) in active_pulses
 
     def apply_step(self) -> int:
         """Pass A：套用上一拍 arm 的邊，回傳當拍 GPIO。與條件無關 → 順序無關。"""
@@ -648,22 +649,16 @@ def _outputs_topo_order(
 
 
 def default_scenario_for_config(config: PowerSeqConfig) -> WaveDromScenario:
-    """為所有 input 建立預設 scenario（PG 類預設延遲拉高）。"""
-    inputs = {}
-    for r in config.rails:
-        if r.seq_type != "input":
-            continue
-        inputs[r.name] = InputWaveSpec(
-            hi_mode="depends",
-            lo_mode="constant_0",
-        )
-    return WaveDromScenario(steps=50, inputs=inputs)
+    """為所有 input 建立 scenario（優先使用 rail 上 WaveDrom 欄位）。"""
+    from config_models import build_wavedrom_scenario
+
+    return build_wavedrom_scenario(config)
 
 
 def simulate(config: PowerSeqConfig, scenario: WaveDromScenario) -> SimResult:
     """執行離散 pulse 模擬，回傳各軌跡。"""
     steps = max(10, scenario.steps)
-    pulses = list(config.pulses or ["iPulse_1us"])
+    pulses = list(config.pulses or [DEFAULT_PULSE])
 
     name_to_rail = {r.name: r for r in config.rails}
     inputs = [r for r in config.rails if r.seq_type == "input"]

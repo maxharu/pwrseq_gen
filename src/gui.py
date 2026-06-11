@@ -35,14 +35,28 @@ import customtkinter as ctk
 # 關閉自動 DPI 縮放，避免縮放時 dropdown 出現 TclError。
 ctk.deactivate_automatic_dpi_awareness()
 
-from config_models import PowerRail, PowerSeqConfig
+from app_expiry import EXPIRY_LAST_VALID, ensure_not_expired
+from config_models import (
+    PowerRail,
+    PowerSeqConfig,
+    DEFAULT_PULSE,
+    apply_input_wave_dict,
+    build_wavedrom_scenario,
+    normalize_pulse_name,
+    rail_input_wave_spec,
+)
 from drawio_export import generate_drawio
 from validator import validate
 from verilog_generator import generate_verilog
 from c_generator import generate_c
 from wavedrom_export import generate_wavedrom_json
-from wavedrom_sim import WaveDromScenario
-from wavedrom_dialog import WaveDromExportDialog
+from wavedrom_sim import (
+    DEP_HIGH,
+    DEP_LOW,
+    InputWaveSpec,
+    WaveDromScenario,
+    _norm_hscale,
+)
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -58,6 +72,16 @@ DEP_LOW = "__LOW__"
 
 # spacing
 S_XS, S_SM, S_MD, S_LG = 2, 4, 8, 16
+
+APP_NAME = "Power Sequence Config"
+APP_AUTHOR = "Haru"
+APP_VERSION = "v1.3"
+APP_COPYRIGHT_YEAR = 2026
+
+# About dialog only — change here without affecting the rest of the GUI
+ABOUT_FONT_TITLE = ("", 16, "bold")
+ABOUT_FONT_VERSION = ("", 14, "bold")
+ABOUT_FONT_BODY = ("", 14)
 
 # fonts
 FONT_TITLE = ("", 14, "bold")
@@ -96,6 +120,15 @@ TYPE_THEME = {
 
 USE_LABELS = {"self": "Node", "hi": "Hi Cond", "lo": "Lo Cond", "force": "Force Cond"}
 USE_REVERSE = {v: k for k, v in USE_LABELS.items()}
+
+INPUT_WAVE_MODES = [
+    ("Low (0)", "constant_0"),
+    ("High (1)", "constant_1"),
+    ("Custom wave", "custom"),
+    ("Signal cond.", "depends"),
+]
+INPUT_WAVE_MODE_BY_LABEL = {label: val for label, val in INPUT_WAVE_MODES}
+INPUT_WAVE_LABEL_BY_MODE = {val: label for label, val in INPUT_WAVE_MODES}
 
 UNDO_LIMIT = 50
 
@@ -831,6 +864,207 @@ class CondSectionFrame(ctk.CTkFrame):
 
 
 # ============================================================
+# InputWaveCondFrame — input 專用 WaveDrom Hi/Lo Cond（主頁）
+# ============================================================
+
+class InputWaveSidePanel(ctk.CTkFrame):
+    """單側 Hi 或 Lo：模式 + Custom wave 或 Signal cond. 群組。"""
+
+    def __init__(
+        self,
+        master,
+        side: str,
+        spec: InputWaveSpec,
+        get_dep_options: Callable[[], list[str]],
+        is_pseqcell_for: Callable[[str], bool],
+        get_self_name: Callable[[], str],
+        on_change: Optional[Callable[[], None]] = None,
+        on_layout_change: Optional[Callable[[], None]] = None,
+        **kwargs,
+    ):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self.side = side
+        self.on_change = on_change
+        self._on_layout_change = on_layout_change
+        prefix = side
+        mode = getattr(spec, f"{prefix}_mode")
+        wave = getattr(spec, f"{prefix}_wave", "0") or "0"
+        groups = getattr(spec, f"{prefix}_groups") or []
+        inv_groups = getattr(spec, f"{prefix}_inv_groups") or []
+        use_groups = getattr(spec, f"{prefix}_use_groups") or []
+
+        hint = ctk.CTkLabel(
+            self,
+            text="WaveDrom simulation only (not Verilog depends_on).",
+            font=FONT_HINT,
+            text_color="gray",
+            anchor="w",
+        )
+        hint.pack(fill="x", pady=(0, S_XS))
+
+        mode_row = ctk.CTkFrame(self, fg_color="transparent")
+        mode_row.pack(fill="x", pady=(0, S_SM))
+        ctk.CTkLabel(mode_row, text="Mode:", font=FONT_BODY).pack(side="left", padx=(0, S_SM))
+        self._mode_menu = ctk.CTkOptionMenu(
+            mode_row,
+            values=[m[0] for m in INPUT_WAVE_MODES],
+            width=140,
+            command=lambda _v: self._on_mode_change(),
+        )
+        self._mode_menu.set(INPUT_WAVE_LABEL_BY_MODE.get(mode, "Signal cond."))
+        self._mode_menu.pack(side="left")
+
+        self._opt_slot = ctk.CTkFrame(self, fg_color="transparent")
+        self._opt_slot.pack(fill="x")
+
+        self._wave_var = tk.StringVar(value=wave)
+        self._wave_entry = ctk.CTkEntry(
+            self._opt_slot,
+            textvariable=self._wave_var,
+            width=200,
+            placeholder_text="0{29}1",
+        )
+        self._wave_var.trace_add("write", lambda *_: self._fire_change())
+
+        init_groups = [list(g) for g in groups] if groups else [[]]
+        self._cond_section = CondSectionFrame(
+            self._opt_slot,
+            kind=side,
+            get_dep_options=get_dep_options,
+            is_pseqcell_for=is_pseqcell_for,
+            initial_groups=init_groups,
+            initial_inv_groups=inv_groups,
+            initial_use_groups=use_groups,
+            initial_inv_flat={},
+            initial_use_flat={},
+            initial_group_inv=[],
+            show_group_inv=False,
+            on_change=self._fire_change,
+            get_self_name=get_self_name,
+        )
+        self._on_mode_change()
+
+    def _fire_change(self):
+        if self.on_change:
+            try:
+                self.on_change()
+            except TypeError:
+                self.on_change()
+
+    def _mode_value(self) -> str:
+        return INPUT_WAVE_MODE_BY_LABEL.get(self._mode_menu.get(), "depends")
+
+    def _on_mode_change(self):
+        self._wave_entry.pack_forget()
+        self._cond_section.pack_forget()
+        mode = self._mode_value()
+        if mode in ("constant_0", "constant_1"):
+            self._opt_slot.pack_forget()
+        else:
+            self._opt_slot.pack(fill="x")
+            if mode == "custom":
+                self._wave_entry.pack(fill="x", pady=(0, S_XS))
+            elif mode == "depends":
+                self._cond_section.pack(fill="x")
+        if self._on_layout_change:
+            self.after(1, self._on_layout_change)
+
+    def content_height(self) -> int:
+        """Tabview 內容高度（僅作用中分頁；不含 tab 列）。"""
+        base = 58  # hint + mode row
+        mode = self._mode_value()
+        if mode in ("constant_0", "constant_1"):
+            return base
+        if mode == "custom":
+            return base + 36
+        if mode == "depends":
+            self.update_idletasks()
+            if self._cond_section.winfo_ismapped():
+                return base + min(max(self._cond_section.winfo_reqheight(), 120), 220)
+            return base + 120
+        return base
+
+    def collect_side(self) -> dict:
+        mode = self._mode_value()
+        out: dict = {"mode": mode}
+        if mode == "custom":
+            out["wave"] = self._wave_var.get().strip() or "0"
+        elif mode == "depends":
+            out["groups"] = self._cond_section.get_groups()
+            out["inv_groups"] = self._cond_section.get_inv_groups()
+            out["use_groups"] = self._cond_section.get_use_groups()
+        return out
+
+
+class InputWaveCondFrame(ctk.CTkFrame):
+    """Input 節點 WaveDrom Hi/Lo Cond（Tab 風格與 Output Conditions 一致）。"""
+
+    def __init__(
+        self,
+        master,
+        spec: InputWaveSpec,
+        get_dep_options: Callable[[], list[str]],
+        is_pseqcell_for: Callable[[str], bool],
+        get_self_name: Callable[[], str],
+        on_change: Optional[Callable[[], None]] = None,
+        **kwargs,
+    ):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self._tabs = ctk.CTkTabview(self)
+        self._tabs.pack(fill="x", padx=S_SM, pady=S_SM)
+        for side in ("hi", "lo"):
+            tab_name = COND_THEME[side]["name"]
+            self._tabs.add(tab_name)
+            panel = InputWaveSidePanel(
+                self._tabs.tab(tab_name),
+                side,
+                spec,
+                get_dep_options=get_dep_options,
+                is_pseqcell_for=is_pseqcell_for,
+                get_self_name=get_self_name,
+                on_change=on_change,
+                on_layout_change=self._sync_tab_height,
+            )
+            panel.pack(fill="x", padx=S_SM, pady=S_SM)
+            setattr(self, f"_{side}_panel", panel)
+
+        seg = self._tabs._segmented_button
+        prev_tab_cmd = seg.cget("command")
+
+        def _on_tab_selected(value):
+            if prev_tab_cmd:
+                prev_tab_cmd(value)
+            self._sync_tab_height()
+
+        seg.configure(command=_on_tab_selected)
+        self._sync_tab_height()
+
+    def _active_panel(self) -> InputWaveSidePanel:
+        if self._tabs.get() == COND_THEME["hi"]["name"]:
+            return self._hi_panel
+        return self._lo_panel
+
+    def _sync_tab_height(self):
+        self._tabs.configure(height=self._active_panel().content_height())
+
+    def to_spec(self) -> InputWaveSpec:
+        hi = self._hi_panel.collect_side()
+        lo = self._lo_panel.collect_side()
+        return InputWaveSpec(
+            hi_mode=hi["mode"],
+            hi_wave=hi.get("wave", "0"),
+            hi_groups=hi.get("groups") or [],
+            hi_inv_groups=hi.get("inv_groups") or [],
+            hi_use_groups=hi.get("use_groups") or [],
+            lo_mode=lo["mode"],
+            lo_wave=lo.get("wave", "0"),
+            lo_groups=lo.get("groups") or [],
+            lo_inv_groups=lo.get("inv_groups") or [],
+            lo_use_groups=lo.get("use_groups") or [],
+        )
+
+
+# ============================================================
 # RailEditorFrame — 單一 rail 的屬性編輯面板
 # ============================================================
 
@@ -849,6 +1083,7 @@ class RailEditorFrame(ctk.CTkFrame):
                  on_rename: Callable[[str, str], None],
                  on_type_change: Callable[[str, str, str], None],
                  on_change: Optional[Callable[[], None]] = None,
+                 initial_input_wave_spec: Optional[InputWaveSpec] = None,
                  **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.rail = rail
@@ -857,13 +1092,19 @@ class RailEditorFrame(ctk.CTkFrame):
         self.on_rename = on_rename
         self.on_type_change = on_type_change
         self.on_change = on_change
+        self._initial_input_wave_spec = initial_input_wave_spec or InputWaveSpec(
+            hi_mode="depends", lo_mode="constant_0",
+        )
         self._preview_snapshot = ""
 
         self._build_ui()
         self._preview_snapshot = self._rail_snapshot()
 
     def _rail_snapshot(self) -> str:
-        return json.dumps(asdict(self.get_rail()), sort_keys=True, ensure_ascii=False)
+        snap = asdict(self.get_rail())
+        if self.var_type.get() == "input" and getattr(self, "input_wave_frame", None):
+            snap["_input_wave"] = self.get_input_wave_spec().to_dict()
+        return json.dumps(snap, sort_keys=True, ensure_ascii=False)
 
     def _fire_change(self, *_):
         self._notify_editor_change(preview=False)
@@ -957,10 +1198,13 @@ class RailEditorFrame(ctk.CTkFrame):
         type_row.grid(row=0, column=3, sticky="w", pady=2)
         self.var_type = ctk.StringVar(value=self.rail.seq_type)
         self._old_type = self.rail.seq_type
-        for st, label in SEQ_TYPE_LABELS.items():
-            ctk.CTkRadioButton(type_row, text=label,
-                               variable=self.var_type, value=st).pack(side="left", padx=(0, S_SM))
-        self.var_type.trace_add("write", lambda *_: self._on_type_toggle())
+        self._type_seg = ctk.CTkSegmentedButton(
+            type_row,
+            values=[SEQ_TYPE_LABELS["output"], SEQ_TYPE_LABELS["input"]],
+            command=self._on_type_seg_selected,
+        )
+        self._type_seg.set(SEQ_TYPE_LABELS.get(self.rail.seq_type, "Output"))
+        self._type_seg.pack(side="left")
 
         # --- Timing (output only) ---
         self.timing_wrap, timing_body = self._make_section("Timing")
@@ -1008,13 +1252,13 @@ class RailEditorFrame(ctk.CTkFrame):
         self._bind_widget_preview_commit(cmb_force_val)
 
         pulses = self._pulse_values(
-            getattr(self.rail, "pulse_hi", "iPulse_1us"),
-            getattr(self.rail, "pulse_lo", "iPulse_1us"),
-            getattr(self.rail, "pulse_force", "iPulse_1us"),
+            getattr(self.rail, "pulse_hi", DEFAULT_PULSE),
+            getattr(self.rail, "pulse_lo", DEFAULT_PULSE),
+            getattr(self.rail, "pulse_force", DEFAULT_PULSE),
         )
         ctk.CTkLabel(grid_t, text="Timing Hi:", font=FONT_BODY).grid(
             row=3, column=0, sticky="w", padx=(0, S_SM), pady=2)
-        self.var_pulse_hi = ctk.StringVar(value=getattr(self.rail, "pulse_hi", "iPulse_1us") or "iPulse_1us")
+        self.var_pulse_hi = ctk.StringVar(value=getattr(self.rail, "pulse_hi", DEFAULT_PULSE) or DEFAULT_PULSE)
         cmb_pulse_hi = ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_hi, width=130)
         cmb_pulse_hi.grid(row=3, column=1, sticky="w", padx=(0, S_LG), pady=2)
         self.var_pulse_hi.trace_add("write", self._fire_live)
@@ -1022,7 +1266,7 @@ class RailEditorFrame(ctk.CTkFrame):
 
         ctk.CTkLabel(grid_t, text="Timing Lo:", font=FONT_BODY).grid(
             row=3, column=2, sticky="w", padx=(0, S_SM), pady=2)
-        self.var_pulse_lo = ctk.StringVar(value=getattr(self.rail, "pulse_lo", "iPulse_1us") or "iPulse_1us")
+        self.var_pulse_lo = ctk.StringVar(value=getattr(self.rail, "pulse_lo", DEFAULT_PULSE) or DEFAULT_PULSE)
         cmb_pulse_lo = ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_lo, width=130)
         cmb_pulse_lo.grid(row=3, column=3, sticky="w", pady=2)
         self.var_pulse_lo.trace_add("write", self._fire_live)
@@ -1030,7 +1274,7 @@ class RailEditorFrame(ctk.CTkFrame):
 
         ctk.CTkLabel(grid_t, text="Timing Force:", font=FONT_BODY).grid(
             row=4, column=0, sticky="w", padx=(0, S_SM), pady=2)
-        self.var_pulse_force = ctk.StringVar(value=getattr(self.rail, "pulse_force", "iPulse_1us") or "iPulse_1us")
+        self.var_pulse_force = ctk.StringVar(value=getattr(self.rail, "pulse_force", DEFAULT_PULSE) or DEFAULT_PULSE)
         cmb_pulse_force = ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_force, width=130)
         cmb_pulse_force.grid(row=4, column=1, sticky="w", padx=(0, S_LG), pady=2)
         self.var_pulse_force.trace_add("write", self._fire_live)
@@ -1126,12 +1370,24 @@ class RailEditorFrame(ctk.CTkFrame):
 
         ctk.CTkLabel(grid_d, text="Timing Deb:", font=FONT_BODY).grid(
             row=2, column=0, sticky="w", padx=(0, S_SM), pady=2)
-        deb_pulses = self._pulse_values(getattr(self.rail, "deb_pulse", "iPulse_1us"))
-        self.var_deb_pulse = ctk.StringVar(value=getattr(self.rail, "deb_pulse", "iPulse_1us") or "iPulse_1us")
+        deb_pulses = self._pulse_values(getattr(self.rail, "deb_pulse", DEFAULT_PULSE))
+        self.var_deb_pulse = ctk.StringVar(value=getattr(self.rail, "deb_pulse", DEFAULT_PULSE) or DEFAULT_PULSE)
         cmb_deb_pulse = ctk.CTkComboBox(grid_d, values=deb_pulses, variable=self.var_deb_pulse, width=130)
         cmb_deb_pulse.grid(row=2, column=1, sticky="w", padx=(0, S_LG), pady=2)
         self.var_deb_pulse.trace_add("write", self._fire_live)
         self._bind_widget_preview_commit(cmb_deb_pulse)
+
+        # --- WaveDrom Hi/Lo (input only) ---
+        self.wavedrom_wrap, wavedrom_body = self._make_section("WaveDrom Hi/Lo")
+        self.input_wave_frame = InputWaveCondFrame(
+            wavedrom_body,
+            self._initial_input_wave_spec,
+            get_dep_options=self._dep_options,
+            is_pseqcell_for=self._is_pseqcell_for,
+            get_self_name=lambda: self.rail.name,
+            on_change=self._fire_live,
+        )
+        self.input_wave_frame.pack(fill="x", padx=S_SM, pady=S_SM)
 
         self._on_type_toggle(initial=True)
 
@@ -1160,15 +1416,24 @@ class RailEditorFrame(ctk.CTkFrame):
         if new_name and new_name != self.rail.name:
             self.on_rename(self.rail.name, new_name)
 
+    def _on_type_seg_selected(self, label: str):
+        rev = {v: k for k, v in SEQ_TYPE_LABELS.items()}
+        new_type = rev.get(label, "output")
+        if new_type != self.var_type.get():
+            self.var_type.set(new_type)
+        self._on_type_toggle()
+
     def _on_type_toggle(self, initial: bool = False):
         is_input = self.var_type.get() == "input"
         if is_input:
             self.timing_wrap.pack_forget()
             self.cond_wrap.pack_forget()
             self.deb_wrap.pack(fill="x", pady=(0, S_SM))
+            self.wavedrom_wrap.pack(fill="x", pady=(0, S_SM))
             self._on_deb_toggle(initial=initial)
         else:
             self.deb_wrap.pack_forget()
+            self.wavedrom_wrap.pack_forget()
             self.timing_wrap.pack(fill="x", pady=(0, S_SM))
             self.cond_wrap.pack(fill="x", pady=(0, S_SM))
         if not initial and self.var_type.get() != self._old_type:
@@ -1243,15 +1508,15 @@ class RailEditorFrame(ctk.CTkFrame):
             depends_on_force_inv_groups=force_inv_groups,
             depends_on_force_use_groups=force_use_groups,
             depends_on_force_group_inv=force_group_inv,
-            pulse_hi=self.var_pulse_hi.get() if seq_type != "input" else "iPulse_1us",
-            pulse_lo=self.var_pulse_lo.get() if seq_type != "input" else "iPulse_1us",
-            pulse_force=self.var_pulse_force.get() if seq_type != "input" else "iPulse_1us",
+            pulse_hi=self.var_pulse_hi.get() if seq_type != "input" else DEFAULT_PULSE,
+            pulse_lo=self.var_pulse_lo.get() if seq_type != "input" else DEFAULT_PULSE,
+            pulse_force=self.var_pulse_force.get() if seq_type != "input" else DEFAULT_PULSE,
             deb_enable=self.var_deb_enable.get() if seq_type == "input" else False,
             deb_init=1 if (seq_type == "input" and self.var_deb_init.get() == "1") else 0,
             deb_cycle_hi=_safe_int(self.entry_deb_cycle_hi.get(), 2) if seq_type == "input" else 2,
             deb_cycle_lo=_safe_int(self.entry_deb_cycle_lo.get(), 2) if seq_type == "input" else 2,
             deb_cycle_sync=_safe_int(self.entry_deb_cycle_sync.get(), 2) if seq_type == "input" else 2,
-            deb_pulse=self.var_deb_pulse.get() if seq_type == "input" else "iPulse_1us",
+            deb_pulse=self.var_deb_pulse.get() if seq_type == "input" else DEFAULT_PULSE,
             cycle_hi=cycle_hi,
             cycle_lo=cycle_lo,
             cycle_force=_safe_int(self.entry_cycle_force.get(), self.rail.cycle_force)
@@ -1262,8 +1527,15 @@ class RailEditorFrame(ctk.CTkFrame):
             cycle_sync=self.rail.cycle_sync,
             od=self.rail.od,
         )
+        if seq_type == "input":
+            apply_input_wave_dict(rail, self.get_input_wave_spec().to_dict())
         self.rail = rail
         return rail
+
+    def get_input_wave_spec(self) -> InputWaveSpec:
+        if getattr(self, "input_wave_frame", None) is not None:
+            return self.input_wave_frame.to_spec()
+        return self._initial_input_wave_spec
 
 
 # ============================================================
@@ -1279,6 +1551,7 @@ class CollapsibleRailFrame(ctk.CTkFrame):
                  on_rename: Callable[[str, str], None],
                  on_type_change: Callable[[str, str, str], None],
                  on_change: Optional[Callable[[], None]] = None,
+                 get_input_wave_spec: Optional[Callable[[str], InputWaveSpec]] = None,
                  expanded: bool = False, **kwargs):
         super().__init__(master, **kwargs)
         self.rail = rail
@@ -1288,6 +1561,10 @@ class CollapsibleRailFrame(ctk.CTkFrame):
         self._on_rename = on_rename
         self._on_type_change = on_type_change
         self._on_change = on_change
+        self._get_input_wave_spec = get_input_wave_spec
+        self._initial_input_wave_spec = (
+            get_input_wave_spec(rail.name) if get_input_wave_spec else InputWaveSpec()
+        )
         self.editor: Optional[RailEditorFrame] = None
 
         self._header = ctk.CTkFrame(self, fg_color=("gray86", "gray23"), corner_radius=6)
@@ -1328,6 +1605,11 @@ class CollapsibleRailFrame(ctk.CTkFrame):
                 chips.append((f"INIT:{getattr(self.rail, 'deb_init', 0)}", None, None))
             else:
                 chips.append(("Deb:OFF", ("gray40", "gray60"), None))
+            spec = self.get_input_wave_spec()
+            hi_lbl = INPUT_WAVE_LABEL_BY_MODE.get(spec.hi_mode, spec.hi_mode)
+            lo_lbl = INPUT_WAVE_LABEL_BY_MODE.get(spec.lo_mode, spec.lo_mode)
+            chips.append((f"WHi:{hi_lbl.split()[0]}", COND_THEME["hi"]["text"], None))
+            chips.append((f"WLo:{lo_lbl.split()[0]}", COND_THEME["lo"]["text"], None))
         else:
             chips.append((f"HI:{self.rail.cycle_hi}", COND_THEME["hi"]["text"], None))
             chips.append((f"LO:{self.rail.cycle_lo}", COND_THEME["lo"]["text"], None))
@@ -1350,6 +1632,7 @@ class CollapsibleRailFrame(ctk.CTkFrame):
             on_rename=self._on_rename,
             on_type_change=self._on_type_change,
             on_change=self._on_change,
+            initial_input_wave_spec=self._initial_input_wave_spec,
         )
         self.editor.pack(fill="x", padx=S_SM, pady=(S_SM, 0))
 
@@ -1382,6 +1665,13 @@ class CollapsibleRailFrame(ctk.CTkFrame):
         if self.editor is not None:
             self.rail = self.editor.get_rail()
         return self.rail
+
+    def get_input_wave_spec(self) -> InputWaveSpec:
+        if self.editor is not None:
+            spec = self.editor.get_input_wave_spec()
+            self._initial_input_wave_spec = spec
+            return spec
+        return self._initial_input_wave_spec
 
 
 # ============================================================
@@ -1731,7 +2021,7 @@ class PulsePanel(ctk.CTkFrame):
     def __init__(self, master, on_change: Callable[[list[str]], None], **kwargs):
         super().__init__(master, **kwargs)
         self.on_change = on_change
-        self._pulses: list[str] = ["iPulse_1us"]
+        self._pulses: list[str] = [DEFAULT_PULSE]
         self._selected_idx: Optional[int] = None
         self._row_widgets: dict[int, ctk.CTkFrame] = {}
         self._build_ui()
@@ -1793,14 +2083,14 @@ class PulsePanel(ctk.CTkFrame):
                 pass
 
     def set_pulses(self, pulses: list[str]):
-        self._pulses = list(pulses) if pulses else ["iPulse_1us"]
+        self._pulses = list(pulses) if pulses else [DEFAULT_PULSE]
         if self._selected_idx is not None and self._selected_idx >= len(self._pulses):
             self._selected_idx = None
         self._render()
 
     def _on_add(self):
-        name = self.entry.get().strip()
-        if not name:
+        name = normalize_pulse_name(self.entry.get().strip())
+        if not name or name == "High":
             messagebox.showwarning("Notice", "Enter pulse name")
             return
         if name in self._pulses:
@@ -2157,7 +2447,7 @@ class DragGhost:
 
 
 class StatusBar(ctk.CTkFrame):
-    """底部 status bar：左=檔名+dirty / 中=節點統計 / 右=訊息（toast 文字）。"""
+    """底部 status bar：左=檔名+dirty / 中=節點統計 / 右=作者+訊息（toast 文字）。"""
 
     def __init__(self, master, **kwargs):
         super().__init__(master, height=24, fg_color=("gray85", "gray18"),
@@ -2171,6 +2461,11 @@ class StatusBar(ctk.CTkFrame):
         self._msg_lbl = ctk.CTkLabel(self, text="", font=FONT_HINT, anchor="e",
                                       text_color=("gray35", "gray65"))
         self._msg_lbl.pack(side="right", padx=(S_SM, S_MD))
+        self._author_lbl = ctk.CTkLabel(
+            self, text=f"Author: {APP_AUTHOR}", font=FONT_HINT, anchor="e",
+            text_color=("gray35", "gray65"),
+        )
+        self._author_lbl.pack(side="right", padx=(S_SM, 0))
         self._msg_after_id: Optional[str] = None
 
     def set_file(self, path: Optional[str], dirty: bool):
@@ -2281,12 +2576,47 @@ class RecentFiles:
         return list(self._items)
 
 
+class AboutDialog(ctk.CTkToplevel):
+    """About 對話框：產品名稱、版本、作者、版權與試用期限。"""
+
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("About")
+        self.geometry("400x300")
+        self.resizable(False, False)
+        self.transient(master)
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=S_LG, pady=S_LG)
+
+        ctk.CTkLabel(body, text=APP_NAME, font=ABOUT_FONT_TITLE).pack(pady=(0, S_XS))
+        ctk.CTkLabel(body, text=f"Version {APP_VERSION.lstrip('v')}", font=ABOUT_FONT_VERSION).pack(
+            pady=(0, S_MD),
+        )
+
+        for line in (
+            f"Author: {APP_AUTHOR}",
+            f"Copyright © {APP_COPYRIGHT_YEAR} {APP_AUTHOR}. All rights reserved.",
+            "Built with Python / CustomTkinter",
+        ):
+            ctk.CTkLabel(
+                body, text=line, font=ABOUT_FONT_BODY, text_color=("gray25", "gray70"),
+            ).pack(pady=2)
+
+        ctk.CTkButton(body, text="Close", width=80, command=self.destroy).pack(pady=(S_MD, 0))
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+
 class HelpDialog(ctk.CTkToplevel):
     """快捷鍵清單對話框（F1 開啟）。"""
 
     def __init__(self, master, shortcuts: list[tuple[str, str]]):
         super().__init__(master)
-        self.title("Shortcuts")
+        self.title("Help")
         self.geometry("420x460")
         self.transient(master)
         try:
@@ -2313,7 +2643,7 @@ class HelpDialog(ctk.CTkToplevel):
 class PowerSeqGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self._base_title = "Power Sequence Config v1.3"
+        self._base_title = f"{APP_NAME} {APP_VERSION}"
         self.title(self._base_title)
         self.geometry("1400x850")
         self.minsize(1000, 650)
@@ -2333,12 +2663,10 @@ class PowerSeqGUI(ctk.CTk):
         self._gui_settings = GuiSettings()
         self._recent = RecentFiles()
         self._tooltips: list[Tooltip] = []  # 強引用，避免 GC
-        self._wavedrom_dialog = None
         self._node_list_delete_armed = False
 
         self._build_ui()
         self._bind_shortcuts()
-        self.bind("<FocusIn>", self._raise_modal_dialogs_if_open, add="+")
         self._refresh_all()
         self.after_idle(self._apply_paned_layout)
         self.after_idle(self.node_list._sync_scroll_height)
@@ -2375,16 +2703,16 @@ class PowerSeqGUI(ctk.CTk):
         # group: file
         self._open_btn = ctk.CTkButton(toolbar, text="Open", width=70, command=self._load_json)
         self._open_btn.pack(side="left", padx=(0, S_XS))
-        self._tt(self._open_btn, "Open JSON  (Ctrl+O)")
+        self._tt(self._open_btn, "Open JSON or Excel  (Ctrl+O)")
         self._recent_btn = ctk.CTkButton(toolbar, text="\u25BC", width=24, command=self._show_recent_menu)
         self._recent_btn.pack(side="left", padx=(0, S_SM))
         self._tt(self._recent_btn, "Recent files")
         b_save = ctk.CTkButton(toolbar, text="Save", width=70, command=self._save_json)
         b_save.pack(side="left", padx=(0, S_XS))
-        self._tt(b_save, "Save  (Ctrl+S)")
+        self._tt(b_save, "Save JSON or Excel  (Ctrl+S)")
         b_saveas = ctk.CTkButton(toolbar, text="Save As...", width=80, command=self._save_json_as)
         b_saveas.pack(side="left", padx=(0, S_SM))
-        self._tt(b_saveas, "Save As...  (Ctrl+Shift+S)")
+        self._tt(b_saveas, "Save As JSON or Excel  (Ctrl+Shift+S)")
 
         self._sep(toolbar)
 
@@ -2410,6 +2738,23 @@ class PowerSeqGUI(ctk.CTk):
         cb_pv.pack(side="left", padx=(0, S_SM))
         self._tt(cb_pv, "Toggle right-side live code preview (Verilog or C)")
 
+        self._sep(toolbar)
+        wd_opts = ctk.CTkFrame(toolbar, fg_color="transparent")
+        wd_opts.pack(side="left", padx=(0, S_SM))
+        ctk.CTkLabel(wd_opts, text="Steps:", font=FONT_BODY).pack(side="left", padx=(0, S_XS))
+        self._wd_steps_var = tk.StringVar(value="50")
+        wd_steps = ctk.CTkEntry(wd_opts, textvariable=self._wd_steps_var, width=56, height=28)
+        wd_steps.pack(side="left", padx=(0, S_SM))
+        self._tt(wd_steps, "WaveDrom simulation length (saved with project)")
+        ctk.CTkLabel(wd_opts, text="hscale:", font=FONT_BODY).pack(side="left", padx=(0, S_XS))
+        self._wd_hscale_var = tk.StringVar(value="1")
+        wd_hscale = ctk.CTkEntry(wd_opts, textvariable=self._wd_hscale_var, width=40, height=28)
+        wd_hscale.pack(side="left")
+        self._tt(wd_hscale, "WaveDrom horizontal pixels per step (default 1)")
+        for w in (wd_steps, wd_hscale):
+            w.bind("<FocusOut>", self._on_wavedrom_globals_changed, add="+")
+            w.bind("<Return>", self._on_wavedrom_globals_changed, add="+")
+
         # right side: pin / theme / help / validation badge / main actions
         self._pin_btn = ctk.CTkButton(toolbar, text="Pin", width=44, command=self._toggle_topmost)
         self._pin_btn.pack(side="right")
@@ -2423,6 +2768,9 @@ class PowerSeqGUI(ctk.CTk):
         theme_menu.pack(side="right", padx=(0, S_SM))
         self._tt(theme_menu, "Appearance mode")
 
+        b_about = ctk.CTkButton(toolbar, text="About", width=56, command=self._open_about)
+        b_about.pack(side="right", padx=(0, S_XS))
+        self._tt(b_about, "About this application")
         b_help = ctk.CTkButton(toolbar, text="?", width=28, command=self._open_help)
         b_help.pack(side="right", padx=(0, S_SM))
         self._tt(b_help, "Keyboard shortcuts  (F1)")
@@ -2553,6 +2901,9 @@ class PowerSeqGUI(ctk.CTk):
         # ----- Status bar -----
         self._status = StatusBar(self)
         self._status.pack(side="bottom", fill="x")
+        self._status._author_lbl.bind("<Button-1>", lambda _e: self._open_about())
+        self._status._author_lbl.configure(cursor="hand2")
+        self._tt(self._status._author_lbl, "About this application")
 
     def _bind_shortcuts(self):
         self.bind_all("<Control-s>", lambda _e: self._save_json())
@@ -2690,21 +3041,62 @@ class PowerSeqGUI(ctk.CTk):
             cf.update_summary()
         self._update_validation()
 
+    def _wavedrom_globals_from_toolbar(self) -> tuple[int, int]:
+        try:
+            steps = max(10, int(self._wd_steps_var.get().strip()))
+        except (ValueError, tk.TclError):
+            steps = 50
+        try:
+            hscale = _norm_hscale(int(self._wd_hscale_var.get().strip()))
+        except (ValueError, tk.TclError):
+            hscale = 1
+        return steps, hscale
+
+    def _sync_wavedrom_toolbar_from_config(self) -> None:
+        wd = self.config_obj.wavedrom_scenario or {}
+        steps = int(wd.get("steps", 50))
+        hscale = int(wd.get("hscale", wd.get("cond_step_delay", 1)))
+        self._wd_steps_var.set(str(steps))
+        self._wd_hscale_var.set(str(hscale))
+
+    def _on_wavedrom_globals_changed(self, _event=None):
+        steps, hscale = self._wavedrom_globals_from_toolbar()
+        self._wd_steps_var.set(str(steps))
+        self._wd_hscale_var.set(str(hscale))
+        self._mark_dirty()
+
+    def _wavedrom_scenario_for_export(self, cfg: PowerSeqConfig) -> WaveDromScenario:
+        return build_wavedrom_scenario(cfg)
+
     # ---- collect ----
     def _collect_config(self) -> PowerSeqConfig:
         rails = [cf.get_rail() for cf in self.collapsible_frames]
         self.config_obj.rails = rails
+        steps, hscale = self._wavedrom_globals_from_toolbar()
+        has_input = any(r.seq_type == "input" for r in rails)
+        wavedrom_scenario = None
+        if has_input or steps != 50 or hscale != 1:
+            wavedrom_scenario = {"steps": steps}
+            if hscale != 1:
+                wavedrom_scenario["hscale"] = hscale
+        self.config_obj.wavedrom_scenario = wavedrom_scenario
         return PowerSeqConfig(
             rails=rails,
             module_name=self.config_obj.module_name,
             clock_freq_mhz=self.config_obj.clock_freq_mhz,
             pulse_period_ns=self.config_obj.pulse_period_ns,
-            pulses=getattr(self.config_obj, "pulses", None) or ["iPulse_1us"],
-            wavedrom_scenario=getattr(self.config_obj, "wavedrom_scenario", None),
+            pulses=getattr(self.config_obj, "pulses", None) or [DEFAULT_PULSE],
+            wavedrom_scenario=wavedrom_scenario,
         )
 
+    def _input_wave_spec_for(self, rail_name: str) -> InputWaveSpec:
+        for r in self.config_obj.rails:
+            if r.name == rail_name and r.seq_type == "input":
+                return rail_input_wave_spec(r)
+        return InputWaveSpec(hi_mode="depends", lo_mode="constant_0")
+
     def _get_pulses(self) -> list[str]:
-        return getattr(self.config_obj, "pulses", None) or ["iPulse_1us"]
+        return getattr(self.config_obj, "pulses", None) or [DEFAULT_PULSE]
 
     def _get_all_rails(self) -> list[PowerRail]:
         return self.config_obj.rails
@@ -2729,6 +3121,7 @@ class PowerSeqGUI(ctk.CTk):
                 on_rename=self._handle_rename,
                 on_type_change=self._handle_type_change,
                 on_change=self._on_editor_change,
+                get_input_wave_spec=self._input_wave_spec_for,
                 expanded=is_expanded,
             )
             # pack 由 _apply_inspect_mode 統一處理（避免 inspect toggle 後順序錯亂）
@@ -2742,6 +3135,7 @@ class PowerSeqGUI(ctk.CTk):
         self._schedule_preview()
         self._update_undo_btns()
         self._update_stats()
+        self._sync_wavedrom_toolbar_from_config()
 
     def _apply_inspect_mode(self):
         # 先全部 pack_forget 再依序重新 pack，避免 toggle 後順序錯亂
@@ -2903,7 +3297,7 @@ class PowerSeqGUI(ctk.CTk):
         self.config_obj = self._collect_config()
         old_pulses = list(self._get_pulses())
         self.config_obj.pulses = new_pulses
-        fallback = new_pulses[0] if new_pulses else "iPulse_1us"
+        fallback = new_pulses[0] if new_pulses else DEFAULT_PULSE
         removed = set(old_pulses) - set(new_pulses)
         if removed:
             for r in self.config_obj.rails:
@@ -3134,7 +3528,10 @@ class PowerSeqGUI(ctk.CTk):
         ctk.set_appearance_mode(mode)
         self._status_msg(f"Theme: {value}")
 
-    # ---- help ----
+    # ---- help / about ----
+    def _open_about(self):
+        AboutDialog(self)
+
     def _open_help(self):
         shortcuts = [
             ("Ctrl+N",        "Add new node"),
@@ -3144,7 +3541,7 @@ class PowerSeqGUI(ctk.CTk):
             ("Ctrl+Shift+S",  "Save As..."),
             ("Ctrl+G",        "Generate Verilog"),
             ("Ctrl+Shift+G",  "Generate C"),
-            ("Ctrl+Shift+E",  "Export WaveDrom"),
+            ("Ctrl+Shift+E",  "Export WaveDrom JSON"),
             ("Ctrl+E",        "Export Draw.io"),
             ("Ctrl+F",        "Focus node search"),
             ("Ctrl+Z",        "Undo"),
@@ -3174,8 +3571,14 @@ class PowerSeqGUI(ctk.CTk):
             self._status_msg(f"Not found: {path}", level="error")
             return
         try:
-            with open(path, encoding="utf-8") as f:
-                self.config_obj = PowerSeqConfig.from_dict(json.load(f))
+            ext = os.path.splitext(path)[1].lower()
+            if ext in (".xlsx", ".xlsm", ".xls"):
+                from excel_import import load_powerseq_from_excel
+
+                self.config_obj = load_powerseq_from_excel(path)
+            else:
+                with open(path, encoding="utf-8") as f:
+                    self.config_obj = PowerSeqConfig.from_dict(json.load(f))
             self._undo_stack.clear()
             self._redo_stack.clear()
             self._current_path = path
@@ -3201,7 +3604,14 @@ class PowerSeqGUI(ctk.CTk):
 
     # ---- save / load ----
     def _load_json(self):
-        path = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
+        path = filedialog.askopenfilename(
+            filetypes=[
+                ("PowerSeq config", "*.json;*.xlsx;*.xlsm"),
+                ("JSON", "*.json"),
+                ("Excel", "*.xlsx;*.xlsm"),
+                ("All files", "*.*"),
+            ]
+        )
         if not path:
             return
         self._open_path(path)
@@ -3214,9 +3624,21 @@ class PowerSeqGUI(ctk.CTk):
 
     def _save_json_as(self):
         cfg = self._collect_config()
+        initial = os.path.basename(self._current_path) if self._current_path else "powerseq.json"
+        cur_ext = os.path.splitext(self._current_path or "")[1].lower()
+        if cur_ext in (".xlsx", ".xlsm"):
+            default_ext = cur_ext.lstrip(".")
+        else:
+            default_ext = "json"
         path = filedialog.asksaveasfilename(
-            defaultextension=".json", filetypes=[("JSON", "*.json")],
-            initialfile=os.path.basename(self._current_path) if self._current_path else "",
+            defaultextension=default_ext,
+            initialfile=initial,
+            filetypes=[
+                ("JSON", "*.json"),
+                ("Excel macro-enabled", "*.xlsm"),
+                ("Excel workbook", "*.xlsx"),
+                ("All files", "*.*"),
+            ],
         )
         if not path:
             return
@@ -3226,8 +3648,14 @@ class PowerSeqGUI(ctk.CTk):
         if cfg is None:
             cfg = self._collect_config()
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(cfg.to_dict(), f, indent=2, ensure_ascii=False)
+            ext = os.path.splitext(path)[1].lower()
+            if ext in (".xlsx", ".xlsm", ".xls"):
+                from excel_export import export_powerseq_to_excel
+
+                export_powerseq_to_excel(cfg, path)
+            else:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(cfg.to_dict(), f, indent=2, ensure_ascii=False)
             self.config_obj = cfg
             self._current_path = path
             self._recent.add(path)
@@ -3280,31 +3708,6 @@ class PowerSeqGUI(ctk.CTk):
             messagebox.showerror("Error", str(e))
             self._status_msg(f"Generate {label} failed: {e}", level="error")
 
-    def _wavedrom_scenario_sidecar_path(self) -> str | None:
-        if self._current_path and self._current_path.lower().endswith(".json"):
-            return os.path.splitext(self._current_path)[0] + "_wavedrom_scenario.json"
-        return None
-
-    def _on_wavedrom_dialog_closed(self) -> None:
-        self._wavedrom_dialog = None
-
-    def _raise_modal_dialogs_if_open(self, event=None) -> None:
-        if event is not None and event.widget != self:
-            return
-        dlg = self._wavedrom_dialog
-        if dlg is None:
-            return
-        try:
-            if not dlg.winfo_exists():
-                self._wavedrom_dialog = None
-                return
-            dlg.bring_to_front()
-        except tk.TclError:
-            self._wavedrom_dialog = None
-
-    def _raise_wavedrom_dialog_if_open(self, event=None) -> None:
-        self._raise_modal_dialogs_if_open(event)
-
     def _export_wavedrom(self):
         cfg = self._collect_config()
         ok, errs = validate(cfg)
@@ -3315,43 +3718,22 @@ class PowerSeqGUI(ctk.CTk):
         if not cfg.rails:
             self._status_msg("No nodes. Add rails first.", level="warn")
             return
-
-        dlg = self._wavedrom_dialog
-        if dlg is not None:
-            try:
-                if dlg.winfo_exists():
-                    dlg.bring_to_front()
-                    return
-            except tk.TclError:
-                pass
-            self._wavedrom_dialog = None
-
-        def _export_diagram(scenario: WaveDromScenario):
-            path = filedialog.asksaveasfilename(
-                defaultextension=".json",
-                filetypes=[("WaveDrom JSON", "*.json"), ("All", "*")],
-            )
-            if not path:
-                return
-            try:
-                cfg2 = self._collect_config()
-                cfg2.wavedrom_scenario = scenario.to_dict()
-                text = generate_wavedrom_json(cfg2, scenario, output_filename=path)
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(text)
-                self._status_msg(f"Exported WaveDrom: {os.path.basename(path)}", level="success")
-            except Exception as e:
-                messagebox.showerror("Error", str(e))
-                self._status_msg(f"WaveDrom export failed: {e}", level="error")
-
-        self._wavedrom_dialog = WaveDromExportDialog(
-            self,
-            cfg,
-            on_export=_export_diagram,
-            scenario_path_hint=self._wavedrom_scenario_sidecar_path(),
-            project_json_path=self._current_path,
-            on_closed=self._on_wavedrom_dialog_closed,
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("WaveDrom JSON", "*.json"), ("All", "*")],
         )
+        if not path:
+            return
+        try:
+            cfg2 = self._collect_config()
+            scenario = self._wavedrom_scenario_for_export(cfg2)
+            text = generate_wavedrom_json(cfg2, scenario, output_filename=path)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            self._status_msg(f"Exported WaveDrom: {os.path.basename(path)}", level="success")
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+            self._status_msg(f"WaveDrom export failed: {e}", level="error")
 
     def _export_drawio(self):
         cfg = self._collect_config()
@@ -3376,6 +3758,8 @@ class PowerSeqGUI(ctk.CTk):
 
 
 def run_gui():
+    if not ensure_not_expired():
+        return
     app = PowerSeqGUI()
     app.mainloop()
 

@@ -6,7 +6,7 @@
 - 無 Lo 依賴時 iLo 接 1'b0
 """
 import os
-from config_models import PowerSeqConfig, PowerRail
+from config_models import PowerSeqConfig, PowerRail, DEFAULT_PULSE, pulse_verilog_name
 
 
 def _filename_to_module_and_guard(filepath: str) -> tuple[str, str]:
@@ -87,12 +87,8 @@ def _port_name(name: str, prefix: str) -> str:
 
 
 def _pulse_signal(pulse_name: str) -> str:
-    """取得 pulse 的 Verilog 訊號名稱。每個 pulse 為單一訊號，無 _Hi/_Lo/_Force 後綴。"""
-    if pulse_name == "default" or not pulse_name:
-        return "iPulse_1us"
-    if pulse_name == "High":
-        return "1'b1"
-    return _verilog_safe_name(pulse_name)
+    """取得 pulse 的 Verilog 訊號名稱。config 存 Pulse_*，輸出 iPulse_*。"""
+    return pulse_verilog_name(pulse_name)
 
 
 def _get_input_signal(dep_name: str, name_to_rail: dict[str, PowerRail]) -> str:
@@ -208,7 +204,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
     lines.append("(")
     lines.append("    input  iRst,")
     lines.append("    input  iClk_Core,")
-    pulses = getattr(config, "pulses", None) or ["iPulse_1us"]
+    pulses = getattr(config, "pulses", None) or [DEFAULT_PULSE]
     need_pulses = sequenced or inputs_with_deb
     if need_pulses and pulses:
         seen = set()
@@ -278,7 +274,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
                 "u": f"u_deb_{s}",
                 "inp": _port_name(r.name, "i"),
                 "out": f"{s}_deb",
-                "ps": _pulse_signal(getattr(r, "deb_pulse", "iPulse_1us") or "iPulse_1us"),
+                "ps": _pulse_signal(getattr(r, "deb_pulse", DEFAULT_PULSE) or DEFAULT_PULSE),
             })
         w_u = max(len(d["u"]) for d in deb_specs)
         w_inp = max(len(d["inp"]) for d in deb_specs)

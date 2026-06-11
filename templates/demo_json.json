@@ -18,8 +18,9 @@
       "deb_cycle_lo": 2,
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
-      "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "hi_mode": "custom",
+      "lo_mode": "constant_0",
+      "hi_wave": "01"
     },
     {
       "name": "PRIM_VR_EN",
@@ -31,7 +32,23 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "custom",
+      "lo_wave": "0{30}1",
+      "hi_groups": [
+        [
+          "EKEY"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "PCH_P0V85A_EN",
@@ -91,7 +108,37 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "depends",
+      "hi_groups": [
+        [
+          "PCH_P0V85A_EN"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "PCH_P0V85A_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "PCH_P1V25A_EN",
@@ -154,7 +201,37 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "depends",
+      "hi_groups": [
+        [
+          "PCH_P1V25A_EN"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "PCH_P1V25A_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "PCH_P1V8A_EN",
@@ -217,7 +294,37 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "depends",
+      "hi_groups": [
+        [
+          "PCH_P1V8A_EN"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "PCH_P1V8A_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "PCH_P3V3A_EN",
@@ -276,11 +383,41 @@
       "deb_enable": true,
       "deb_init": 0,
       "deb_cycle_hi": 2,
-      "deb_cycle_lo": 2,
+      "deb_cycle_lo": 30,
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "depends",
+      "hi_groups": [
+        [
+          "PCH_P3V3A_EN"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "PCH_P3V3A_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "PVNNAON_EN",
@@ -337,7 +474,37 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "depends",
+      "hi_groups": [
+        [
+          "PVNNAON_EN"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "PVNNAON_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "PVCCIO_EN",
@@ -397,7 +564,37 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "depends",
+      "hi_groups": [
+        [
+          "PVCCIO_EN"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "PVCCIO_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "PVCC1V8_EN",
@@ -457,7 +654,37 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "depends",
+      "hi_groups": [
+        [
+          "PVCC1V8_EN"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "PVCC1V8_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "RSMRST_N",
@@ -559,7 +786,37 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "depends",
+      "hi_groups": [
+        [
+          "RSMRST_N"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "SLPS4_N"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "SLPS4_N",
@@ -571,7 +828,37 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "depends",
+      "hi_groups": [
+        [
+          "SLPS5_N"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "SLPS3_N"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "SLPS3_N",
@@ -583,7 +870,37 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "depends",
+      "hi_groups": [
+        [
+          "SLPS4_N"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "PLTRST_N"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "PSU_EN",
@@ -661,7 +978,37 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "depends",
+      "hi_groups": [
+        [
+          "PSU_EN"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "PSU_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "PVCCDD2_EN",
@@ -742,7 +1089,37 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "depends",
+      "hi_groups": [
+        [
+          "PVCCDD2_EN"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "PVCCDD2_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "IMVP_VR_EN",
@@ -808,7 +1185,37 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "depends",
+      "hi_groups": [
+        [
+          "IMVP_VR_EN"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ],
+      "lo_groups": [
+        [
+          "IMVP_VR_EN"
+        ]
+      ],
+      "lo_inv_groups": [
+        [
+          true
+        ]
+      ],
+      "lo_use_groups": [
+        [
+          "self"
+        ]
+      ]
     },
     {
       "name": "PCH_PWROK",
@@ -868,7 +1275,26 @@
       "deb_cycle_sync": 2,
       "deb_pulse": "Pulse_1us",
       "hi_mode": "depends",
-      "lo_mode": "constant_0"
+      "lo_mode": "custom",
+      "lo_wave": "0{25}1",
+      "hi_groups": [
+        [
+          "PCH_PWROK"
+        ]
+      ],
+      "hi_inv_groups": [
+        [
+          false
+        ]
+      ],
+      "hi_use_groups": [
+        [
+          "self"
+        ]
+      ]
     }
-  ]
+  ],
+  "wavedrom_scenario": {
+    "steps": 50
+  }
 }
