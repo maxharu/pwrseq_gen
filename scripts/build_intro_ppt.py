@@ -12,7 +12,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "doc" / "ppt_assets"
-OUT = ROOT / "doc" / "PowerSeqGen_Introduction_v1.3.pptx"
+OUT = ROOT / "doc" / "PowerSeqGen_Introduction_v1.4.pptx"
 
 # Theme
 BG = RGBColor(0x0F, 0x17, 0x2A)
@@ -108,7 +108,7 @@ def _title_slide(prs: Presentation, pipeline: Path | None):
     p2.font.color.rgb = ACCENT
     p2.space_before = Pt(12)
     p3 = tf.add_paragraph()
-    p3.text = "pwrseq_gen  ·  v1.3  ·  PSEQCELL-based power sequencing"
+    p3.text = "pwrseq_gen  ·  v1.4  ·  PSEQCELL-based power sequencing"
     p3.font.size = Pt(14)
     p3.font.color.rgb = MUTED
     p3.space_before = Pt(20)

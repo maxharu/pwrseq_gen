@@ -162,7 +162,7 @@ def _deb_time_text(cycle: int, pulse: str) -> str:
 
 def _deb_port_label(kind: str, cycle: int, pulse: str) -> str:
     """H_Deb / L_Deb 顯示為「H: 時間」「L: 時間」。"""
-    return f"{kind}: {_deb_time_text(cycle, pulse)}"
+    return f"{kind}:{_deb_time_text(cycle, pulse)}"
 
 
 def _style_align_left(style: str) -> str:
