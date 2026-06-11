@@ -166,14 +166,23 @@ class TestGenerateVerilogPulse:
 
     def test_pulses_in_port(self):
         cfg = PowerSeqConfig(
-            pulses=["iPulse_1us", "iPulse_1ms"],
+            pulses=["Pulse_1us", "Pulse_1ms"],
             rails=[
-                PowerRail("A", depends_on_hi=["__HIGH__"], pulse_hi="iPulse_1ms"),
+                PowerRail("A", depends_on_hi=["__HIGH__"], pulse_hi="Pulse_1ms"),
             ],
         )
         out = generate_verilog(cfg)
         assert "iPulse_1us" in out
         assert "iPulse_1ms" in out
+
+    def test_legacy_pulse_names_in_verilog(self):
+        """舊版 config 含 iPulse_* 仍輸出 i 前綴 Verilog。"""
+        cfg = PowerSeqConfig.from_dict({
+            "pulses": ["iPulse_1us"],
+            "rails": [{"name": "A", "depends_on_hi": ["__HIGH__"]}],
+        })
+        out = generate_verilog(cfg)
+        assert "iPulse_1us" in out
 
 
 class TestForceCondition:

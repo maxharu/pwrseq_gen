@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import os
 
-from config_models import PowerSeqConfig
+from config_models import PowerSeqConfig, apply_input_wave_dict, build_wavedrom_scenario
 from wavedrom_sim import InputWaveSpec, WaveDromScenario, default_scenario_for_config
 
 
@@ -14,14 +14,16 @@ def merge_scenario_for_config(
     loaded: WaveDromScenario, config: PowerSeqConfig,
 ) -> WaveDromScenario:
     """Keep only input nodes that exist in the current project."""
-    defaults = default_scenario_for_config(config)
+    defaults = build_wavedrom_scenario(config)
     inputs: dict[str, InputWaveSpec] = {}
     for r in config.rails:
         if r.seq_type != "input":
             continue
-        inputs[r.name] = loaded.inputs.get(r.name) or defaults.inputs.get(
+        spec = loaded.inputs.get(r.name) or defaults.inputs.get(
             r.name, InputWaveSpec(),
         )
+        inputs[r.name] = spec
+        apply_input_wave_dict(r, spec.to_dict())
     return WaveDromScenario(
         steps=loaded.steps,
         inputs=inputs,
@@ -45,6 +47,11 @@ def scenario_from_dict(data: dict) -> WaveDromScenario:
 
 
 def load_scenario_file(path: str) -> WaveDromScenario:
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".xlsx", ".xlsm", ".xls"):
+        from excel_import import load_wavedrom_scenario_from_excel
+
+        return load_wavedrom_scenario_from_excel(path)
     with open(path, encoding="utf-8") as f:
         return scenario_from_dict(json.load(f))
 
@@ -72,4 +79,4 @@ def resolve_scenario(
         sidecar = sidecar_path_for_project(project_json_path)
         if os.path.isfile(sidecar):
             return merge_scenario_for_config(load_scenario_file(sidecar), config)
-    return default_scenario_for_config(config)
+    return build_wavedrom_scenario(config)

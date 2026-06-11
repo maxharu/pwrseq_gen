@@ -1,43 +1,59 @@
 """
 Power Sequence Generator - Windows EXE 打包腳本
-使用 PyInstaller 將 GUI 打包成可直接執行的 .exe
+使用 PyInstaller 將 GUI 打包成單一 .exe（--onefile）
 """
 import os
 import subprocess
 import sys
 
-# 專案根目錄
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-MAIN_SCRIPT = os.path.join(PROJECT_ROOT, "main.py")
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SRC_DIR)
+MAIN_SCRIPT = os.path.join(SRC_DIR, "main.py")
 OUTPUT_NAME = "PowerSeqGen"
+DIST_DIR = os.path.join(PROJECT_ROOT, "dist")
+BUILD_DIR = os.path.join(PROJECT_ROOT, "build")
 
 
 def get_customtkinter_path() -> str:
     """取得 customtkinter 套件安裝路徑"""
     import customtkinter
-    pkg_dir = os.path.dirname(customtkinter.__file__)
-    return pkg_dir
+
+    return os.path.dirname(customtkinter.__file__)
 
 
 def main():
-    # 檢查 PyInstaller
     try:
-        import PyInstaller
+        import PyInstaller  # noqa: F401
     except ImportError:
-        print("Please install PyInstaller: pip install pyinstaller")
+        print("Please install PyInstaller: pip install -r requirements-build.txt")
         sys.exit(1)
 
     ctk_path = get_customtkinter_path()
-    # PyInstaller --add-data 格式：來源;目標（Windows 用分號）
-    add_data = f"{ctk_path};customtkinter/"
+    reference_dir = os.path.join(SRC_DIR, "reference")
 
     cmd = [
-        sys.executable, "-m", "PyInstaller",
+        sys.executable,
+        "-m",
+        "PyInstaller",
         "--noconfirm",
-        "--onedir",           # CustomTkinter 有 .json/.otf 等資料檔，需用 onedir
-        "--windowed",         # GUI 程式不顯示 console
-        "--name", OUTPUT_NAME,
-        "--add-data", add_data,
+        "--onefile",
+        "--windowed",
+        "--distpath",
+        DIST_DIR,
+        "--workpath",
+        BUILD_DIR,
+        "--specpath",
+        PROJECT_ROOT,
+        "--name",
+        OUTPUT_NAME,
+        "--add-data",
+        f"{ctk_path}{os.pathsep}customtkinter",
+        "--add-data",
+        f"{reference_dir}{os.pathsep}reference",
+        "--hidden-import",
+        "app_expiry",
+        "--hidden-import",
+        "wavedrom_scenario_io",
         MAIN_SCRIPT,
     ]
 
@@ -47,13 +63,14 @@ def main():
 
     result = subprocess.run(cmd, cwd=PROJECT_ROOT)
     if result.returncode == 0:
-        dist_dir = os.path.join(PROJECT_ROOT, "dist", OUTPUT_NAME)
+        exe_path = os.path.join(DIST_DIR, f"{OUTPUT_NAME}.exe")
         print()
         print("=" * 50)
         print("Build completed successfully!")
-        print(f"Output: {dist_dir}\\{OUTPUT_NAME}.exe")
+        print(f"Output: {exe_path}")
         print()
-        print("Copy the entire dist\\PowerSeqGen folder to run on target PC.")
+        print("Single-file EXE — copy PowerSeqGen.exe to target PC to run.")
+        print("First launch may take a few seconds while files extract.")
         print("=" * 50)
     else:
         sys.exit(result.returncode)

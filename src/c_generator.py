@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from config_models import PowerSeqConfig, PowerRail
+from config_models import PowerSeqConfig, PowerRail, normalize_pulse_name
 
 DEP_HIGH = "__HIGH__"
 DEP_LOW = "__LOW__"
@@ -41,12 +41,12 @@ def _filename_to_c_names(filepath: str) -> tuple[str, str, str]:
 
 
 def _pulse_time_field(pulse_name: str) -> str | None:
-    """iPulse_1ms -> t_1ms；High/default/空則 None（呼叫端用常數 1）。"""
+    """Pulse_1ms / iPulse_1ms -> t_1ms；High/default/空則 None（呼叫端用常數 1）。"""
     if not pulse_name or pulse_name in ("default", "High"):
         return None
-    p = _safe_name(pulse_name)
-    if p.startswith("iPulse_"):
-        p = p[7:]
+    p = normalize_pulse_name(pulse_name)
+    if p.startswith("Pulse_"):
+        p = p[6:]
     return f"t_{p}" if p else None
 
 

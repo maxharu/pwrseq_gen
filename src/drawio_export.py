@@ -109,7 +109,16 @@ INPUT_NOT_ABOVE_CELL = GRID
 INPUT_NOT_LABEL_TO_NOT_GAP = INPUT_LABEL_H  # label 底邊至 NOT 頂 20pt（INPUT_NOT.xml）
 NOT_STACK_GAP = INPUT_LABEL_H  # 下一列放在 NOT 下方時的間距
 # AND/OR 整組反相：內建 negating bubble（reference/NAND1.xml、NOR1.xml），不再外掛 inverter_2
-_REFERENCE_DIR = Path(__file__).resolve().parent / "reference"
+def _reference_dir() -> Path:
+    """PyInstaller onefile 時資源在 sys._MEIPASS/reference。"""
+    import sys
+
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "reference"
+    return Path(__file__).resolve().parent / "reference"
+
+
+_REFERENCE_DIR = _reference_dir()
 
 
 _PSEQCELL_STYLE_INNER = "rounded=0;whiteSpace=wrap;html=1;"
@@ -119,10 +128,14 @@ _PSEQCELL_STYLE_Q = "rounded=1;whiteSpace=wrap;html=1;"
 
 
 def _parse_pulse_period(pulse_name: str) -> tuple[int, str] | None:
-    """iPulse_1us → (1, 'us')；iPulse_2ms → (2, 'ms')。"""
+    """Pulse_1us / iPulse_1us → (1, 'us')；Pulse_2ms → (2, 'ms')。"""
     if not pulse_name or pulse_name in ("default", "High"):
         return None
-    s = pulse_name[7:] if pulse_name.startswith("iPulse_") else pulse_name
+    s = pulse_name
+    if s.startswith("iPulse_"):
+        s = s[7:]
+    elif s.startswith("Pulse_"):
+        s = s[6:]
     if s.endswith("us"):
         try:
             return int(s[:-2]), "us"
