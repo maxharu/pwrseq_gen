@@ -57,8 +57,8 @@ MATRIX_JSON = os.path.join(
 class TestDebPortLabels:
     def test_deb_port_label_format(self):
         assert _deb_time_text(2, "iPulse_1us") == "2us"
-        assert _deb_port_label("H", 2, "iPulse_1us") == "H: 2us"
-        assert _deb_port_label("L", 0, "iPulse_1us") == "L: 0s"
+        assert _deb_port_label("H", 2, "iPulse_1us") == "H:2us"
+        assert _deb_port_label("L", 0, "iPulse_1us") == "L:0s"
 
     def test_exported_h_l_deb_labels_and_align(self):
         with open(MATRIX_JSON, encoding="utf-8") as f:

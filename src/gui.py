@@ -1,5 +1,12 @@
 """
-Power Sequence Config GUI v1.3
+Power Sequence Config GUI v1.4
+
+v1.4（相對 v1.3）：
+- Excel 工作簿 I/O（.xlsx／.xlsm）：Open／Save、Nodes／Conditions／Lists、xlsm Sync 按鈕
+- WaveDrom：工具列 steps／hscale；Input Hi/Lo 併入節點；移除獨立 WaveDrom 對話框
+- JSON 精簡：移除未使用的 recover／cycle_sync／od；wavedrom_scenario 僅保留全域 steps／hscale
+- Draw.io：Cell H_Deb／L_Deb 顯示 debounce 實際時間（cycle × pulse）
+- UI：Input 標題列移除 WHi／WLo chip；Preview 字級可記憶
 
 v1.3（相對 v1.2）：
 - Draw.io：邏輯閘改 *1.xml（numInputs=1）、Cell 對齊 PSEQCELL.v／PSEQCELL.xml（含連接點）
@@ -75,7 +82,7 @@ S_XS, S_SM, S_MD, S_LG = 2, 4, 8, 16
 
 APP_NAME = "Power Sequence Config"
 APP_AUTHOR = "Haru"
-APP_VERSION = "v1.3"
+APP_VERSION = "v1.4"
 APP_COPYRIGHT_YEAR = 2026
 
 # About dialog only — change here without affecting the rest of the GUI
@@ -1602,11 +1609,6 @@ class CollapsibleRailFrame(ctk.CTkFrame):
                 chips.append((f"INIT:{getattr(self.rail, 'deb_init', 0)}", None, None))
             else:
                 chips.append(("Deb:OFF", ("gray40", "gray60"), None))
-            spec = self.get_input_wave_spec()
-            hi_lbl = INPUT_WAVE_LABEL_BY_MODE.get(spec.hi_mode, spec.hi_mode)
-            lo_lbl = INPUT_WAVE_LABEL_BY_MODE.get(spec.lo_mode, spec.lo_mode)
-            chips.append((f"WHi:{hi_lbl.split()[0]}", COND_THEME["hi"]["text"], None))
-            chips.append((f"WLo:{lo_lbl.split()[0]}", COND_THEME["lo"]["text"], None))
         else:
             chips.append((f"HI:{self.rail.cycle_hi}", COND_THEME["hi"]["text"], None))
             chips.append((f"LO:{self.rail.cycle_lo}", COND_THEME["lo"]["text"], None))
