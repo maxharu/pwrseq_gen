@@ -44,9 +44,6 @@
       "pulse_hi": "Pulse_2ms",
       "pulse_lo": "Pulse_1us",
       "pulse_force": "Pulse_1us",
-      "recover": 3,
-      "cycle_sync": 0,
-      "od": 0,
       "depends_on_hi_groups": [
         [
           "EKEY",
@@ -104,9 +101,6 @@
       "pulse_hi": "Pulse_1ms",
       "pulse_lo": "Pulse_1us",
       "pulse_force": "Pulse_1us",
-      "recover": 3,
-      "cycle_sync": 0,
-      "od": 0,
       "depends_on_hi_groups": [
         [
           "PCH_P0V85A_PG",
@@ -167,9 +161,6 @@
       "pulse_hi": "Pulse_1ms",
       "pulse_lo": "Pulse_1us",
       "pulse_force": "Pulse_1us",
-      "recover": 3,
-      "cycle_sync": 0,
-      "od": 0,
       "depends_on_hi_groups": [
         [
           "PCH_P1V25A_PG",
@@ -230,9 +221,6 @@
       "pulse_hi": "Pulse_1ms",
       "pulse_lo": "Pulse_1us",
       "pulse_force": "Pulse_1us",
-      "recover": 3,
-      "cycle_sync": 0,
-      "od": 0,
       "depends_on_hi_groups": [
         [
           "PCH_P1V8A_PG",
@@ -293,9 +281,6 @@
       "pulse_hi": "Pulse_1ms",
       "pulse_lo": "Pulse_1us",
       "pulse_force": "Pulse_1us",
-      "recover": 3,
-      "cycle_sync": 0,
-      "od": 0,
       "depends_on_hi_groups": [
         [
           "PCH_P0V85A_EN"
@@ -350,9 +335,6 @@
       "pulse_hi": "Pulse_1ms",
       "pulse_lo": "Pulse_1us",
       "pulse_force": "Pulse_1us",
-      "recover": 3,
-      "cycle_sync": 0,
-      "od": 0,
       "depends_on_hi_groups": [
         [
           "PCH_P1V25A_EN"
@@ -410,9 +392,6 @@
       "pulse_hi": "Pulse_1ms",
       "pulse_lo": "Pulse_1us",
       "pulse_force": "Pulse_1us",
-      "recover": 3,
-      "cycle_sync": 0,
-      "od": 0,
       "depends_on_hi_groups": [
         [
           "PCH_P1V8A_EN"
@@ -470,9 +449,6 @@
       "pulse_hi": "Pulse_1ms",
       "pulse_lo": "Pulse_1us",
       "pulse_force": "Pulse_1us",
-      "recover": 3,
-      "cycle_sync": 0,
-      "od": 0,
       "depends_on_hi_groups": [
         [
           "PCH_P0V85A_EN",
@@ -596,9 +572,6 @@
       "pulse_hi": "Pulse_32ms",
       "pulse_lo": "Pulse_1us",
       "pulse_force": "Pulse_1us",
-      "recover": 3,
-      "cycle_sync": 0,
-      "od": 0,
       "depends_on_hi_groups": [
         [
           "RSMRST_N",
@@ -674,9 +647,6 @@
       "pulse_hi": "Pulse_1ms",
       "pulse_lo": "Pulse_1us",
       "pulse_force": "Pulse_1us",
-      "recover": 3,
-      "cycle_sync": 0,
-      "od": 0,
       "depends_on_hi_groups": [
         [
           "RSMRST_N",
@@ -755,9 +725,6 @@
       "pulse_hi": "Pulse_1ms",
       "pulse_lo": "Pulse_1us",
       "pulse_force": "Pulse_1us",
-      "recover": 3,
-      "cycle_sync": 0,
-      "od": 0,
       "depends_on_hi_groups": [
         [
           "RSMRST_N",
@@ -821,9 +788,6 @@
       "pulse_hi": "Pulse_1ms",
       "pulse_lo": "Pulse_1us",
       "pulse_force": "Pulse_1us",
-      "recover": 3,
-      "cycle_sync": 0,
-      "od": 0,
       "depends_on_hi_groups": [
         [
           "IMVP_VR_EN",
