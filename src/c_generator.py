@@ -263,15 +263,16 @@ def generate_c(
         lines.append(f"    pwrcell_t {m.ljust(w_member)};")
 
     if time_fields:
+        w_tf = max(len(f) for f in time_fields)
         lines.append("    struct")
         lines.append("    {")
         for f in time_fields:
-            lines.append(f"        UINT8 {f}:1;")
+            lines.append(f"        UINT8 {f.ljust(w_tf)}:1;")
         lines.append("    }time_isr;")
         lines.append("    struct")
         lines.append("    {")
         for f in time_fields:
-            lines.append(f"        UINT8 {f}:1;")
+            lines.append(f"        UINT8 {f.ljust(w_tf)}:1;")
         lines.append("    }time;")
 
     lines.append(f"}}{type_name};")
@@ -281,12 +282,17 @@ def generate_c(
     lines.append(f"{type_name} {var_name} = {{")
     w_init = max((len(_internal_sig(r.name)) for r in sequenced), default=0)
     w_chi = max((len(str(r.cycle_hi)) for r in sequenced), default=1)
+    w_clo = max((len(str(r.cycle_lo)) for r in sequenced), default=1)
+    w_polar = max((len(str(getattr(r, "force_val", 0))) for r in sequenced), default=1)
     for i, r in enumerate(sequenced):
         m = _internal_sig(r.name)
         comma = "," if i < len(sequenced) - 1 else ""
+        hi_c = str(r.cycle_hi).rjust(w_chi)
+        lo_c = str(r.cycle_lo).rjust(w_clo)
+        polar = str(getattr(r, "force_val", 0)).rjust(w_polar)
         lines.append(
-            f"    .{m.ljust(w_init)} = {{ .hi = {{.cycle = {str(r.cycle_hi).rjust(w_chi)}}}, "
-            f".lo = {{.cycle = {r.cycle_lo}}}, .force = {{.polar = {getattr(r, 'force_val', 0)}}} }}{comma}"
+            f"    .{m.ljust(w_init)} = {{ .hi = {{.cycle = {hi_c}}}, "
+            f".lo = {{.cycle = {lo_c}}}, .force = {{.polar = {polar}}} }}{comma}"
         )
     lines.append("};")
     lines.append("")
