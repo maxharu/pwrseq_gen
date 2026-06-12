@@ -35,6 +35,22 @@ def _internal_sig(name: str) -> str:
     return _verilog_safe_name(name).lower()
 
 
+def _aligned_hash_params(param_rows: list[list[tuple[str, int]]]) -> list[str]:
+    """Format #(.NAME(val), ...) with numeric values column-aligned across instances."""
+    if not param_rows:
+        return []
+    n = len(param_rows[0])
+    widths = [max(len(str(row[i][1])) for row in param_rows) for i in range(n)]
+    blocks: list[str] = []
+    for row in param_rows:
+        parts = [
+            f".{name}({str(val).rjust(widths[i])})"
+            for i, (name, val) in enumerate(row)
+        ]
+        blocks.append("#(" + ", ".join(parts) + ")")
+    return blocks
+
+
 def _get_successors(config: PowerSeqConfig) -> dict[str, list[str]]:
     """取得每個節點的後繼（依賴它的節點，不含 external），排除 __HIGH__/__LOW__"""
     succ = {r.name: [] for r in config.rails}
@@ -280,15 +296,20 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
         w_inp = max(len(d["inp"]) for d in deb_specs)
         w_out = max(len(d["out"]) for d in deb_specs)
         w_ps = max(len(d["ps"]) for d in deb_specs)
-        for d in deb_specs:
-            r = d["rail"]
-            init = getattr(r, "deb_init", 0)
-            cyc_hi = getattr(r, "deb_cycle_hi", 2)
-            cyc_lo = getattr(r, "deb_cycle_lo", 2)
-            cyc_sync = getattr(r, "deb_cycle_sync", 2)
+        deb_param_rows = [
+            [
+                ("WIDTH", 1),
+                ("INIT", getattr(d["rail"], "deb_init", 0)),
+                ("CYCLE_SYNC", getattr(d["rail"], "deb_cycle_sync", 2)),
+                ("CYCLE_HI", getattr(d["rail"], "deb_cycle_hi", 2)),
+                ("CYCLE_LO", getattr(d["rail"], "deb_cycle_lo", 2)),
+            ]
+            for d in deb_specs
+        ]
+        deb_hash = _aligned_hash_params(deb_param_rows)
+        for d, params in zip(deb_specs, deb_hash):
             inst = (
-                f"    DEB #(.WIDTH(1), .INIT({init}), .CYCLE_SYNC({cyc_sync}), "
-                f".CYCLE_HI({cyc_hi}), .CYCLE_LO({cyc_lo})) "
+                f"    DEB {params} "
                 f"{d['u'].ljust(w_u)} (.iRst(iRst), .iClk_Core(iClk_Core), "
                 f".iPulse_Sample({d['ps'].ljust(w_ps)}), "
                 f".i({d['inp'].ljust(w_inp)}), "
@@ -385,12 +406,22 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
         w_ph = max(len(p["ph"]) for p in ps_specs)
         w_pl = max(len(p["pl"]) for p in ps_specs)
         w_pf = max(len(p["pf"]) for p in ps_specs)
-        for p in ps_specs:
+        ps_param_rows = [
+            [
+                ("INIT", p["rail"].init),
+                ("WIDTH", 1),
+                ("CYCLE_HI", p["rail"].cycle_hi),
+                ("CYCLE_LO", p["rail"].cycle_lo),
+                ("CYCLE_FORCE", p["rail"].cycle_force),
+                ("FORCE", p["rail"].force_val),
+            ]
+            for p in ps_specs
+        ]
+        ps_hash = _aligned_hash_params(ps_param_rows)
+        for p, params in zip(ps_specs, ps_hash):
             r = p["rail"]
             inst = (
-                f"    PSEQCELL #(.INIT({r.init}), .WIDTH(1), .CYCLE_HI({r.cycle_hi}), "
-                f".CYCLE_LO({r.cycle_lo}), .CYCLE_FORCE({r.cycle_force}), "
-                f".FORCE({r.force_val})) "
+                f"    PSEQCELL {params} "
                 f"{p['u'].ljust(w_u)} (.iRst(iRst), .iClk_Core(iClk_Core), "
                 f".iPulse_Hi({p['ph'].ljust(w_ph)}), "
                 f".iPulse_Lo({p['pl'].ljust(w_pl)}), "
