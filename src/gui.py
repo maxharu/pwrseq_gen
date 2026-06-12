@@ -6,7 +6,7 @@ v1.4（相對 v1.3）：
 - WaveDrom：工具列 steps／hscale；Input Hi/Lo 併入節點；移除獨立 WaveDrom 對話框
 - JSON 精簡：移除未使用的 recover／cycle_sync／od；wavedrom_scenario 僅保留全域 steps／hscale
 - Draw.io：Cell H_Deb／L_Deb 顯示 debounce 實際時間（cycle × pulse）
-- UI：Input 標題列移除 WHi／WLo chip；Preview 字級可記憶
+- UI：Input 標題列移除 WHi／WLo chip；Preview 字級可記憶；每 Node 獨立 Apply 才更新 config／Preview
 
 v1.3（相對 v1.2）：
 - Draw.io：邏輯閘改 *1.xml（numInputs=1）、Cell 對齊 PSEQCELL.v／PSEQCELL.xml（含連接點）
@@ -19,7 +19,7 @@ v1.2（相對 v1.1）：
 - 三段以顏色語意區分：Hi=綠 / Lo=紅 / Force=琥珀（A1）
 - Header chip 化（[Output] [HI:8] [LO:4] [INIT:0]）（A2）
 - Dirty flag（title 顯示 *）、快捷鍵 Ctrl+S/Shift+S/O/N/G/E/F/Z/Y/Delete、F1 Help（A3）
-- 自動 commit（FocusOut / radio trace），拿掉每張卡片的 Apply 按鈕（A4）
+- 自動 commit（FocusOut / radio trace），拿掉每張卡片的 Apply 按鈕（A4）→ v1.4 恢復每 Node Apply
 - 左側 list 升級為 CTkScrollableFrame，支援搜尋、多選批次刪除 / 改類型（A5/B5）
 - Browse / Inspect 雙模式（B3）
 - rename_rail 抽到 PowerSeqConfig（B4）
@@ -33,7 +33,6 @@ v1.2（相對 v1.1）：
 import json
 import os
 import tkinter as tk
-from dataclasses import asdict
 from tkinter import filedialog, messagebox
 from typing import Callable, Optional
 
@@ -1076,83 +1075,24 @@ class InputWaveCondFrame(ctk.CTkFrame):
 # ============================================================
 
 class RailEditorFrame(ctk.CTkFrame):
-    """單一 rail 編輯器。
-
-    與 v1.1 不同：
-    - 拿掉 Apply 按鈕，改成 FocusOut / radio trace 自動 commit。
-    - Hi/Lo/Force 改用 CTkTabview 呈現，由 CondSectionFrame 提供內容。
-    - 內部分為 General / Timing / Conditions / Debounce 四個 section。
-    """
+    """單一 rail 編輯器；按 Apply 才寫入 config 並更新 Preview。"""
 
     def __init__(self, master, rail: PowerRail,
                  get_all_rails: Callable[[], list[PowerRail]],
                  get_pulses: Callable[[], list[str]],
-                 on_rename: Callable[[str, str], None],
-                 on_type_change: Callable[[str, str, str], None],
-                 on_change: Optional[Callable[[], None]] = None,
+                 on_apply: Optional[Callable[[], None]] = None,
                  initial_input_wave_spec: Optional[InputWaveSpec] = None,
                  **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.rail = rail
         self.get_all_rails = get_all_rails
         self.get_pulses = get_pulses
-        self.on_rename = on_rename
-        self.on_type_change = on_type_change
-        self.on_change = on_change
+        self.on_apply = on_apply
         self._initial_input_wave_spec = initial_input_wave_spec or InputWaveSpec(
             hi_mode="depends", lo_mode="constant_0",
         )
-        self._preview_snapshot = ""
 
         self._build_ui()
-        self._preview_snapshot = self._rail_snapshot()
-
-    def _rail_snapshot(self) -> str:
-        snap = asdict(self.get_rail())
-        if self.var_type.get() == "input" and getattr(self, "input_wave_frame", None):
-            snap["_input_wave"] = self.get_input_wave_spec().to_dict()
-        return json.dumps(snap, sort_keys=True, ensure_ascii=False)
-
-    def _fire_change(self, *_):
-        self._notify_editor_change(preview=False)
-
-    def _sync_preview_if_changed(self) -> bool:
-        """內容與上次 preview 不同時更新 snapshot 並觸發 preview。回傳是否有變更。"""
-        try:
-            current = self._rail_snapshot()
-        except Exception:
-            self._notify_editor_change(preview=True)
-            return True
-        if current == self._preview_snapshot:
-            return False
-        self._preview_snapshot = current
-        self._notify_editor_change(preview=True)
-        return True
-
-    def _fire_commit(self, *_):
-        """輸入框 Enter 或焦點離開：內容有變才更新 preview。"""
-        if not self._sync_preview_if_changed():
-            self._notify_editor_change(preview=False)
-
-    def _fire_live(self, *_):
-        """Checkbox / 下拉 / Condition 變更：內容有變才更新 preview。"""
-        if not self._sync_preview_if_changed():
-            self._notify_editor_change(preview=False)
-
-    def _notify_editor_change(self, *, preview: bool):
-        if self.on_change is None:
-            return
-        try:
-            self.on_change(preview=preview)
-        except TypeError:
-            self.on_change()
-
-    def _bind_entry_preview_commit(self, entry):
-        entry.bind("<FocusOut>", self._fire_commit)
-        entry.bind("<Return>", self._fire_commit)
-
-    def _bind_widget_preview_commit(self, widget):
-        widget.bind("<FocusOut>", self._fire_commit)
 
     # ---- helpers ----
     def _dep_options(self) -> list[str]:
@@ -1196,15 +1136,12 @@ class RailEditorFrame(ctk.CTkFrame):
         self.entry_name = ctk.CTkEntry(grid, width=160)
         self.entry_name.insert(0, self.rail.name)
         self.entry_name.grid(row=0, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self.entry_name.bind("<FocusOut>", self._on_name_commit)
-        self.entry_name.bind("<Return>", self._on_name_commit)
 
         ctk.CTkLabel(grid, text="Type:", font=FONT_BODY).grid(
             row=0, column=2, sticky="w", padx=(0, S_SM), pady=2)
         type_row = ctk.CTkFrame(grid, fg_color="transparent")
         type_row.grid(row=0, column=3, sticky="w", pady=2)
         self.var_type = ctk.StringVar(value=self.rail.seq_type)
-        self._old_type = self.rail.seq_type
         self._type_seg = ctk.CTkSegmentedButton(
             type_row,
             values=[SEQ_TYPE_LABELS["output"], SEQ_TYPE_LABELS["input"]],
@@ -1225,29 +1162,24 @@ class RailEditorFrame(ctk.CTkFrame):
         self.entry_hi = ctk.CTkEntry(grid_t, width=100)
         self.entry_hi.insert(0, str(self.rail.cycle_hi))
         self.entry_hi.grid(row=0, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self._bind_entry_preview_commit(self.entry_hi)
 
         ctk.CTkLabel(grid_t, text="CYCLE_LO:", font=FONT_BODY).grid(
             row=0, column=2, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_lo = ctk.CTkEntry(grid_t, width=100)
         self.entry_lo.insert(0, str(self.rail.cycle_lo))
         self.entry_lo.grid(row=0, column=3, sticky="w", pady=2)
-        self._bind_entry_preview_commit(self.entry_lo)
 
         ctk.CTkLabel(grid_t, text="CYCLE_FORCE:", font=FONT_BODY).grid(
             row=1, column=0, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_cycle_force = ctk.CTkEntry(grid_t, width=100)
         self.entry_cycle_force.insert(0, str(getattr(self.rail, "cycle_force", 2)))
         self.entry_cycle_force.grid(row=1, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self._bind_entry_preview_commit(self.entry_cycle_force)
 
         ctk.CTkLabel(grid_t, text="INIT:", font=FONT_BODY).grid(
             row=2, column=0, sticky="w", padx=(0, S_SM), pady=2)
         self.var_pseq_init = ctk.StringVar(value="1" if getattr(self.rail, "init", 0) == 1 else "0")
         cmb_pseq_init = ctk.CTkComboBox(grid_t, values=["0", "1"], variable=self.var_pseq_init, width=100)
         cmb_pseq_init.grid(row=2, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self.var_pseq_init.trace_add("write", self._fire_live)
-        self._bind_widget_preview_commit(cmb_pseq_init)
 
         ctk.CTkLabel(grid_t, text="FORCE:", font=FONT_BODY).grid(
             row=2, column=2, sticky="w", padx=(0, S_SM), pady=2)
@@ -1255,8 +1187,6 @@ class RailEditorFrame(ctk.CTkFrame):
             value="1" if getattr(self.rail, "force_val", 0) == 1 else "0")
         cmb_force_val = ctk.CTkComboBox(grid_t, values=["0", "1"], variable=self.var_force_val, width=100)
         cmb_force_val.grid(row=2, column=3, sticky="w", pady=2)
-        self.var_force_val.trace_add("write", self._fire_live)
-        self._bind_widget_preview_commit(cmb_force_val)
 
         pulses = self._pulse_values(
             getattr(self.rail, "pulse_hi", DEFAULT_PULSE),
@@ -1268,24 +1198,18 @@ class RailEditorFrame(ctk.CTkFrame):
         self.var_pulse_hi = ctk.StringVar(value=getattr(self.rail, "pulse_hi", DEFAULT_PULSE) or DEFAULT_PULSE)
         cmb_pulse_hi = ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_hi, width=130)
         cmb_pulse_hi.grid(row=3, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self.var_pulse_hi.trace_add("write", self._fire_live)
-        self._bind_widget_preview_commit(cmb_pulse_hi)
 
         ctk.CTkLabel(grid_t, text="Timing Lo:", font=FONT_BODY).grid(
             row=3, column=2, sticky="w", padx=(0, S_SM), pady=2)
         self.var_pulse_lo = ctk.StringVar(value=getattr(self.rail, "pulse_lo", DEFAULT_PULSE) or DEFAULT_PULSE)
         cmb_pulse_lo = ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_lo, width=130)
         cmb_pulse_lo.grid(row=3, column=3, sticky="w", pady=2)
-        self.var_pulse_lo.trace_add("write", self._fire_live)
-        self._bind_widget_preview_commit(cmb_pulse_lo)
 
         ctk.CTkLabel(grid_t, text="Timing Force:", font=FONT_BODY).grid(
             row=4, column=0, sticky="w", padx=(0, S_SM), pady=2)
         self.var_pulse_force = ctk.StringVar(value=getattr(self.rail, "pulse_force", DEFAULT_PULSE) or DEFAULT_PULSE)
         cmb_pulse_force = ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_force, width=130)
         cmb_pulse_force.grid(row=4, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self.var_pulse_force.trace_add("write", self._fire_live)
-        self._bind_widget_preview_commit(cmb_pulse_force)
 
         # --- Conditions (output only) ---
         self.cond_wrap, cond_body = self._make_section("Conditions")
@@ -1325,7 +1249,6 @@ class RailEditorFrame(ctk.CTkFrame):
                 initial_inv_flat=init_inv_flat,
                 initial_use_flat=init_use_flat,
                 initial_group_inv=init_group_inv,
-                on_change=self._fire_live,
                 get_self_name=lambda: self.rail.name,
             )
             sec.pack(fill="both", expand=True, padx=S_SM, pady=S_SM)
@@ -1351,29 +1274,24 @@ class RailEditorFrame(ctk.CTkFrame):
         self.entry_deb_cycle_hi = ctk.CTkEntry(grid_d, width=100)
         self.entry_deb_cycle_hi.insert(0, str(getattr(self.rail, "deb_cycle_hi", 2)))
         self.entry_deb_cycle_hi.grid(row=0, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self._bind_entry_preview_commit(self.entry_deb_cycle_hi)
 
         ctk.CTkLabel(grid_d, text="CYCLE_LO:", font=FONT_BODY).grid(
             row=0, column=2, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_deb_cycle_lo = ctk.CTkEntry(grid_d, width=100)
         self.entry_deb_cycle_lo.insert(0, str(getattr(self.rail, "deb_cycle_lo", 2)))
         self.entry_deb_cycle_lo.grid(row=0, column=3, sticky="w", pady=2)
-        self._bind_entry_preview_commit(self.entry_deb_cycle_lo)
 
         ctk.CTkLabel(grid_d, text="CYCLE_SYNC:", font=FONT_BODY).grid(
             row=1, column=0, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_deb_cycle_sync = ctk.CTkEntry(grid_d, width=100)
         self.entry_deb_cycle_sync.insert(0, str(getattr(self.rail, "deb_cycle_sync", 2)))
         self.entry_deb_cycle_sync.grid(row=1, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self._bind_entry_preview_commit(self.entry_deb_cycle_sync)
 
         ctk.CTkLabel(grid_d, text="INIT:", font=FONT_BODY).grid(
             row=1, column=2, sticky="w", padx=(0, S_SM), pady=2)
         self.var_deb_init = ctk.StringVar(value="1" if getattr(self.rail, "deb_init", 0) == 1 else "0")
         cmb_deb_init = ctk.CTkComboBox(grid_d, values=["0", "1"], variable=self.var_deb_init, width=100)
         cmb_deb_init.grid(row=1, column=3, sticky="w", pady=2)
-        self.var_deb_init.trace_add("write", self._fire_live)
-        self._bind_widget_preview_commit(cmb_deb_init)
 
         ctk.CTkLabel(grid_d, text="Timing Deb:", font=FONT_BODY).grid(
             row=2, column=0, sticky="w", padx=(0, S_SM), pady=2)
@@ -1381,8 +1299,6 @@ class RailEditorFrame(ctk.CTkFrame):
         self.var_deb_pulse = ctk.StringVar(value=getattr(self.rail, "deb_pulse", DEFAULT_PULSE) or DEFAULT_PULSE)
         cmb_deb_pulse = ctk.CTkComboBox(grid_d, values=deb_pulses, variable=self.var_deb_pulse, width=130)
         cmb_deb_pulse.grid(row=2, column=1, sticky="w", padx=(0, S_LG), pady=2)
-        self.var_deb_pulse.trace_add("write", self._fire_live)
-        self._bind_widget_preview_commit(cmb_deb_pulse)
 
         # --- WaveDrom Hi/Lo (input only) ---
         self.wavedrom_wrap, wavedrom_body = self._make_section("WaveDrom Hi/Lo")
@@ -1392,9 +1308,14 @@ class RailEditorFrame(ctk.CTkFrame):
             get_dep_options=self._dep_options,
             is_pseqcell_for=self._is_pseqcell_for,
             get_self_name=lambda: self.rail.name,
-            on_change=self._fire_live,
         )
         self.input_wave_frame.pack(fill="x", padx=S_SM, pady=S_SM)
+
+        apply_row = ctk.CTkFrame(self, fg_color="transparent")
+        apply_row.pack(fill="x", padx=S_SM, pady=(0, S_SM))
+        ctk.CTkButton(
+            apply_row, text="Apply", width=88, command=self._on_apply_clicked,
+        ).pack(side="right")
 
         self._on_type_toggle(initial=True)
 
@@ -1418,10 +1339,9 @@ class RailEditorFrame(ctk.CTkFrame):
         widget.bind("<FocusIn>", _on_focus_in, add="+")
 
     # ---- callbacks ----
-    def _on_name_commit(self, _event=None):
-        new_name = self.entry_name.get().strip()
-        if new_name and new_name != self.rail.name:
-            self.on_rename(self.rail.name, new_name)
+    def _on_apply_clicked(self):
+        if self.on_apply:
+            self.on_apply()
 
     def _on_type_seg_selected(self, label: str):
         rev = {v: k for k, v in SEQ_TYPE_LABELS.items()}
@@ -1443,18 +1363,12 @@ class RailEditorFrame(ctk.CTkFrame):
             self.wavedrom_wrap.pack_forget()
             self.timing_wrap.pack(fill="x", pady=(0, S_SM))
             self.cond_wrap.pack(fill="x", pady=(0, S_SM))
-        if not initial and self.var_type.get() != self._old_type:
-            old = self._old_type
-            self._old_type = self.var_type.get()
-            self.on_type_change(self.rail.name, old, self.var_type.get())
 
     def _on_deb_toggle(self, initial: bool = False):
         if self.var_deb_enable.get():
             self.deb_params.pack(fill="x")
         else:
             self.deb_params.pack_forget()
-        if not initial:
-            self._fire_live()
 
     # ---- collect ----
     def get_rail(self) -> PowerRail:
@@ -1552,9 +1466,7 @@ class CollapsibleRailFrame(ctk.CTkFrame):
     def __init__(self, master, rail: PowerRail,
                  get_all_rails: Callable[[], list[PowerRail]],
                  get_pulses: Callable[[], list[str]],
-                 on_rename: Callable[[str, str], None],
-                 on_type_change: Callable[[str, str, str], None],
-                 on_change: Optional[Callable[[], None]] = None,
+                 on_apply: Optional[Callable[[], None]] = None,
                  get_input_wave_spec: Optional[Callable[[str], InputWaveSpec]] = None,
                  expanded: bool = False, **kwargs):
         super().__init__(master, **kwargs)
@@ -1562,9 +1474,7 @@ class CollapsibleRailFrame(ctk.CTkFrame):
         self._expanded = expanded
         self._get_all_rails = get_all_rails
         self._get_pulses = get_pulses
-        self._on_rename = on_rename
-        self._on_type_change = on_type_change
-        self._on_change = on_change
+        self._on_apply = on_apply
         self._get_input_wave_spec = get_input_wave_spec
         self._initial_input_wave_spec = (
             get_input_wave_spec(rail.name) if get_input_wave_spec else InputWaveSpec()
@@ -1628,9 +1538,7 @@ class CollapsibleRailFrame(ctk.CTkFrame):
             self._body, self.rail,
             get_all_rails=self._get_all_rails,
             get_pulses=self._get_pulses,
-            on_rename=self._on_rename,
-            on_type_change=self._on_type_change,
-            on_change=self._on_change,
+            on_apply=self._on_apply,
             initial_input_wave_spec=self._initial_input_wave_spec,
         )
         self.editor.pack(fill="x", padx=S_SM, pady=(S_SM, 0))
@@ -2657,7 +2565,6 @@ class PowerSeqGUI(ctk.CTk):
         self._undo_stack: list[str] = []
         self._redo_stack: list[str] = []
         self._preview_after_id: Optional[str] = None
-        self._editor_change_after_id: Optional[str] = None
         self._current_path: Optional[str] = None
         self._gui_settings = GuiSettings()
         self._recent = RecentFiles()
@@ -3014,31 +2921,48 @@ class PowerSeqGUI(ctk.CTk):
         self._undo_btn.configure(state="normal" if self._undo_stack else "disabled")
         self._redo_btn.configure(state="normal" if self._redo_stack else "disabled")
 
-    # ---- live update from rail editor (cond / cycle / pulse / debounce) ----
-    def _on_editor_change(self, preview: bool = False):
-        """RailEditor 欄位變動：debounced 更新 header chip / validation。
-        preview=True 時（Enter 或焦點離開）才更新右側 preview。"""
-        if not self._dirty:
-            self._mark_dirty()
-        if preview:
-            self._collect_config()
-        if self._editor_change_after_id is not None:
-            try:
-                self.after_cancel(self._editor_change_after_id)
-            except Exception:
-                pass
-        self._editor_change_after_id = self.after(250, self._apply_editor_change)
-        if preview:
-            self._schedule_preview()
+    # ---- per-node Apply ----
+    def _apply_rail(self, idx: int):
+        """將單一 Node 編輯器內容寫入 config；僅此時更新 header chip 與 Preview。"""
+        if idx < 0 or idx >= len(self.collapsible_frames):
+            return
+        cf = self.collapsible_frames[idx]
+        if cf.editor is None:
+            return
 
-    def _apply_editor_change(self):
-        self._editor_change_after_id = None
-        cfg = self._collect_config()
-        for i, cf in enumerate(self.collapsible_frames):
-            if i < len(cfg.rails):
-                cf.rail = cfg.rails[i]
-            cf.update_summary()
+        old_name = cf.rail.name
+        old_type = cf.rail.seq_type
+        new_name = cf.editor.entry_name.get().strip()
+        if not new_name:
+            messagebox.showwarning("Notice", "Name cannot be empty")
+            return
+        if new_name != old_name and any(
+            r.name == new_name for i, r in enumerate(self.config_obj.rails) if i != idx
+        ):
+            messagebox.showerror("Error", f"Name '{new_name}' already exists")
+            return
+
+        self._push_undo()
+        new_rail = cf.get_rail()
+        if new_name != old_name:
+            new_rail.name = old_name
+            self.config_obj.rails[idx] = new_rail
+            if not self.config_obj.rename_rail(old_name, new_name):
+                return
+        else:
+            self.config_obj.rails[idx] = new_rail
+
+        cf.rail = self.config_obj.rails[idx]
+        self._mark_dirty()
+
+        if old_type != cf.rail.seq_type or new_name != old_name:
+            self._refresh_all()
+            return
+
+        cf.editor.rail = cf.rail
+        cf.update_summary()
         self._update_validation()
+        self._schedule_preview()
 
     def _wavedrom_globals_from_toolbar(self) -> tuple[int, int]:
         try:
@@ -3069,7 +2993,7 @@ class PowerSeqGUI(ctk.CTk):
 
     # ---- collect ----
     def _collect_config(self) -> PowerSeqConfig:
-        rails = [cf.get_rail() for cf in self.collapsible_frames]
+        rails = [cf.rail for cf in self.collapsible_frames]
         self.config_obj.rails = rails
         steps, hscale = self._wavedrom_globals_from_toolbar()
         has_input = any(r.seq_type == "input" for r in rails)
@@ -3111,15 +3035,13 @@ class PowerSeqGUI(ctk.CTk):
         for w in self.editor_scroll.winfo_children():
             w.destroy()
         self.collapsible_frames = []
-        for r in self.config_obj.rails:
+        for idx, r in enumerate(self.config_obj.rails):
             is_expanded = r.name in prev_expanded
             cf = CollapsibleRailFrame(
                 self.editor_scroll, r,
                 get_all_rails=self._get_all_rails,
                 get_pulses=self._get_pulses,
-                on_rename=self._handle_rename,
-                on_type_change=self._handle_type_change,
-                on_change=self._on_editor_change,
+                on_apply=lambda i=idx: self._apply_rail(i),
                 get_input_wave_spec=self._input_wave_spec_for,
                 expanded=is_expanded,
             )
@@ -3246,49 +3168,6 @@ class PowerSeqGUI(ctk.CTk):
                 self.config_obj.rails[i].seq_type = new_type
         self._mark_dirty()
         self._refresh_all()
-
-    def _handle_rename(self, old_name: str, new_name: str):
-        new_name = new_name.strip()
-        if not new_name:
-            messagebox.showwarning("Notice", "Name cannot be empty")
-            self._refresh_all()
-            return
-        if new_name != old_name and any(
-            r.name == new_name for r in self.config_obj.rails if r.name != old_name
-        ):
-            messagebox.showerror("Error", f"Name '{new_name}' already exists")
-            self._refresh_all()
-            return
-        target_idx = next(
-            (i for i, r in enumerate(self.config_obj.rails) if r.name == old_name), None
-        )
-        if target_idx is None:
-            return
-        self._push_undo()
-        # 只收集這張卡片的最新 widget 狀態（其它卡片的未提交編輯保留在 widget 中
-        # 由下次 commit 點再讀取，這與 v1.1 行為一致）。
-        new_rail = self.collapsible_frames[target_idx].get_rail()
-        # widget 上的 entry_name 已是 new_name；暫時還原 old_name 讓 rename_rail
-        # 能透過 old_name 找到目標並做 dep 替換。
-        new_rail.name = old_name
-        self.config_obj.rails[target_idx] = new_rail
-        if self.config_obj.rename_rail(old_name, new_name):
-            self._mark_dirty()
-            self.after(50, self._refresh_all)
-
-    def _handle_type_change(self, rail_name: str, old_type: str, new_type: str):
-        if old_type == new_type:
-            return
-        target_idx = next(
-            (i for i, r in enumerate(self.config_obj.rails) if r.name == rail_name), None
-        )
-        if target_idx is None:
-            return
-        self._push_undo()
-        # 只收集這張卡片
-        self.config_obj.rails[target_idx] = self.collapsible_frames[target_idx].get_rail()
-        self._mark_dirty()
-        self.after(50, self._refresh_all)
 
     # ---- pulses ----
     def _on_pulses_changed(self, new_pulses: list[str]):
