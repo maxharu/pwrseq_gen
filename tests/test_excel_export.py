@@ -80,6 +80,21 @@ class TestExportRoundtrip:
         finally:
             os.unlink(out)
 
+    def test_export_preserves_nodes_row3_multiline_hints(self):
+        cfg = _load_demo_config()
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            out = f.name
+        try:
+            export_powerseq_to_excel(cfg, out)
+            from openpyxl import load_workbook
+
+            ws = load_workbook(out)["Nodes"]
+            assert "\n" in str(ws.cell(3, 1).value)
+            assert "\n" in str(ws.cell(3, 3).value)
+            assert ws.cell(3, 1).alignment.wrap_text
+        finally:
+            os.unlink(out)
+
     def test_export_xlsm_is_valid_zip(self):
         cfg = _load_demo_config()
         with tempfile.NamedTemporaryFile(suffix=".xlsm", delete=False) as f:
