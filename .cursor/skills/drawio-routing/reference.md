@@ -4,10 +4,11 @@
 
 | 常數 | 值 | 用途 |
 |------|-----|------|
-| `FB_Q_RIGHT` | `GRID` (40) | Cell Q ①右移 |
+| `FB_Q_RIGHT` | `GRID` (40) | Cell Q ①右移；~Q 無 Q FB 時亦用此值 |
 | `FB_Q_UP` | `GRID + 20` (60) | Q／gate ②上移 |
-| `FB_NQ_RIGHT` | `2 * GRID` (80) | Cell ~Q ①右移 |
-| `FB_NQ_UP` | `3 * GRID + 20` (140) | ~Q ②上移（> Q 60pt） |
+| `FB_NQ_RIGHT` | `2 * GRID` (80) | ~Q ①（**同 Cell 有 Q 回授**） |
+| `FB_NQ_UP` | `3 * GRID + 20` (140) | ~Q ②（**同 Cell 有 Q 回授**） |
+| `FB_NQ_UP_NO_Q` | 100 | ~Q ②（**同 Cell 無 Q 回授**） |
 | `STROKE_FEEDBACK` | `#2563eb` | 回授邊預設藍 |
 
 參考：`src/reference/FB_Routing.xml`、`src/reference/PSEQCELL.xml`（RTL `PSEQCELL.v`）。
@@ -32,8 +33,11 @@
 ### 五段座標（實作）
 
 ```
-p1 = (p1x, ey)           # Q: p1x=ex+40; ~Q: ex+80; gate: stub_x
-p2 = (p1x, ey - up)      # ② 向上；Q/~Q 固定
+p1 = (p1x, ey)           # Q: ex+40
+                         # ~Q 有 Q FB: ex+80; ~Q 無 Q FB: ex+40
+                         # gate: stub_x
+p2 = (p1x, ey - up)      # ② 向上
+                         # ~Q: up=140（有 Q FB）或 100（無 Q FB）
                          # AND→AND (src∈and_rev): _first_clear_up_y → source_and_row
                          # OR→OR (src∈or_rev): 同上 → source_or_row
                          # OR→AND 等跨層 gate FB: 固定 ey - FB_Q_UP
@@ -41,6 +45,8 @@ p3 = (p3x, p2y)          # p3x = _feedback_channel_x(layer, slot[(src_id,layer)]
 p4 = (p3x, ty)
 p5 = (entry_x, ty)
 ```
+
+**~Q profile 分支（`_apply_feedback_routing`）：** 預掃 `feedback_auto_edge_ids` 中 source 為 Q 的 `src_id` → `q_ids_with_feedback`；對 `profile=="nq"` 查 `nq_rev[src_id]` 同 rail 的 Q 是否在集合內。
 
 `_apply_feedback_routing` 內 `used_fb_rows: list[(y, x0, x1)]` 記錄已佔橫列，供後續 `_first_clear_up_y` 避開同 x 區間重疊。
 
@@ -121,7 +127,9 @@ Sets: `in_label_id`, `input_not_src_ids` → `input_auto_src_ids`。
 | Test | Asserts |
 |------|---------|
 | `test_cell_q_feedback_second_segment_always_up` | Q ② = 60pt up |
-| `test_cell_nq_feedback_second_segment_up_140pt` | ~Q ② = 140pt up |
+| `test_cell_nq_feedback_second_segment_up_140pt` | ~Q 有 Q FB：② = 140pt（RSMRST_N） |
+| `test_cell_nq_feedback_no_q_uses_shorter_profile` | ~Q 無 Q FB：①40 ②100（PCH_PWROK） |
+| `TestPchPwrokNqFeedbackRouting` | demo PCH_PWROK ~Q 短路徑 |
 | `test_same_source_fb_shares_one_channel_x_per_layer` | 同 source 同層單一 `p3x` |
 | `test_hi_use_upstream_and_exits_from_gate_right` | `use=hi` + 上游 AND → `exitX=1` |
 | `test_or_to_or_feedback_uses_five_segment_routing_left_of_or_column` | OR→OR 動態 ② |
