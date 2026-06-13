@@ -27,6 +27,10 @@ except ImportError:
     sys.exit(1)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SRC = os.path.join(ROOT, "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+from excel_template_layout import apply_nodes_sheet_header_rows, node_sheet_headers
 OUT_PATH = os.path.join(ROOT, "templates", "powerseq_nodes_template.xlsm")
 TMP_XLSX = os.path.join(ROOT, "templates", "_powerseq_nodes_template_build.xlsx")
 
@@ -144,22 +148,7 @@ INSTRUCTIONS = [
 
 
 def _node_headers():
-    return [
-        ("name", "Name", "Unique; no duplicates"),
-        ("type", "Type", "Input or Output (dropdown)"),
-        ("cycle_hi", "CYCLE_HI", "Output: timing Hi; Input: DEB CYCLE_HI"),
-        ("cycle_lo", "CYCLE_LO", "Output: timing Lo; Input: DEB CYCLE_LO"),
-        ("cycle_force", "CYCLE_FORCE", "Output only"),
-        ("init", "INIT", "Output: INIT; Input: DEB INIT (dropdown 0/1)"),
-        ("force_val", "FORCE Value", "FORCE output 0/1 (dropdown); Output only"),
-        ("pulse_hi", "Pulse_Hi", "Pulse dropdown"),
-        ("pulse_lo", "Pulse_Lo", "Pulse dropdown"),
-        (
-            "pulse_timing",
-            "Pulse_Force / Pulse_Deb",
-            "Output → Pulse_Force; Input → Pulse_Deb",
-        ),
-    ]
+    return node_sheet_headers()
 
 
 def _cond_headers():
@@ -246,6 +235,15 @@ def _style_header_row(ws, row: int, ncol: int) -> None:
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
 
+def _cell_text_width(val) -> int:
+    if val is None:
+        return 0
+    text = str(val)
+    if "\n" in text:
+        return max(len(line) for line in text.split("\n"))
+    return len(text)
+
+
 def _autosize_columns(ws, max_col: int, min_width: int = 9, max_width: int = 28) -> None:
     for col in range(1, max_col + 1):
         letter = get_column_letter(col)
@@ -253,7 +251,7 @@ def _autosize_columns(ws, max_col: int, min_width: int = 9, max_width: int = 28)
         for row in ws.iter_rows(min_col=col, max_col=col):
             for cell in row:
                 if cell.value is not None:
-                    best = max(best, min(len(str(cell.value)) + 2, max_width))
+                    best = max(best, min(_cell_text_width(cell.value) + 2, max_width))
         ws.column_dimensions[letter].width = best
 
 
@@ -377,14 +375,7 @@ def _write_config_sheet(ws) -> str:
 def _write_nodes_sheet(wb: Workbook) -> None:
     ws = wb.create_sheet(SHEET_NODES)
     headers = _node_headers()
-    for c, (key, label, hint) in enumerate(headers, start=1):
-        ws.cell(row=1, column=c, value=key)
-        ws.cell(row=2, column=c, value=label)
-        ws.cell(row=3, column=c, value=hint)
-    _style_header_row(ws, 1, len(headers))
-    for c in range(1, len(headers) + 1):
-        ws.cell(row=2, column=c).font = Font(bold=True)
-        ws.cell(row=3, column=c).alignment = Alignment(wrap_text=True, vertical="top")
+    apply_nodes_sheet_header_rows(ws)
 
     for i, row_data in enumerate(NODE_ROWS):
         fill = row_data[-1]
@@ -401,7 +392,6 @@ def _write_nodes_sheet(wb: Workbook) -> None:
         )
     )
     ws.freeze_panes = f"A{DATA_START_ROW}"
-    _autosize_columns(ws, len(headers))
 
 
 def _write_cond_sheet(wb: Workbook) -> None:

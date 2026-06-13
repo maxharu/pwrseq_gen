@@ -18,6 +18,7 @@ except ImportError as e:
     raise ImportError("Excel export requires openpyxl: pip install openpyxl") from e
 
 from config_models import DEFAULT_PULSE, PowerRail, PowerSeqConfig, normalize_pulse_name
+from excel_template_layout import apply_nodes_sheet_header_rows
 from excel_import import (
     COND_META_COLS,
     COND_SIGNAL_MAX_COLS,
@@ -174,6 +175,7 @@ def _write_config(ws, config: PowerSeqConfig, scenario: WaveDromScenario) -> Non
 
 
 def _write_nodes(ws, rails: list[PowerRail]) -> None:
+    apply_nodes_sheet_header_rows(ws)
     _clear_data_area(ws, 10)
     for i, rail in enumerate(rails):
         r = DATA_START_ROW + i
