@@ -734,3 +734,53 @@ class TestLoOnlyAndPlacement:
         geo = lo_edges[0].find("mxGeometry")
         pts = geo.find("Array") if geo is not None else None
         assert pts is None, f"{rail} lo AND→L_Deb should be horizontal (no stub waypoints)"
+
+
+class TestPchPwrokNqFeedbackRouting:
+    """PCH_PWROK ~Q→PVCCDD2 L_Deb：同 Cell 無 Q 回授，走 ①40pt ②100pt profile。"""
+
+    @pytest.fixture
+    def demo_root(self):
+        with open(DEMO_JSON, encoding="utf-8") as f:
+            cfg = PowerSeqConfig.from_dict(json.load(f))
+        return ET.fromstring(generate_drawio(cfg))
+
+    def test_pch_pwrok_nq_no_q_fb_uses_shorter_profile(self, demo_root):
+        root = demo_root
+        nq_id = None
+        q_id = None
+        name_y = _output_name_y(root, "PCH_PWROK")
+        for c in root.iter("mxCell"):
+            if c.get("vertex") != "1":
+                continue
+            val = (c.get("value") or "").strip()
+            g = c.find("mxGeometry")
+            if g is None:
+                continue
+            if val == "~Q" and abs(float(g.get("y", 0)) - name_y) < 80:
+                nq_id = c.get("id")
+            elif val == "Q" and abs(float(g.get("y", 0)) - name_y) < 80:
+                q_id = c.get("id")
+        assert nq_id and q_id
+
+        q_has_fb = any(
+            c.get("edge") == "1"
+            and c.get("source") == q_id
+            and c.find("mxGeometry") is not None
+            and c.find("mxGeometry").find("Array") is not None
+            for c in root.iter("mxCell")
+        )
+        assert not q_has_fb, "PCH_PWROK 應無 Q 回授"
+
+        nq_edges = [
+            c
+            for c in root.iter("mxCell")
+            if c.get("edge") == "1" and c.get("source") == nq_id
+        ]
+        assert len(nq_edges) == 1
+        pts = nq_edges[0].find("mxGeometry").find("Array").findall("mxPoint")
+        assert len(pts) >= 2
+        p1x, p1y = float(pts[0].get("x")), float(pts[0].get("y"))
+        p2x, p2y = float(pts[1].get("x")), float(pts[1].get("y"))
+        assert abs((p1y - p2y) - 100.0) < 0.5
+        assert abs(p1x - p2x) < 0.5

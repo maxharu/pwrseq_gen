@@ -49,14 +49,15 @@ CELL_NQ_W = 20
 CELL_NQ_H = 20
 CELL_NQ_X = 60
 CELL_NQ_Y = CELL_L_DEB_Y
-# 版面規則：欄位水平間距 GAP（40pt）；列距／NOT 等仍用 ROW_GAP（80pt）
+# 版面規則：欄位水平間距 GAP（40pt）；Cell 列間基本間距 ROW_GAP（40pt）
 GRID = 40
 FB_Q_RIGHT = GRID
 FB_Q_UP = GRID + 20
-FB_NQ_RIGHT = 2 * GRID   # ~Q 回授：先右 2×40pt
-FB_NQ_UP = 3 * GRID + 20  # 再向上 3×40pt + 20pt（140pt，避開 Q 的 60pt 上拐）
+FB_NQ_RIGHT = 2 * GRID   # ~Q 回授（同 Cell 亦有 Q 回授）：先右 2×40pt
+FB_NQ_UP = 3 * GRID + 20  # ② 上移 140pt（高於 Q 的 60pt，走廊不重疊）
+FB_NQ_UP_NO_Q = 100       # ~Q 回授（同 Cell 無 Q 回授）：② 上移 100pt
 GAP = 40
-ROW_GAP = 80
+ROW_GAP = GRID  # Cell 列間基本 Y 間距（40pt）
 
 def _align40(v: int | float) -> int:
     """將座標對齊到 40 的倍數。"""
@@ -74,11 +75,11 @@ INPUT_COL_X = _align40(GAP * 2)  # 預設列參考；實際 x 由右→左動態
 INPUT_LABEL_W = _align40(80)
 INPUT_LABEL_H = 20
 INPUT_SLOT_W = GRID              # 每個 input 佔 40pt 欄寬
-INPUT_VERTICAL_DY = ROW_GAP      # 每個 input 垂直間距（用於反相 output 等）
+INPUT_VERTICAL_DY = 80           # 每個 input 垂直間距（用於反相 output 等）
 GATE_COL_X = _align40(GAP * 5)   # 200：OR 與 AND 同一欄（參考）
 CELL_START_X = _align40(GAP * 8)  # 320（參考）
 OUTPUT_NAME_GAP = _align40(120)       # Cell 右緣 → 輸出名稱欄淨空（pt）
-OUTPUT_NAME_NOT_EXTRA = ROW_GAP       # 任一 output 用 O 側 NOT 時，全列再 +80pt
+OUTPUT_NAME_NOT_EXTRA = 80            # 任一 output 用 O 側 NOT 時，全列再 +80pt
 OUTPUT_NAME_OFFSET_X = CELL_GROUP_W + OUTPUT_NAME_GAP  # 預設參考（無 output NOT）
 # 輸出名稱 y 與 Q 垂直置中對齊，使 Q→名稱為水平直線
 OUTPUT_NAME_OFFSET_Y = CELL_Q_Y + CELL_Q_H // 2 - INPUT_LABEL_H // 2
@@ -100,7 +101,7 @@ OR_GATE_H = 40
 NOT_GATE_W = 40
 NOT_GATE_H = 20
 # output NOT：O 矩形右 80pt、下 40pt（未旋轉）
-NOT_OFFSET_X = ROW_GAP  # 右 80pt
+NOT_OFFSET_X = 80  # output NOT 右移 80pt
 NOT_OFFSET_Y = GRID     # 下 40pt
 NOT_TURN_X = GRID    # input 走線：label 錨點 + 40pt 垂直 bus（先下後右）
 # input NOT（皆 rotation=90，見 reference/INPUT_NOT.xml）：左 20pt；底邊在最上 Cell 上緣之上 40pt
@@ -262,7 +263,7 @@ _GATE_STYLE_OR = _load_logic_gate_style("OR1.xml")
 _GATE_STYLE_NOR = _load_logic_gate_style("NOR1.xml")
 _load_pseqcell_layout()
 # 由欄位推算的相對偏移（AND 在左、OR 在右，generate_drawio 內動態計算 and_col_x / or_col_x）
-AND_GATE_DY = ROW_GAP           # 多個 AND 垂直間距 80pt
+AND_GATE_DY = 80                # 同 hl 多顆 AND 垂直堆疊（對齊 H/L_Deb 後再 +80pt）
 # OR 閘與該行 Cell 同高，放在左側（不放到 Cell 下方）
 OR_GATE_OFFSET_HI_Y = 0
 OR_GATE_OFFSET_LO_Y = GRID  # 40，若同時有 Hi/Lo 兩個 OR 則垂直錯開 40pt
@@ -819,15 +820,13 @@ def _feedback_y_slack_after_or(
 def _cell_fb_segment3_y_gaps(src_row: int, profile: str) -> list[int]:
     """FB ③ 段 p2y 水平走廊所需 Y 通道 gap（0-based：row j 與 j+1 之間）。
 
-    僅在來源列上方 1～2 格預留；④ 段垂直幹線走 X 通道，不沿 src→tgt 整段加寬。
-    profile: ``q``（FB_Q_UP=60）或 ``nq``（FB_NQ_UP=140，可能需第二格）。
+    僅在來源 Cell 與上一列 Cell 之間（gap src_row-1）預留；④ 段垂直幹線走 X 通道。
+    profile（``q``／``nq``）區分 Q／~Q 走廊，同 gap 可累加。
     """
-    gaps: list[int] = []
+    _ = profile
     if src_row >= 1:
-        gaps.append(src_row - 1)
-    if profile == "nq" and src_row >= 2:
-        gaps.append(src_row - 2)
-    return gaps
+        return [src_row - 1]
+    return []
 
 
 def _feedback_y_slack_between_cell_rows(
@@ -837,9 +836,9 @@ def _feedback_y_slack_between_cell_rows(
     valid: set[str],
 ) -> dict[int, int]:
     """
-    Cell 層：相鄰兩列間隙 +40pt（同一 gap 可累加）。
+    Cell 層：來源 Cell 與上一列 Cell 之間的 gap +40pt（同一 gap 可累加）。
     觸發：跨列 Cell Q／~Q 回授（use=self、來源為 output）— 含 ~Q→Deb 與 Q→AND。
-    僅在 FB ③ 段 p2y 水平走廊（來源列上方 1～2 gap）預留 Y 通道。
+    僅在 FB ③ 段 p2y 水平走廊、來源列正上方一格預留 Y 通道。
     同一來源 Q 與 ~Q 各佔一條走廊（p2y 不同，不共用）；同 profile 多目標扇出去重。
     gap j 表示 row j 與 row j+1 之間（0-based）。
     """
@@ -904,7 +903,10 @@ def _chain_and_top_y(
         prev_row, _ = and_index_per_key[catalog[g - 2]]
         extra = feedback_y_slack.get(g - 1, 0)
         chain = tops[g - 1] + AND_GATE_DY + extra
-        if row_j == prev_row and nominal >= tops[g - 1] + AND_GATE_H:
+        if row_j != prev_row:
+            # 新列：錨定 H_Deb/L_Deb 對齊 offset，不受前列 global chain 下推
+            tops[g] = nominal
+        elif nominal >= tops[g - 1] + AND_GATE_H:
             tops[g] = nominal
         else:
             tops[g] = max(nominal, chain)
@@ -2910,6 +2912,22 @@ def _apply_feedback_routing(
     assigned_cell_vx: set[int] = set()
     source_cell_x: dict[int, float] = {}
 
+    q_rev = {v: k for k, v in q_box_id_map.items()}
+    nq_rev = {v: k for k, v in nq_box_id_map.items()}
+    q_ids_with_feedback: set[int] = set()
+    for _c in root.iter("mxCell"):
+        if _c.get("edge") != "1":
+            continue
+        _eid = _c.get("id")
+        if _eid is None or _eid not in feedback_auto_edge_ids:
+            continue
+        try:
+            _sid = int(_c.get("source") or "")
+        except ValueError:
+            continue
+        if _sid in q_rev:
+            q_ids_with_feedback.add(_sid)
+
     for cell in root.iter("mxCell"):
         if cell.get("edge") != "1":
             continue
@@ -2940,8 +2958,14 @@ def _apply_feedback_routing(
             src_id, q_box_id_map=q_box_id_map, nq_box_id_map=nq_box_id_map
         )
         if profile == "nq":
-            right_delta = FB_NQ_RIGHT
-            up_delta = FB_NQ_UP
+            _rail = nq_rev.get(src_id)
+            _q_id = q_box_id_map.get(_rail) if _rail else None
+            if _q_id is not None and _q_id in q_ids_with_feedback:
+                right_delta = FB_NQ_RIGHT
+                up_delta = FB_NQ_UP
+            else:
+                right_delta = FB_Q_RIGHT
+                up_delta = FB_NQ_UP_NO_Q
         elif profile == "q":
             right_delta = FB_Q_RIGHT
             up_delta = FB_Q_UP
@@ -3291,16 +3315,23 @@ def _wire_input_to_gate(geo: ET.Element, label_xy: tuple[int, int], gate_y: int)
 
 
 def _row_height_for_output(r: PowerRail) -> int:
-    """單一 output 左側邏輯（AND/OR）所需垂直高度，用於動態行高。"""
+    """單一 output 列高：AND/OR 輸出與 H_Deb/L_Deb 同水平時落在 Cell 框內，不另加 Y。"""
     hi_groups = r.get_hi_groups()
     lo_groups = r.get_lo_groups()
-    n_and_hi = sum(1 for g in hi_groups if len(g) >= 2)
-    n_and_lo = sum(1 for g in lo_groups if len(g) >= 2)
-    n_or_hi = 1 if len(hi_groups) >= 2 else 0
-    n_or_lo = 1 if len(lo_groups) >= 2 else 0
-    and_stack = (n_and_hi + n_and_lo) * AND_GATE_DY
-    or_span = max(OR_GATE_OFFSET_HI_Y + OR_GATE_H, OR_GATE_OFFSET_LO_Y + OR_GATE_H) if (n_or_hi or n_or_lo) else 0
-    return max(CELL_GROUP_H, and_stack + or_span + 16)
+    max_bottom = CELL_GROUP_H
+
+    for hl, groups in [("hi", hi_groups), ("lo", lo_groups)]:
+        base = OR_GATE_OFFSET_HI_Y if hl == "hi" else OR_GATE_OFFSET_LO_Y
+        idx = 0
+        for g in groups:
+            if len(g) >= 2:
+                top = base + idx * AND_GATE_DY
+                max_bottom = max(max_bottom, top + AND_GATE_H)
+                idx += 1
+        if len(groups) >= 2:
+            max_bottom = max(max_bottom, base + OR_GATE_H)
+
+    return _align40(max_bottom)
 
 
 def generate_drawio(
@@ -3360,7 +3391,7 @@ def generate_drawio(
                     elif d in out_names:
                         outputs_with_not.add(d)
 
-    # 規則二：欄間距 GAP（40pt）、列距 ROW_GAP（80pt）。Cell→輸出名稱固定 120pt（有 output NOT 則 200pt）。
+    # 規則二：欄間距 GAP（40pt）、列距 ROW_GAP（40pt）。Cell→輸出名稱固定 120pt（有 output NOT 則 200pt）。
 
     output_to_row: dict[str, int] = {r.name: j for j, r in enumerate(outputs)}
 

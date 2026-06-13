@@ -57,14 +57,18 @@ description: >-
 | **Q** | inner 右側、H_Deb 列 | `use=self`、**非 inv**（例：RSMRST → 下游 hi AND） |
 | **~Q** | inner 右側、L_Deb 列 | **inv** 跨列回授（Pass 2：`not_gate_id` 直接綁 ~Q，不畫實體 output NOT） |
 
-| Profile | ① 右移 | ② 上移 | 常數 |
-|---------|--------|--------|------|
-| **Q** | 40pt | 60pt（40+20） | `FB_Q_RIGHT`, `FB_Q_UP` |
-| **~Q** | 80pt（2×40） | **140pt**（3×40+20；高於 Q 60pt，② 走廊不重疊） | `FB_NQ_RIGHT`, `FB_NQ_UP` |
+| Profile | ① 右移 | ② 上移 | 常數 | 條件 |
+|---------|--------|--------|------|------|
+| **Q** | 40pt | 60pt（40+20） | `FB_Q_RIGHT`, `FB_Q_UP` | — |
+| **~Q（同 Cell 有 Q 回授）** | 80pt（2×40） | **140pt**（3×40+20） | `FB_NQ_RIGHT`, `FB_NQ_UP` | 同 rail 的 Q 腳也在 `feedback_auto_edge_ids` 內 |
+| **~Q（同 Cell 無 Q 回授）** | 40pt | **100pt** | `FB_Q_RIGHT`, `FB_NQ_UP_NO_Q` | 例：demo **PCH_PWROK** ~Q→`PVCCDD2` L_Deb |
+
+判定：`_apply_feedback_routing` 預掃 `q_ids_with_feedback`，再依 `(rail, nq_rev)` 對應同 Cell 的 Q 是否回授。
 
 `FB_Routing.xml` 示意（Q `ey=420`）：
 
-- ② 走廊 `y=360`（`ey−60`）；~Q `ey=460` → ② `y=320`（`ey−140`）
+- ② 走廊 `y=360`（`ey−60`）；~Q **有 Q FB** `ey=460` → ② `y=320`（`ey−140`）
+- ~Q **無 Q FB** → ② `y=ey−100`（較淺，避免切上一列 Cell 下緣）
 - 同 source、同目標層（例：Ln-1 兩個 Dest）：共用 `(500,360)→(320,360)`，④ 再分到不同 `ty`
 
 ### gate profile（AND／NAND／OR／NOR output）
@@ -128,7 +132,9 @@ cell `p3x` 基準算出後可能落在 OR→Cell gap 內**已被佔用**的垂�
 | 測試 | 驗證 |
 |------|------|
 | `test_cell_q_feedback_second_segment_always_up` | Q ② 向上 60pt |
-| `test_cell_nq_feedback_second_segment_up_140pt` | ~Q ② 向上 140pt |
+| `test_cell_nq_feedback_second_segment_up_140pt` | ~Q（同 Cell 有 Q FB，demo RSMRST_N）② 140pt |
+| `test_cell_nq_feedback_no_q_uses_shorter_profile` | ~Q（無 Q FB，demo PCH_PWROK）①40 ②100 |
+| `TestPchPwrokNqFeedbackRouting` | demo PCH_PWROK ~Q 短路徑 |
 | `test_same_source_fb_shares_one_channel_x_per_layer` | 同 source 同層僅 1 個 `p3x` |
 | `test_hi_use_upstream_and_exits_from_gate_right` | `use=hi` 且上游 AND 已存在 → `exitX=1` |
 | `test_or_to_or_feedback_uses_five_segment_routing_left_of_or_column` | OR→OR 五段、② 動態、`p3x` 在 OR 左緣左側 |
@@ -251,6 +257,7 @@ generate_drawio() 主圖 + NOT Pass 1–3
 
 - [ ] 新 FB 邊已加入 `feedback_auto_edge_ids`？
 - [ ] Q／~Q／gate：①② 距離、② **一律向上**？
+- [ ] ~Q：**同 Cell 有 Q FB** → 80／140；**無 Q FB** → 40／100（`FB_NQ_UP_NO_Q`）？
 - [ ] 動態 ② 僅 **AND→AND**（`src∈and_rev`）／**OR→OR**（`src∈or_rev`）；OR→AND 等跨層仍 60pt？
 - [ ] 同 source 同層共用 1 條 `p3x`（`_build_feedback_source_layer_slots`）？
 - [ ] 佈局 `feedback_n`／`fb_cell`／`fb_or` 與走線 slot 容量一致？

@@ -22,6 +22,37 @@ from drawio_export import (
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
+DEMO_JSON = os.path.join(PROJECT_ROOT, "doc", "demo_json.json")
+
+
+def _output_name_y(root: ET.Element, rail: str) -> float:
+    for c in root.iter("mxCell"):
+        if (c.get("value") or "").strip() == rail:
+            g = c.find("mxGeometry")
+            if g is not None:
+                return float(g.get("y", 0))
+    raise AssertionError(f"output name {rail!r} not found")
+
+
+def _q_nq_ids_for_rail(root: ET.Element, rail: str) -> tuple[str, str]:
+    name_y = _output_name_y(root, rail)
+    q_id = nq_id = None
+    for c in root.iter("mxCell"):
+        if c.get("vertex") != "1":
+            continue
+        val = (c.get("value") or "").strip()
+        if val not in ("Q", "~Q"):
+            continue
+        g = c.find("mxGeometry")
+        if g is None:
+            continue
+        if abs(float(g.get("y", 0)) - name_y) < 80:
+            if val == "Q":
+                q_id = c.get("id")
+            else:
+                nq_id = c.get("id")
+    assert q_id and nq_id
+    return q_id, nq_id
 
 
 class TestLoadSampleConfigs:
@@ -284,15 +315,15 @@ class TestFullPipeline:
         assert nq_on_rsmrst is not None
 
         lo_and_id: str | None = None
-        lo_and_y = -1.0
+        lo_and_y = float("inf")
         for cell in root.iter("mxCell"):
             sty = cell.get("style") or ""
             if cell.get("vertex") != "1" or "operation=and" not in sty:
                 continue
             xy = _geom(cell.get("id") or "")
-            if xy is None or abs(xy[1] - pch1_y) >= 120:
+            if xy is None or xy[1] <= pch1_y or xy[1] - pch1_y > 80:
                 continue
-            if xy[1] > pch1_y and xy[1] > lo_and_y:
+            if xy[1] < lo_and_y:
                 lo_and_y = xy[1]
                 lo_and_id = cell.get("id")
         assert lo_and_id is not None
@@ -346,22 +377,31 @@ class TestFullPipeline:
             )
             < 80
         )
-        psu_and_id = next(
-            c.get("id")
-            for c in root.iter("mxCell")
-            if c.get("vertex") == "1"
-            and "operation=and" in (c.get("style") or "")
-            and abs(
-                float(c.find("mxGeometry").get("y", 0))
-                - float(
+        psu_y = float(
+            next(
+                c2.find("mxGeometry").get("y", 0)
+                for c2 in root.iter("mxCell")
+                if (c2.get("value") or "").strip() == "PSU_EN"
+            )
+        )
+        psu_and_id = min(
+            (
+                c.get("id")
+                for c in root.iter("mxCell")
+                if c.get("vertex") == "1"
+                and "operation=and" in (c.get("style") or "")
+                and abs(float(c.find("mxGeometry").get("y", 0)) - psu_y) < 120
+            ),
+            key=lambda aid: abs(
+                float(
                     next(
-                        c2.find("mxGeometry").get("y", 0)
-                        for c2 in root.iter("mxCell")
-                        if (c2.get("value") or "").strip() == "PSU_EN"
+                        c.find("mxGeometry").get("y", 0)
+                        for c in root.iter("mxCell")
+                        if c.get("id") == aid
                     )
                 )
-            )
-            < 120
+                - psu_y
+            ),
         )
         q_to_psu = [
             c
@@ -506,35 +546,58 @@ class TestFullPipeline:
                 )
 
     def test_cell_nq_feedback_second_segment_up_140pt(self):
-        """Cell ~Q 回授：第二段向上 3×40+20 = 140pt（高於 Q 的 60pt，避免重疊）。"""
-        json_path = os.path.join(OUTPUT_DIR, "power.json")
-        if not os.path.exists(json_path):
-            pytest.skip("power.json not found")
-        with open(json_path, encoding="utf-8") as f:
+        """Cell ~Q 回授：同 Cell 亦有 Q 回授時，② 向上 140pt（demo RSMRST_N）。"""
+        with open(DEMO_JSON, encoding="utf-8") as f:
             cfg = PowerSeqConfig.from_dict(json.load(f))
         root = ET.fromstring(generate_drawio(cfg))
-
-        nq_ids = {
-            c.get("id")
+        q_id, nq_id = _q_nq_ids_for_rail(root, "RSMRST_N")
+        q_has_fb = any(
+            c.get("edge") == "1"
+            and c.get("source") == q_id
+            and c.find("mxGeometry") is not None
+            and c.find("mxGeometry").find("Array") is not None
             for c in root.iter("mxCell")
-            if c.get("vertex") == "1" and (c.get("value") or "").strip() == "~Q"
-        }
+        )
+        assert q_has_fb
+
         checked = 0
         for cell in root.iter("mxCell"):
-            if cell.get("edge") != "1" or cell.get("source") not in nq_ids:
+            if cell.get("edge") != "1" or cell.get("source") != nq_id:
                 continue
-            geo = cell.find("mxGeometry")
-            arr = geo.find("Array") if geo is not None else None
+            arr = cell.find("mxGeometry").find("Array")
             if arr is None:
                 continue
             pts = arr.findall("mxPoint")
             if len(pts) < 2:
                 continue
-            p1y = float(pts[0].get("y"))
-            p2y = float(pts[1].get("y"))
-            assert p2y < p1y, f"edge {cell.get('id')}: ~Q FB 第二段應向上"
-            assert abs((p1y - p2y) - 140.0) < 0.5, (
-                f"edge {cell.get('id')}: ~Q FB 向上應為 140pt，得 {p1y - p2y}"
-            )
+            p1y, p2y = float(pts[0].get("y")), float(pts[1].get("y"))
+            assert p2y < p1y
+            assert abs((p1y - p2y) - 140.0) < 0.5
             checked += 1
-        assert checked > 0, "expected ~Q feedback edges with frozen waypoints"
+        assert checked > 0
+
+    def test_cell_nq_feedback_no_q_uses_shorter_profile(self):
+        """Cell ~Q 回授：同 Cell 無 Q 回授時，① 右 40pt、② 上 100pt（demo PCH_PWROK）。"""
+        with open(DEMO_JSON, encoding="utf-8") as f:
+            cfg = PowerSeqConfig.from_dict(json.load(f))
+        root = ET.fromstring(generate_drawio(cfg))
+        q_id, nq_id = _q_nq_ids_for_rail(root, "PCH_PWROK")
+        q_has_fb = any(
+            c.get("edge") == "1"
+            and c.get("source") == q_id
+            and c.find("mxGeometry") is not None
+            and c.find("mxGeometry").find("Array") is not None
+            for c in root.iter("mxCell")
+        )
+        assert not q_has_fb
+
+        nq_edges = [
+            c for c in root.iter("mxCell")
+            if c.get("edge") == "1" and c.get("source") == nq_id
+        ]
+        assert len(nq_edges) == 1
+        pts = nq_edges[0].find("mxGeometry").find("Array").findall("mxPoint")
+        p1x, p1y = float(pts[0].get("x")), float(pts[0].get("y"))
+        p2x, p2y = float(pts[1].get("x")), float(pts[1].get("y"))
+        assert abs((p1y - p2y) - 100.0) < 0.5
+        assert abs(p1x - p2x) < 0.5

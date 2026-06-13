@@ -57,9 +57,9 @@ def test_cell_row_slack_cross_row_fb_to_deb():
     slack = _feedback_y_slack_between_cell_rows(
         outputs, output_to_row, name_to_rail, valid
     )
-    # RSMRST_N row7：q→gap6、nq→gap5+6；Q／~Q 不共用 → gap6 累加 80pt
-    assert slack == {5: GRID, 6: 2 * GRID, 9: GRID, 10: GRID}
-    assert sum(slack.values()) == 5 * GRID
+    # RSMRST_N row7：q+nq 皆在 gap6（僅來源列與上一列之間）；Q／~Q 不共用 → gap6 累加 80pt
+    assert slack == {6: 2 * GRID, 10: GRID}
+    assert sum(slack.values()) == 3 * GRID
 
 
 def test_cell_row_slack_rsmrst_collects_q_and_nq_profiles():

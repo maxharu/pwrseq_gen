@@ -53,22 +53,27 @@ Order matters: **Cell rows fixed first**; AND/OR chains may extend below row box
 | OR catalog | `_build_or_catalog` | global OR #1…m |
 | AND slack | `_feedback_y_slack_after_and` | gap → 40pt (dedup) |
 | OR slack | `_feedback_y_slack_after_or` | gap → 40pt (dedup) |
-| AND chain Y | `_chain_and_top_y` | `and_top_y[g]`（offset 為 pt，非 stack index×DY） |
+| AND chain Y | `_chain_and_top_y` | `and_top_y[g]`；**新列**錨定 nominal（H/L_Deb）；同列可 chain |
 | OR chain Y | `_chain_or_top_y` | `or_top_y[g]`（新列錨定 `row_py+off` 對齊 H/L_Deb；同列 Hi→Lo 同 AND） |
 
 **Cell row spacing formula (normal row):**
 
 ```
-next_y = y + h + ROW_GAP(80) + cell_row_slack[j]
+next_y = y + h + ROW_GAP(40) + cell_row_slack[j]
 ```
 
-- `h` = `_row_height_for_output(r)` (≥ 80pt; grows with local AND/OR stack).
+- `h` = `_row_height_for_output(r)`（≥ 80pt；**僅**當同 hl 多顆 AND 堆疊超出 Cell 下緣時才 > 80）。
+- Hi／Lo 各一顆 AND（offset 0／40，對齊 H_Deb／L_Deb）落在 80pt Cell 框內 → **不**加列高。
 - If row has **output NOT**: next row starts at NOT bottom + `NOT_STACK_GAP`(20), not `ROW_GAP`.
-- **Default Cell–Cell visual gap** (when h=80, no slack): **80pt**.
+- **Default Cell–Cell visual gap**（h=80、無 slack）：**40pt**。
+
+**列高 `_row_height_for_output`：** 取各 AND／OR 下緣最大值；OR 單顆（`len(groups)≥2`）亦落在 Deb 對齊高度內。
+
+**AND 鍊 `_chain_and_top_y`：** **新列**（`row_j ≠ prev_row`）一律錨定 `row_py + nominal offset`（H/L_Deb 對齊），**不受**前列 global chain 下推。同列多顆 AND 仍依 `nominal` vs `chain` 鍊式下移。
 
 **Y slack（§10）：** AND／OR 層：相鄰同層 gap +40pt、**去重**（`_mark_y_gap`）。**Input→AND 不計。**
 
-**Cell row slack（FB ③ 段）：** 跨列 Cell **Q／~Q** 回授（`use=self`、來源 output）— 含 **~Q→Deb** 與 **Q→AND** — 僅在 ③ 段 p2y Y 走廊預留（來源列上方 1 格；~Q 可能 2 格）。**同 Cell 的 Q 與 ~Q 各一條走廊（p2y 不同，同 gap 可累加 +40）**；同 profile 多目標扇出去重。**不**沿 src→tgt 整段加寬（④ 走 X 通道）。
+**Cell row slack（FB ③ 段）：** 跨列 Cell **Q／~Q** 回授（`use=self`、來源 output）— 僅在**來源 Cell 與上一列 Cell 之間**（gap `src_row−1`）預留 +40pt。**同 Cell 的 Q 與 ~Q 各一條走廊**（profile 不同、同 gap 可累加 +40）；同 profile 多目標扇出去重。**不**再往上一格（`src_row−2`）加寬。
 
 **OR／NOR 對齊 H_Deb／L_Deb（與 AND 錨定一致）：**
 
@@ -171,6 +176,10 @@ See [drawio-routing](../drawio-routing/SKILL.md). Summary:
 | OR global chain overrides row_py+off | 新列錨定 nominal；同列 Hi→Lo 同 AND 規則 |
 | Counting Input→AND in Y slack | Explicitly excluded |
 | Moving Cell rows when AND chain grows | `_chain_and_top_y` pushes AND only; Cell stays at `row_py` |
+| Hi+Lo 各一 AND 仍把列高算成 160 | 對齊 Deb 時 `_row_height_for_output` 維持 80pt |
+| 跨列 AND 被 global chain 下推偏離 Deb | 新列 `_chain_and_top_y` 用 nominal，不用 `max(nominal, chain)` |
+| `ROW_GAP` 與 `AND_GATE_DY` 綁死 | `ROW_GAP=40`（列距）；`AND_GATE_DY=80`（同 hl 堆疊） |
+| ~Q slack 預留 `src_row−2` | 僅 gap `src_row−1`（來源列正上方一格） |
 | Fixed 40pt AND↔Cell gap | Dynamic `n+2+fb-exempt` (§8) |
 | `use=hi/lo` 一律 `exitX=0` | 僅 Deb 佔位符左出；logic_out 已存在須 `exitX=1`（AND 右側） |
 
