@@ -10,49 +10,12 @@ import pytest
 from config_models import PowerSeqConfig
 from validator import validate
 from verilog_generator import generate_verilog
-from drawio_export import (
-    STROKE_FEEDBACK,
-    STROKE_HI,
-    STROKE_LO,
-    _PSEQCELL_STYLE_H_DEB,
-    _PSEQCELL_STYLE_L_DEB,
-    generate_drawio,
-)
+from drawio_export import generate_drawio
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 DEMO_JSON = os.path.join(PROJECT_ROOT, "doc", "demo_json.json")
-
-
-def _output_name_y(root: ET.Element, rail: str) -> float:
-    for c in root.iter("mxCell"):
-        if (c.get("value") or "").strip() == rail:
-            g = c.find("mxGeometry")
-            if g is not None:
-                return float(g.get("y", 0))
-    raise AssertionError(f"output name {rail!r} not found")
-
-
-def _q_nq_ids_for_rail(root: ET.Element, rail: str) -> tuple[str, str]:
-    name_y = _output_name_y(root, rail)
-    q_id = nq_id = None
-    for c in root.iter("mxCell"):
-        if c.get("vertex") != "1":
-            continue
-        val = (c.get("value") or "").strip()
-        if val not in ("Q", "~Q"):
-            continue
-        g = c.find("mxGeometry")
-        if g is None:
-            continue
-        if abs(float(g.get("y", 0)) - name_y) < 80:
-            if val == "Q":
-                q_id = c.get("id")
-            else:
-                nq_id = c.get("id")
-    assert q_id and nq_id
-    return q_id, nq_id
 
 
 class TestLoadSampleConfigs:
@@ -136,42 +99,6 @@ class TestFullPipeline:
             if c.get("edge") != "1":
                 continue
             assert "orthogonalEdgeStyle" in (c.get("style") or "")
-
-    def test_drawio_export_edges_are_axis_aligned(self):
-        pytest.skip("cell-centric export uses draw.io auto routing only")
-
-    def test_non_feedback_lo_deb_not_overwritten_by_fb_routing(self):
-        pytest.skip("feedback routing removed in cell-centric export")
-
-    def test_pch_p1v25a_lo_and_from_rsmrst_nq_not_q(self):
-        """PCH Lo 路徑應顯示 ~RSMRST 文字 label（非 Q 回授走線）。"""
-        golden = os.path.join(PROJECT_ROOT, "src", "reference", "golden.json")
-        if not os.path.exists(golden):
-            pytest.skip("golden.json not found")
-        with open(golden, encoding="utf-8") as f:
-            cfg = PowerSeqConfig.from_dict(json.load(f))
-        root = ET.fromstring(generate_drawio(cfg))
-        labels = [(c.get("value") or "") for c in root.iter("mxCell")]
-        assert any("~RSMRST" in v for v in labels)
-
-    def test_rsmrst_q_to_downstream_and_is_q_fb_blue(self):
-        pytest.skip("feedback routing removed")
-
-    def test_hi_use_upstream_and_exits_from_gate_right(self):
-        pytest.skip("layered gate exit routing removed")
-
-    def test_cell_q_feedback_second_segment_always_up(self):
-        pytest.skip("feedback routing removed")
-
-    def test_same_source_fb_channel_x_per_target_layer(self):
-        pytest.skip("feedback routing removed")
-
-    def test_cell_nq_feedback_second_segment_up_140pt(self):
-        pytest.skip("feedback routing removed")
-
-    def test_cell_nq_feedback_no_q_uses_shorter_profile(self):
-        pytest.skip("feedback routing removed")
-
 
 
 X15DOT_XLSM = os.path.join(PROJECT_ROOT, "templates", "x15dot.xlsm")

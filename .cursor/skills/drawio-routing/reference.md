@@ -11,7 +11,7 @@
 | `FB_NQ_UP_NO_Q` | 100 | ~Q ②（**同 Cell 無 Q 回授**） |
 | `STROKE_FEEDBACK` | `#2563eb` | 回授邊預設藍 |
 
-參考：`src/reference/FB_Routing.xml`、`src/reference/PSEQCELL.xml`（RTL `PSEQCELL.v`）。
+參考：`src/reference/PSEQCELL.xml`（RTL `PSEQCELL.v`）。
 
 ## Rule 3 — `_apply_feedback_routing`
 
@@ -137,4 +137,4 @@ Sets: `in_label_id`, `input_not_src_ids` → `input_auto_src_ids`。
 | `test_drawio_export_edges_use_orthogonal_or_frozen` | Rule 1 vs 2 分工 |
 | `test_gate_exit_lanes.py` | stub、`wire_via_channel` |
 
-Fixture：`drawio_fb_matrix.json` — `RAIL_AND` lo `[FB_HUB, RAIL_NAND]`（`use=hi`）→ AND→AND gate FB。
+範例：`RAIL_AND` lo `[FB_HUB, RAIL_NAND]`（`use=hi`）→ AND→AND gate FB。

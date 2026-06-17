@@ -352,6 +352,70 @@ class TestCellCentricDrawio:
         assert abs(left_ys[-1] + 10 - gate_cy) < 1.5
         assert abs(right_ys[-1] + 10 - gate_cy) > LABEL_STACK_STEP - 1
 
+    def test_group_inv_and_tree_child_and_merge_nand(self):
+        """group_inv + ≥8 inputs: child AND, merge NAND (~(child & rights))."""
+        deps = [f"IN_{i}" for i in range(AND_TREE_THRESHOLD)]
+        cfg = PowerSeqConfig(
+            rails=[
+                *[
+                    PowerRail(n, seq_type="input", deb_cycle_hi=1, deb_cycle_lo=1)
+                    for n in deps
+                ],
+                PowerRail(
+                    "OUT",
+                    seq_type="output",
+                    depends_on_lo_groups=[deps],
+                    depends_on_lo_group_inv=[True],
+                    cycle_hi=1,
+                    cycle_lo=1,
+                ),
+            ]
+        )
+        root = ET.fromstring(generate_drawio(cfg))
+        and_gates = [
+            c
+            for c in root.iter("mxCell")
+            if "logic_gate" in (c.get("style") or "")
+            and "operation=and" in (c.get("style") or "")
+        ]
+        assert len(and_gates) == 2
+        merge = max(and_gates, key=lambda c: float(c.find("mxGeometry").get("x")))
+        child = min(and_gates, key=lambda c: float(c.find("mxGeometry").get("x")))
+        assert "negating=1" not in (child.get("style") or "")
+        assert "negating=1" in (merge.get("style") or "")
+
+    def test_or_output_not_tree_child_or_merge_nor(self):
+        """_or_output_not + ≥8 single-term groups: child OR, merge NOR."""
+        deps = [f"IN_{i}" for i in range(AND_TREE_THRESHOLD)]
+        cfg = PowerSeqConfig(
+            rails=[
+                *[
+                    PowerRail(n, seq_type="input", deb_cycle_hi=1, deb_cycle_lo=1)
+                    for n in deps
+                ],
+                PowerRail(
+                    "OUT",
+                    seq_type="output",
+                    depends_on_lo_groups=[[n] for n in deps],
+                    depends_on_lo_group_inv=[True] * len(deps),
+                    cycle_hi=1,
+                    cycle_lo=1,
+                ),
+            ]
+        )
+        root = ET.fromstring(generate_drawio(cfg))
+        or_gates = [
+            c
+            for c in root.iter("mxCell")
+            if "logic_gate" in (c.get("style") or "")
+            and "operation=or" in (c.get("style") or "")
+        ]
+        assert len(or_gates) == 2
+        merge = max(or_gates, key=lambda c: float(c.find("mxGeometry").get("x")))
+        child = min(or_gates, key=lambda c: float(c.find("mxGeometry").get("x")))
+        assert "negating=1" not in (child.get("style") or "")
+        assert "negating=1" in (merge.get("style") or "")
+
     def test_outputs_follow_declaration_order(self):
         cfg = PowerSeqConfig(
             rails=[
