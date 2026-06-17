@@ -364,8 +364,6 @@ def generate_c(
         pl = getattr(r, "pulse_lo", "default") or "default"
         arg_hi = _pulse_time_expr(ph, var_name)
         arg_lo = _pulse_time_expr(pl, var_name)
-        if arg_lo == arg_hi:
-            arg_lo = "1"
         handle_specs.append({
             "member": s,
             "arg_hi": arg_hi,

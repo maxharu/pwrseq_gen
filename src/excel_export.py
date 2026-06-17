@@ -17,7 +17,14 @@ try:
 except ImportError as e:
     raise ImportError("Excel export requires openpyxl: pip install openpyxl") from e
 
-from config_models import DEFAULT_PULSE, PowerRail, PowerSeqConfig, normalize_pulse_name
+from config_models import (
+    DEFAULT_PULSE,
+    PowerRail,
+    PowerSeqConfig,
+    build_wavedrom_scenario,
+    normalize_pulse_name,
+    rail_input_wave_spec,
+)
 from excel_template_layout import apply_nodes_sheet_header_rows
 from excel_import import (
     COND_META_COLS,
@@ -25,13 +32,13 @@ from excel_import import (
     DATA_START_ROW,
     INPUT_COND_SIGNAL_MAX_COLS,
     INPUT_META_COLS,
+    MAX_DATA_ROW_CAP,
     OUTPUT_USE_SUFFIXES,
     _find_sheet,
+    data_area_end_row,
+    last_used_row,
 )
-from config_models import build_wavedrom_scenario, rail_input_wave_spec
 from wavedrom_sim import DEP_HIGH, DEP_LOW, InputWaveSpec, WaveDromScenario
-
-MAX_DATA_ROW = 200
 SHEET_LISTS = "Lists"
 
 INPUT_FILL = PatternFill("solid", fgColor="F3E8FF")
@@ -153,7 +160,8 @@ def _set_config_value(ws, key: str, value: Any) -> None:
             return
 
 
-def _clear_data_area(ws, end_col: int) -> None:
+def _clear_data_area(ws, end_col: int, *, new_row_count: int) -> None:
+    clear_end = data_area_end_row(ws, new_row_count=new_row_count, max_col=end_col)
     to_unmerge = [
         str(m)
         for m in list(ws.merged_cells.ranges)
@@ -161,7 +169,7 @@ def _clear_data_area(ws, end_col: int) -> None:
     ]
     for ref in to_unmerge:
         ws.unmerge_cells(ref)
-    for r in range(DATA_START_ROW, MAX_DATA_ROW + 1):
+    for r in range(DATA_START_ROW, clear_end + 1):
         for c in range(1, end_col + 1):
             cell = ws.cell(r, c)
             cell.value = None
@@ -176,7 +184,7 @@ def _write_config(ws, config: PowerSeqConfig, scenario: WaveDromScenario) -> Non
 
 def _write_nodes(ws, rails: list[PowerRail]) -> None:
     apply_nodes_sheet_header_rows(ws)
-    _clear_data_area(ws, 10)
+    _clear_data_area(ws, 10, new_row_count=len(rails))
     for i, rail in enumerate(rails):
         r = DATA_START_ROW + i
         fill = INPUT_FILL if rail.seq_type == "input" else OUTPUT_FILL
@@ -273,12 +281,12 @@ def _output_cond_rows(rail: PowerRail) -> list[tuple[str, str, str, list[str]]]:
 
 def _write_output_conditions(ws, config: PowerSeqConfig) -> None:
     sig_end = COND_META_COLS + COND_SIGNAL_MAX_COLS
-    _clear_data_area(ws, sig_end)
     all_rows: list[tuple[str, str, str, list[str]]] = []
     for rail in config.rails:
         if rail.seq_type != "output":
             continue
         all_rows.extend(_output_cond_rows(rail))
+    _clear_data_area(ws, sig_end, new_row_count=len(all_rows))
 
     block_starts: list[tuple[int, int]] = []
     block_start = DATA_START_ROW
@@ -360,13 +368,13 @@ def _input_cond_rows(name: str, spec: InputWaveSpec) -> list[tuple[str, str, str
 
 def _write_input_conditions(ws, config: PowerSeqConfig, scenario: WaveDromScenario) -> None:
     sig_end = INPUT_META_COLS + INPUT_COND_SIGNAL_MAX_COLS
-    _clear_data_area(ws, sig_end)
     all_rows: list[tuple[str, str, str, str | None, str, list[str]]] = []
     for rail in config.rails:
         if rail.seq_type != "input":
             continue
         spec = rail_input_wave_spec(rail)
         all_rows.extend(_input_cond_rows(rail.name, spec))
+    _clear_data_area(ws, sig_end, new_row_count=len(all_rows))
 
     block_starts: list[tuple[int, int]] = []
     block_start = DATA_START_ROW
@@ -441,7 +449,9 @@ def _write_lists(wb, config: PowerSeqConfig, cond_signals: set[str]) -> None:
     ws = wb[SHEET_LISTS]
     entries = _collect_signal_list(config, cond_signals)
     pulses = config.pulses or [DEFAULT_PULSE]
-    max_row = max(len(entries) + 1, len(pulses) + 1, MAX_DATA_ROW)
+    write_end = max(len(entries) + 1, len(pulses) + 1)
+    used_end = last_used_row(ws, min_row=2, max_col=2)
+    max_row = min(max(used_end, write_end), MAX_DATA_ROW_CAP)
     for r in range(2, max_row + 1):
         ws.cell(r, 1, value=None)
         ws.cell(r, 2, value=None)

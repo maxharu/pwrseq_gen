@@ -62,3 +62,41 @@ class TestLoadTemplate:
         assert "rails" in d
         assert d["rails"][2]["depends_on_hi_groups"] == [["EKEY", "PRIM_VR_EN", "RSMRST_N"]]
         assert cfg.rails[2].pulse_hi == "Pulse_2ms"
+
+
+X15DOT_XLSM = os.path.join(ROOT, "templates", "x15dot.xlsm")
+
+
+class TestLastUsedRow:
+    def test_scan_finds_last_row_beyond_template_floor(self):
+        from openpyxl import Workbook
+
+        from excel_import import DATA_START_ROW, last_used_row
+
+        wb = Workbook()
+        ws = wb.active
+        ws.cell(DATA_START_ROW, 1, value="FIRST")
+        ws.cell(350, 1, value="LAST")
+        assert last_used_row(ws, min_row=DATA_START_ROW, max_col=5) == 350
+
+    def test_scan_empty_returns_below_start(self):
+        from openpyxl import Workbook
+
+        from excel_import import DATA_START_ROW, last_used_row
+
+        wb = Workbook()
+        ws = wb.active
+        assert last_used_row(ws, min_row=DATA_START_ROW, max_col=5) == DATA_START_ROW - 1
+
+
+@pytest.mark.skipif(not os.path.isfile(X15DOT_XLSM), reason="x15dot.xlsm missing")
+class TestLoadX15Dot:
+    def test_late_output_conditions_loaded(self):
+        """Output Conditions 超過 row 200 的訊號仍應載入 Hi/Lo（x15dot row 202+）。"""
+        cfg = load_powerseq_from_excel(X15DOT_XLSM)
+        rail = next(r for r in cfg.rails if r.name == "M_NP_CPU1_FPGA_RESET_N_OD")
+        assert rail.get_hi_groups() == [
+            ["CPU1_DDR_NP_RST_N", "PLD_CPU1_MEM_NP_PWRGD_OD"]
+        ]
+        assert rail.get_lo_groups() == [["CPU1_DDR_NP_RST_N"]]
+        assert rail.depends_on_lo_inv_groups[0] == [True]

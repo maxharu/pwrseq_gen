@@ -18,7 +18,7 @@ from config_models import DEFAULT_PULSE, PowerRail, PowerSeqConfig, normalize_pu
 from wavedrom_sim import DEP_HIGH, DEP_LOW
 
 DATA_START_ROW = 4
-MAX_DATA_ROW = 200
+MAX_DATA_ROW_CAP = 5000
 COND_META_COLS = 3
 INPUT_META_COLS = 5
 COND_SIGNAL_MAX_COLS = 49
@@ -70,8 +70,39 @@ def _row_val(row: tuple, col_1based: int, default: Any = None) -> Any:
     return row[idx]
 
 
-def _sheet_rows(ws, *, min_row: int, max_row: int, max_col: int) -> list[tuple]:
-    """Materialize sheet range once (avoids read_only random cell() slowness)."""
+def _row_has_value(row: tuple) -> bool:
+    return any(v is not None and str(v).strip() != "" for v in row)
+
+
+def last_used_row(ws, *, min_row: int, max_col: int) -> int:
+    """掃描 cols 1..max_col，回傳 min_row 起最後一列有內容的列號（1-based）；無則 min_row-1。"""
+    last = min_row - 1
+    for i, row in enumerate(
+        ws.iter_rows(
+            min_row=min_row,
+            max_row=MAX_DATA_ROW_CAP,
+            max_col=max_col,
+            values_only=True,
+        )
+    ):
+        if _row_has_value(row):
+            last = min_row + i
+    return last
+
+
+def data_area_end_row(ws, *, new_row_count: int = 0, max_col: int) -> int:
+    """Import 掃描 / export 清除的最後列：max(掃描結果, 本次寫入)，上限 MAX_DATA_ROW_CAP。"""
+    used_end = last_used_row(ws, min_row=DATA_START_ROW, max_col=max_col)
+    write_end = (
+        DATA_START_ROW + new_row_count - 1 if new_row_count > 0 else DATA_START_ROW - 1
+    )
+    return min(max(used_end, write_end), MAX_DATA_ROW_CAP)
+
+
+def _materialize_rows(ws, *, min_row: int, max_row: int, max_col: int) -> list[tuple]:
+    """讀取固定矩形範圍（Config 等小表）。"""
+    if max_row < min_row:
+        return []
     return list(
         ws.iter_rows(
             min_row=min_row,
@@ -80,6 +111,19 @@ def _sheet_rows(ws, *, min_row: int, max_row: int, max_col: int) -> list[tuple]:
             values_only=True,
         )
     )
+
+
+def _data_sheet_rows(ws, *, max_col: int) -> list[tuple]:
+    """讀取資料區：掃描實際最後列。"""
+    end = data_area_end_row(ws, new_row_count=0, max_col=max_col)
+    return _materialize_rows(
+        ws, min_row=DATA_START_ROW, max_row=end, max_col=max_col,
+    )
+
+
+def _sheet_rows(ws, *, min_row: int, max_row: int, max_col: int) -> list[tuple]:
+    """讀取固定矩形範圍（Config 等小表）。"""
+    return _materialize_rows(ws, min_row=min_row, max_row=max_row, max_col=max_col)
 
 
 def _sheet_a1(ws) -> str:
@@ -455,18 +499,14 @@ def load_wavedrom_scenario_from_excel(path: str) -> WaveDromScenario:
         input_names: list[str] = []
         try:
             ws_nodes = _find_sheet(wb, "name")
-            node_rows = _sheet_rows(
-                ws_nodes, min_row=DATA_START_ROW, max_row=MAX_DATA_ROW, max_col=NODES_MAX_COL,
-            )
+            node_rows = _data_sheet_rows(ws_nodes, max_col=NODES_MAX_COL)
             input_names = [
                 r.name for r in _parse_nodes(node_rows, defaults) if r.seq_type == "input"
             ]
         except ValueError:
             pass
         ws_in = _find_sheet(wb, "input_name")
-        in_rows = _sheet_rows(
-            ws_in, min_row=DATA_START_ROW, max_row=MAX_DATA_ROW, max_col=INPUT_COND_MAX_COL,
-        )
+        in_rows = _data_sheet_rows(ws_in, max_col=INPUT_COND_MAX_COL)
         inputs = _parse_input_conditions(in_rows, input_names)
         if not inputs:
             raise ValueError("No Input Conditions found in workbook")
@@ -493,17 +533,13 @@ def load_powerseq_from_excel(path: str) -> PowerSeqConfig:
         )
         defaults = _parse_config_defaults(config_lookup)
         ws_nodes = _find_sheet(wb, "name")
-        node_rows = _sheet_rows(
-            ws_nodes, min_row=DATA_START_ROW, max_row=MAX_DATA_ROW, max_col=NODES_MAX_COL,
-        )
+        node_rows = _data_sheet_rows(ws_nodes, max_col=NODES_MAX_COL)
         rails = _parse_nodes(node_rows, defaults)
         rails_by_name = {r.name: r for r in rails}
 
         try:
             ws_out = _find_sheet(wb, "output_name")
-            out_rows = _sheet_rows(
-                ws_out, min_row=DATA_START_ROW, max_row=MAX_DATA_ROW, max_col=OUTPUT_COND_MAX_COL,
-            )
+            out_rows = _data_sheet_rows(ws_out, max_col=OUTPUT_COND_MAX_COL)
             _parse_output_conditions(out_rows, rails_by_name)
         except ValueError:
             pass
@@ -512,9 +548,7 @@ def load_powerseq_from_excel(path: str) -> PowerSeqConfig:
         wavedrom_scenario: dict | None = None
         try:
             ws_in = _find_sheet(wb, "input_name")
-            in_rows = _sheet_rows(
-                ws_in, min_row=DATA_START_ROW, max_row=MAX_DATA_ROW, max_col=INPUT_COND_MAX_COL,
-            )
+            in_rows = _data_sheet_rows(ws_in, max_col=INPUT_COND_MAX_COL)
             inputs = _parse_input_conditions(in_rows, input_names)
             if inputs:
                 from config_models import apply_input_wave_dict
