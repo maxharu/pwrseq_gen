@@ -4,8 +4,30 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from excel_import import parse_signal_cell
+from excel_import import (
+    _parse_input_cond_meta,
+    _parse_output_cond_meta,
+    parse_signal_cell,
+)
 from wavedrom_sim import DEP_HIGH, DEP_LOW
+
+
+class TestParseCondMeta:
+    def test_output_operation_and_group_inv(self):
+        row = ("OUT", "Hi", "XOR", "Y") + (None,) * 10
+        assert _parse_output_cond_meta(row) == ("xor", True)
+
+    def test_output_legacy_group_inv_col3(self):
+        row = ("OUT", "Hi", "Y") + (None,) * 10
+        assert _parse_output_cond_meta(row) == ("and", True)
+
+    def test_input_operation_and_group_inv(self):
+        row = ("IN", "Hi", "Signal cond.", None, "OR", "N") + (None,) * 10
+        assert _parse_input_cond_meta(row) == ("or", False)
+
+    def test_input_legacy_group_inv_col5(self):
+        row = ("IN", "Hi", "Signal cond.", None, "Y") + (None,) * 10
+        assert _parse_input_cond_meta(row) == ("and", True)
 
 
 class TestParseSignalCell:

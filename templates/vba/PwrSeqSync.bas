@@ -5,17 +5,19 @@ Public Const PWRSEQ_DATA_START_ROW As Long = 4
 Public Const PWRSEQ_MAX_ROW As Long = 500
 Public Const PWRSEQ_COND_COL_NAME As Long = 1
 Public Const PWRSEQ_COND_COL_TYPE As Long = 2
-Public Const PWRSEQ_COND_COL_GROUP_INV As Long = 3
-Public Const PWRSEQ_COND_COL_SIGNAL_START As Long = 4
-Public Const PWRSEQ_COND_MAX_COL As Long = 52
+Public Const PWRSEQ_COND_COL_OPERATION As Long = 3
+Public Const PWRSEQ_COND_COL_GROUP_INV As Long = 4
+Public Const PWRSEQ_COND_COL_SIGNAL_START As Long = 5
+Public Const PWRSEQ_COND_MAX_COL As Long = 53
 
 Public Const PWRSEQ_INPUT_COL_NAME As Long = 1
 Public Const PWRSEQ_INPUT_COL_SIDE As Long = 2
 Public Const PWRSEQ_INPUT_COL_MODE As Long = 3
 Public Const PWRSEQ_INPUT_COL_WAVE As Long = 4
-Public Const PWRSEQ_INPUT_COL_GROUP_INV As Long = 5
-Public Const PWRSEQ_INPUT_COL_SIGNAL_START As Long = 6
-Public Const PWRSEQ_INPUT_MAX_COL As Long = 54
+Public Const PWRSEQ_INPUT_COL_OPERATION As Long = 5
+Public Const PWRSEQ_INPUT_COL_GROUP_INV As Long = 6
+Public Const PWRSEQ_INPUT_COL_SIGNAL_START As Long = 7
+Public Const PWRSEQ_INPUT_MAX_COL As Long = 55
 
 Private Const SIDE_HI As String = "Hi"
 Private Const SIDE_LO As String = "Lo"
@@ -184,6 +186,35 @@ Private Function NormalizeGroupInv(ByVal raw As Variant) As String
   End If
 End Function
 
+Private Function IsLegacyGroupInvCell(ByVal raw As Variant) As Boolean
+  Dim t As String
+  t = UCase$(Trim$(CStr(raw)))
+  If Len(t) = 0 Then
+    IsLegacyGroupInvCell = True
+    Exit Function
+  End If
+  If t = "Y" Or t = "N" Or t = "YES" Or t = "NO" Then
+    IsLegacyGroupInvCell = True
+  Else
+    IsLegacyGroupInvCell = False
+  End If
+End Function
+
+Private Function NormalizeOperation(ByVal raw As Variant) As String
+  Dim t As String
+  t = UCase$(Trim$(CStr(raw)))
+  If Len(t) = 0 Then
+    NormalizeOperation = "AND"
+    Exit Function
+  End If
+  Select Case t
+    Case "AND", "OR", "XOR"
+      NormalizeOperation = t
+    Case Else
+      NormalizeOperation = "AND"
+  End Select
+End Function
+
 Private Function CondLastCol() As Long
   Dim c As Long
   Dim last As Long
@@ -219,16 +250,18 @@ Private Sub EnsureTypeRow(ByVal rows As Collection, ByVal condType As String)
     rowType = rows(i)(0)
     If rowType = condType Then Exit Sub
   Next i
-  rows.Add Array(condType, "N", Empty)
+  rows.Add Array(condType, "AND", "N", Empty)
 End Sub
 
 Private Sub LoadSavedOutputRows(ByVal outputName As String, ByVal rows As Collection)
   Dim r As Long
   Dim current As String
   Dim condType As String
+  Dim operation As String
   Dim groupInv As String
   Dim signals As Variant
   Dim lastCol As Long
+  Dim opCell As Variant
 
   lastCol = CondLastCol()
   current = ""
@@ -240,9 +273,16 @@ Private Sub LoadSavedOutputRows(ByVal outputName As String, ByVal rows As Collec
 
     condType = NormalizeCondType(g_wsCond.Cells(r, PWRSEQ_COND_COL_TYPE).Value)
     If Len(condType) = 0 Then GoTo ContinueLoop
-    groupInv = NormalizeGroupInv(g_wsCond.Cells(r, PWRSEQ_COND_COL_GROUP_INV).Value)
+    opCell = g_wsCond.Cells(r, PWRSEQ_COND_COL_OPERATION).Value
+    If IsLegacyGroupInvCell(opCell) Then
+      operation = "AND"
+      groupInv = NormalizeGroupInv(opCell)
+    Else
+      operation = NormalizeOperation(opCell)
+      groupInv = NormalizeGroupInv(g_wsCond.Cells(r, PWRSEQ_COND_COL_GROUP_INV).Value)
+    End If
     signals = g_wsCond.Range(g_wsCond.Cells(r, PWRSEQ_COND_COL_SIGNAL_START), g_wsCond.Cells(r, lastCol)).Value
-    rows.Add Array(condType, groupInv, signals)
+    rows.Add Array(condType, operation, groupInv, signals)
 ContinueLoop:
   Next r
 End Sub
@@ -251,6 +291,7 @@ Private Sub WriteOutputBlock(ByVal outputName As String, ByVal rows As Collectio
   Dim i As Long
   Dim blockStart As Long
   Dim condType As String
+  Dim operation As String
   Dim groupInv As String
   Dim signals As Variant
   Dim lastCol As Long
@@ -259,9 +300,11 @@ Private Sub WriteOutputBlock(ByVal outputName As String, ByVal rows As Collectio
   blockStart = destRow
   For i = 1 To rows.Count
     condType = rows(i)(0)
-    groupInv = rows(i)(1)
-    signals = rows(i)(2)
+    operation = rows(i)(1)
+    groupInv = rows(i)(2)
+    signals = rows(i)(3)
     g_wsCond.Cells(destRow, PWRSEQ_COND_COL_TYPE).Value = condType
+    g_wsCond.Cells(destRow, PWRSEQ_COND_COL_OPERATION).Value = operation
     g_wsCond.Cells(destRow, PWRSEQ_COND_COL_GROUP_INV).Value = groupInv
     If Not IsEmpty(signals) Then
       g_wsCond.Range(g_wsCond.Cells(destRow, PWRSEQ_COND_COL_SIGNAL_START), g_wsCond.Cells(destRow, lastCol)).Value = signals
@@ -447,7 +490,7 @@ Private Sub EnsureInputSideRow(ByVal rows As Collection, ByVal side As String, B
     rowSide = rows(i)(0)
     If rowSide = side Then Exit Sub
   Next i
-  rows.Add Array(side, defaultMode, Empty, "N", Empty)
+  rows.Add Array(side, defaultMode, Empty, "AND", "N", Empty)
 End Sub
 
 Private Sub LoadSavedInputRows(ByVal inputName As String, ByVal rows As Collection)
@@ -456,9 +499,11 @@ Private Sub LoadSavedInputRows(ByVal inputName As String, ByVal rows As Collecti
   Dim side As String
   Dim mode As String
   Dim waveVal As Variant
+  Dim operation As String
   Dim groupInv As String
   Dim signals As Variant
   Dim lastCol As Long
+  Dim opCell As Variant
 
   lastCol = InputCondLastCol()
   current = ""
@@ -473,9 +518,16 @@ Private Sub LoadSavedInputRows(ByVal inputName As String, ByVal rows As Collecti
     mode = NormalizeInputMode(g_wsInputCond.Cells(r, PWRSEQ_INPUT_COL_MODE).Value)
     If Len(mode) = 0 Then mode = MODE_DEPENDS
     waveVal = g_wsInputCond.Cells(r, PWRSEQ_INPUT_COL_WAVE).Value
-    groupInv = NormalizeGroupInv(g_wsInputCond.Cells(r, PWRSEQ_INPUT_COL_GROUP_INV).Value)
+    opCell = g_wsInputCond.Cells(r, PWRSEQ_INPUT_COL_OPERATION).Value
+    If IsLegacyGroupInvCell(opCell) Then
+      operation = "AND"
+      groupInv = NormalizeGroupInv(opCell)
+    Else
+      operation = NormalizeOperation(opCell)
+      groupInv = NormalizeGroupInv(g_wsInputCond.Cells(r, PWRSEQ_INPUT_COL_GROUP_INV).Value)
+    End If
     signals = g_wsInputCond.Range(g_wsInputCond.Cells(r, PWRSEQ_INPUT_COL_SIGNAL_START), g_wsInputCond.Cells(r, lastCol)).Value
-    rows.Add Array(side, mode, waveVal, groupInv, signals)
+    rows.Add Array(side, mode, waveVal, operation, groupInv, signals)
 ContinueInputLoop:
   Next r
 End Sub
@@ -486,6 +538,7 @@ Private Sub WriteInputBlock(ByVal inputName As String, ByVal rows As Collection,
   Dim side As String
   Dim mode As String
   Dim waveVal As Variant
+  Dim operation As String
   Dim groupInv As String
   Dim signals As Variant
   Dim lastCol As Long
@@ -496,11 +549,13 @@ Private Sub WriteInputBlock(ByVal inputName As String, ByVal rows As Collection,
     side = rows(i)(0)
     mode = rows(i)(1)
     waveVal = rows(i)(2)
-    groupInv = rows(i)(3)
-    signals = rows(i)(4)
+    operation = rows(i)(3)
+    groupInv = rows(i)(4)
+    signals = rows(i)(5)
     g_wsInputCond.Cells(destRow, PWRSEQ_INPUT_COL_SIDE).Value = side
     g_wsInputCond.Cells(destRow, PWRSEQ_INPUT_COL_MODE).Value = mode
     g_wsInputCond.Cells(destRow, PWRSEQ_INPUT_COL_WAVE).Value = waveVal
+    g_wsInputCond.Cells(destRow, PWRSEQ_INPUT_COL_OPERATION).Value = operation
     g_wsInputCond.Cells(destRow, PWRSEQ_INPUT_COL_GROUP_INV).Value = groupInv
     If Not IsEmpty(signals) Then
       g_wsInputCond.Range(g_wsInputCond.Cells(destRow, PWRSEQ_INPUT_COL_SIGNAL_START), g_wsInputCond.Cells(destRow, lastCol)).Value = signals
