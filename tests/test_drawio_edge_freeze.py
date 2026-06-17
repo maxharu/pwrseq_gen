@@ -1,6 +1,8 @@
 """drawio_edge_freeze 單元測試：走線鎖定與 input 自動正交還原。"""
 import xml.etree.ElementTree as ET
 
+import pytest
+
 from drawio_edge_freeze import (
     MIN_HORIZ_STUB,
     _orthogonalize_polyline,
@@ -11,6 +13,8 @@ from drawio_edge_freeze import (
 
 class TestOverlapRules:
     """相同 source：水平可重疊、垂直不可重疊（預設選項）。"""
+
+    pytestmark = pytest.mark.skip(reason="_ChannelAllocator removed with layered layout")
 
     def test_channel_same_source_overlapping_y_gets_different_x(self):
         from drawio_export import _ChannelAllocator
