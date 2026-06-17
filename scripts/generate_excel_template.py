@@ -60,7 +60,7 @@ COND_META_COLS = 4
 
 INPUT_COND_SIGNAL_INIT_COLS = 8
 INPUT_COND_SIGNAL_MAX_COLS = 49
-INPUT_META_COLS = 5  # input_name, cond_side, mode, wave, group_inv
+INPUT_META_COLS = 6  # input_name, cond_side, mode, wave, operation, group_inv
 
 INPUT_MODES = ("Low (0)", "High (1)", "Custom wave", "Signal cond.")
 
@@ -95,12 +95,12 @@ COND_ROWS = [
     ("", "Force", "AND", "N"),
 ]
 
-# (input_name, side, mode, wave, group_inv, *signals)
+# (input_name, side, mode, wave, operation, group_inv, *signals)
 INPUT_COND_ROWS = [
-    ("EKEY", "Hi", "Custom wave", "01", "N"),
-    ("", "Lo", "Low (0)", None, "N"),
-    ("PRIM_VR_EN", "Hi", "Signal cond.", None, "N", "EKEY"),
-    ("", "Lo", "Low (0)", None, "N"),
+    ("EKEY", "Hi", "Custom wave", "01", "AND", "N"),
+    ("", "Lo", "Low (0)", None, "AND", "N"),
+    ("PRIM_VR_EN", "Hi", "Signal cond.", None, "AND", "N", "EKEY"),
+    ("", "Lo", "Low (0)", None, "AND", "N"),
 ]
 
 INSTRUCTIONS = [
@@ -130,10 +130,10 @@ INSTRUCTIONS = [
     "  NAME only = Node (self)",
     "",
     "Input Conditions (WaveDrom only)",
-    "  input_name | Side (Hi/Lo) | Mode | Wave | Group Inv | Signal…",
+    "  input_name | Side (Hi/Lo) | Mode | Wave | Operation (AND/OR/XOR) | Group Inv | Signal…",
     "  Mode: Low (0) / High (1) / Custom wave / Signal cond.",
     "  Custom wave: fill Wave with 0/1/. or 0{29}1 (e.g. high at step 30)",
-    "  Signal cond.: same syntax as Output (AND per row, OR across rows); leave Wave empty",
+    "  Signal cond.: same syntax as Output (Operation per row, OR across rows); leave Wave empty",
     "  Hi default: Signal cond.; Lo default: Low (0)",
     "  Config wavedrom_steps / wavedrom_hscale used when exporting WaveDrom",
     "",
@@ -183,6 +183,7 @@ def _input_cond_headers():
         ("cond_side", "Side (Hi/Lo)", "Hi / Lo (dropdown)"),
         ("mode", "Mode", "Low / High / Custom wave / Signal cond. (dropdown)"),
         ("wave", "Wave", "Custom wave: 0/1/. or 0{n}1"),
+        ("operation", "Operation (AND/OR/XOR)", "AND / OR / XOR within this group"),
         ("group_inv", "Group Inv (Y/N)", "Signal cond. group invert; blank = N"),
     ]
     for i in range(1, INPUT_COND_SIGNAL_INIT_COLS + 1):
@@ -319,17 +320,20 @@ def _add_validations(ws_nodes, ws_cond, ws_input) -> None:
     pulse_dv.add(f"H{DATA_START_ROW}:J{nrows}")
 
     cond_type_dv = DataValidation(type="list", formula1='"Hi,Lo,Force"', allow_blank=True)
+    operation_dv = DataValidation(type="list", formula1='"AND,OR,XOR"', allow_blank=True)
     group_inv_out_dv = DataValidation(type="list", formula1='"Y,N"', allow_blank=True)
     signal_out_dv = DataValidation(type="list", formula1="=SignalList", allow_blank=True)
-    for dv in (cond_type_dv, group_inv_out_dv, signal_out_dv):
+    for dv in (cond_type_dv, operation_dv, group_inv_out_dv, signal_out_dv):
         dv.error = "Pick from the list or see Instructions"
         dv.errorTitle = "Invalid value"
 
     ws_cond.add_data_validation(cond_type_dv)
+    ws_cond.add_data_validation(operation_dv)
     ws_cond.add_data_validation(group_inv_out_dv)
     ws_cond.add_data_validation(signal_out_dv)
     cond_type_dv.add(f"B{DATA_START_ROW}:B{nrows}")
-    group_inv_out_dv.add(f"C{DATA_START_ROW}:C{nrows}")
+    operation_dv.add(f"C{DATA_START_ROW}:C{nrows}")
+    group_inv_out_dv.add(f"D{DATA_START_ROW}:D{nrows}")
     sig_start = get_column_letter(COND_META_COLS + 1)
     sig_end = get_column_letter(_cond_signal_end_col())
     signal_out_dv.add(f"{sig_start}{DATA_START_ROW}:{sig_end}{nrows}")
@@ -341,18 +345,21 @@ def _add_validations(ws_nodes, ws_cond, ws_input) -> None:
         allow_blank=True,
     )
     group_inv_in_dv = DataValidation(type="list", formula1='"Y,N"', allow_blank=True)
+    operation_in_dv = DataValidation(type="list", formula1='"AND,OR,XOR"', allow_blank=True)
     signal_in_dv = DataValidation(type="list", formula1="=SignalList", allow_blank=True)
-    for dv in (side_dv, mode_dv, group_inv_in_dv, signal_in_dv):
+    for dv in (side_dv, mode_dv, operation_in_dv, group_inv_in_dv, signal_in_dv):
         dv.error = "Pick from the list or see Instructions"
         dv.errorTitle = "Invalid value"
 
     ws_input.add_data_validation(side_dv)
     ws_input.add_data_validation(mode_dv)
+    ws_input.add_data_validation(operation_in_dv)
     ws_input.add_data_validation(group_inv_in_dv)
     ws_input.add_data_validation(signal_in_dv)
     side_dv.add(f"B{DATA_START_ROW}:B{nrows}")
     mode_dv.add(f"C{DATA_START_ROW}:C{nrows}")
-    group_inv_in_dv.add(f"E{DATA_START_ROW}:E{nrows}")
+    operation_in_dv.add(f"E{DATA_START_ROW}:E{nrows}")
+    group_inv_in_dv.add(f"F{DATA_START_ROW}:F{nrows}")
     in_sig_start = get_column_letter(INPUT_META_COLS + 1)
     in_sig_end = get_column_letter(_input_cond_signal_end_col())
     signal_in_dv.add(f"{in_sig_start}{DATA_START_ROW}:{in_sig_end}{nrows}")
@@ -493,8 +500,9 @@ def _write_input_cond_sheet(wb: Workbook) -> None:
         side = row_data[1] if len(row_data) > 1 else None
         mode = row_data[2] if len(row_data) > 2 else None
         wave = row_data[3] if len(row_data) > 3 else None
-        group_inv = row_data[4] if len(row_data) > 4 else None
-        signals = row_data[5:] if len(row_data) > 5 else ()
+        operation = row_data[4] if len(row_data) > 4 else "AND"
+        group_inv = row_data[5] if len(row_data) > 5 else None
+        signals = row_data[6:] if len(row_data) > 6 else ()
 
         if input_name:
             block_start = r
@@ -502,7 +510,8 @@ def _write_input_cond_sheet(wb: Workbook) -> None:
         ws.cell(row=r, column=2, value=side)
         ws.cell(row=r, column=3, value=mode)
         ws.cell(row=r, column=4, value=wave if wave is not None else None)
-        ws.cell(row=r, column=5, value=group_inv)
+        ws.cell(row=r, column=5, value=operation)
+        ws.cell(row=r, column=6, value=group_inv)
         for si, sig in enumerate(signals, start=1):
             if sig is not None:
                 ws.cell(row=r, column=INPUT_META_COLS + si, value=sig)
@@ -599,8 +608,8 @@ def _sync_input_cond_names() -> None:
     for name in inputs:
         if name not in blocks:
             blocks[name] = [
-                (name, "Hi", "Signal cond.", None, "N"),
-                ("", "Lo", "Low (0)", None, "N"),
+                (name, "Hi", "Signal cond.", None, "AND", "N"),
+                ("", "Lo", "Low (0)", None, "AND", "N"),
             ]
     INPUT_COND_ROWS.clear()
     for name in inputs:

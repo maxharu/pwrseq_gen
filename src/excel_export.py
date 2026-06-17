@@ -318,49 +318,52 @@ def _write_output_conditions(ws, config: PowerSeqConfig) -> None:
             ws.merge_cells(start_row=start, start_column=1, end_row=end, end_column=1)
 
 
-def _side_rows(spec: InputWaveSpec, side: str) -> list[tuple[str, str | None, str, list[str]]]:
+def _side_rows(spec: InputWaveSpec, side: str) -> list[tuple[str, str | None, str, str, list[str]]]:
     mode = getattr(spec, f"{side}_mode")
     if mode == "constant_0":
-        return [(INPUT_MODE_LABELS["constant_0"], None, "N", [])]
+        return [(INPUT_MODE_LABELS["constant_0"], None, "AND", "N", [])]
     if mode == "constant_1":
-        return [(INPUT_MODE_LABELS["constant_1"], None, "N", [])]
+        return [(INPUT_MODE_LABELS["constant_1"], None, "AND", "N", [])]
     if mode == "custom":
         wave = getattr(spec, f"{side}_wave", "0") or "0"
-        return [(INPUT_MODE_LABELS["custom"], wave, "N", [])]
+        return [(INPUT_MODE_LABELS["custom"], wave, "AND", "N", [])]
     groups = getattr(spec, f"{side}_groups") or []
     inv_groups = getattr(spec, f"{side}_inv_groups") or []
     use_groups = getattr(spec, f"{side}_use_groups") or []
     group_inv_list = getattr(spec, f"{side}_group_inv") or []
+    intra_op_list = getattr(spec, f"{side}_intra_op") or []
     non_empty = [g for g in groups if g]
     if not non_empty:
-        return [(INPUT_MODE_LABELS["depends"], None, "N", [])]
-    rows: list[tuple[str, str | None, str, list[str]]] = []
+        return [(INPUT_MODE_LABELS["depends"], None, "AND", "N", [])]
+    rows: list[tuple[str, str | None, str, str, list[str]]] = []
     for gi, group in enumerate(groups):
         if not group:
             continue
         inv_g = inv_groups[gi] if gi < len(inv_groups) else []
         use_g = use_groups[gi] if gi < len(use_groups) else []
         ginv = "Y" if (gi < len(group_inv_list) and group_inv_list[gi]) else "N"
+        op = intra_op_label(intra_op_list[gi] if gi < len(intra_op_list) else "and")
         signals = []
         for ii, n in enumerate(group):
             inv = inv_g[ii] if ii < len(inv_g) else False
             use = use_g[ii] if ii < len(use_g) else "self"
             signals.append(format_signal_cell(n, inv, use))
-        rows.append((INPUT_MODE_LABELS["depends"], None, ginv, signals))
+        rows.append((INPUT_MODE_LABELS["depends"], None, op, ginv, signals))
     return rows
 
 
-def _input_cond_rows(name: str, spec: InputWaveSpec) -> list[tuple[str, str, str, str | None, str, list[str]]]:
-    rows: list[tuple[str, str, str, str | None, str, list[str]]] = []
+def _input_cond_rows(name: str, spec: InputWaveSpec) -> list[tuple[str, str, str, str | None, str, str, list[str]]]:
+    rows: list[tuple[str, str, str, str | None, str, str, list[str]]] = []
     block_started = False
     for side_label, side in (("Hi", "hi"), ("Lo", "lo")):
-        for mode, wave, ginv, signals in _side_rows(spec, side):
+        for mode, wave, op, ginv, signals in _side_rows(spec, side):
             rows.append(
                 (
                     name if not block_started else "",
                     side_label,
                     mode,
                     wave,
+                    op,
                     ginv,
                     signals,
                 )
@@ -368,15 +371,15 @@ def _input_cond_rows(name: str, spec: InputWaveSpec) -> list[tuple[str, str, str
             block_started = True
     if not rows:
         rows = [
-            (name, "Hi", INPUT_MODE_LABELS["depends"], None, "N", []),
-            ("", "Lo", INPUT_MODE_LABELS["constant_0"], None, "N", []),
+            (name, "Hi", INPUT_MODE_LABELS["depends"], None, "AND", "N", []),
+            ("", "Lo", INPUT_MODE_LABELS["constant_0"], None, "AND", "N", []),
         ]
     return rows
 
 
 def _write_input_conditions(ws, config: PowerSeqConfig, scenario: WaveDromScenario) -> None:
     sig_end = INPUT_META_COLS + INPUT_COND_SIGNAL_MAX_COLS
-    all_rows: list[tuple[str, str, str, str | None, str, list[str]]] = []
+    all_rows: list[tuple[str, str, str, str | None, str, str, list[str]]] = []
     for rail in config.rails:
         if rail.seq_type != "input":
             continue
@@ -386,7 +389,7 @@ def _write_input_conditions(ws, config: PowerSeqConfig, scenario: WaveDromScenar
 
     block_starts: list[tuple[int, int]] = []
     block_start = DATA_START_ROW
-    for i, (input_name, side, mode, wave, group_inv, signals) in enumerate(all_rows):
+    for i, (input_name, side, mode, wave, operation, group_inv, signals) in enumerate(all_rows):
         r = DATA_START_ROW + i
         if input_name:
             if i > 0:
@@ -396,7 +399,8 @@ def _write_input_conditions(ws, config: PowerSeqConfig, scenario: WaveDromScenar
         ws.cell(r, 2, value=side)
         ws.cell(r, 3, value=mode)
         ws.cell(r, 4, value=wave)
-        ws.cell(r, 5, value=group_inv)
+        ws.cell(r, 5, value=operation)
+        ws.cell(r, 6, value=group_inv)
         fill = HI_FILL if side == "Hi" else LO_FILL
         for si, sig in enumerate(signals, start=1):
             ws.cell(r, INPUT_META_COLS + si, value=sig)

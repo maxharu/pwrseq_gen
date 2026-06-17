@@ -21,7 +21,7 @@ from wavedrom_sim import DEP_HIGH, DEP_LOW
 DATA_START_ROW = 4
 MAX_DATA_ROW_CAP = 5000
 COND_META_COLS = 4
-INPUT_META_COLS = 5
+INPUT_META_COLS = 6  # input_name, cond_side, mode, wave, operation, group_inv
 COND_SIGNAL_MAX_COLS = 49
 INPUT_COND_SIGNAL_MAX_COLS = 49
 NODES_MAX_COL = 10
@@ -218,6 +218,14 @@ def _read_signal_cells_row(
     return signals
 
 
+def _parse_input_cond_meta(row: tuple) -> tuple[str, bool]:
+    """Return (intra_op, group_inv) from cols 5–6 (legacy: col5 = group inv only)."""
+    c5 = _row_val(row, 5)
+    if is_legacy_group_inv_cell(c5):
+        return "and", _is_yes(c5)
+    return parse_intra_op_cell(c5), _is_yes(_row_val(row, 6))
+
+
 def _parse_output_cond_meta(row: tuple) -> tuple[str, bool]:
     """Return (intra_op, group_inv) from row cols 3–4 (legacy: col3 = group inv only)."""
     c3 = _row_val(row, 3)
@@ -391,7 +399,7 @@ def _normalize_input_mode(raw: Any) -> str:
 
 
 def _parse_input_side_rows(
-    rows: list[tuple[str, str, list[tuple[str, bool, str]], bool]],
+    rows: list[tuple[str, str, list[tuple[str, bool, str]], bool, str]],
 ) -> dict[str, Any]:
     """Build hi_* or lo_* fields for InputWaveSpec dict from rows of same side."""
     if not rows:
@@ -412,26 +420,29 @@ def _parse_input_side_rows(
         inv_g: list[list[bool]] = []
         use_g: list[list[str]] = []
         ginv: list[bool] = []
-        for _mode, _wave, signals, row_ginv in rows:
+        intra: list[str] = []
+        for _mode, _wave, signals, row_ginv, intra_op in rows:
             if not signals:
                 continue
             groups.append([s[0] for s in signals])
             inv_g.append([s[1] for s in signals])
             use_g.append([s[2] for s in signals])
             ginv.append(row_ginv)
+            intra.append(intra_op)
         if groups:
             out["groups"] = groups
             out["inv_groups"] = inv_g
             out["use_groups"] = use_g
             out["group_inv"] = ginv
+            out["intra_op"] = intra
     return out
 
 
 def _parse_input_conditions(rows: list[tuple], input_names: list[str]) -> dict[str, dict]:
     """Return per-input WaveDrom spec dicts."""
     current_input = ""
-    hi_rows: list[tuple[str, str, list[tuple[str, bool, str]], bool]] = []
-    lo_rows: list[tuple[str, str, list[tuple[str, bool, str]], bool]] = []
+    hi_rows: list[tuple[str, str, list[tuple[str, bool, str]], bool, str]] = []
+    lo_rows: list[tuple[str, str, list[tuple[str, bool, str]], bool, str]] = []
     specs: dict[str, dict] = {}
 
     def flush_input(name: str) -> None:
@@ -449,6 +460,7 @@ def _parse_input_conditions(rows: list[tuple], input_names: list[str]) -> dict[s
                 spec["hi_inv_groups"] = hi["inv_groups"]
                 spec["hi_use_groups"] = hi["use_groups"]
                 spec["hi_group_inv"] = hi.get("group_inv") or []
+                spec["hi_intra_op"] = hi.get("intra_op") or []
         if lo:
             spec["lo_mode"] = lo["mode"]
             if lo.get("wave") is not None:
@@ -458,6 +470,7 @@ def _parse_input_conditions(rows: list[tuple], input_names: list[str]) -> dict[s
                 spec["lo_inv_groups"] = lo["inv_groups"]
                 spec["lo_use_groups"] = lo["use_groups"]
                 spec["lo_group_inv"] = lo.get("group_inv") or []
+                spec["lo_intra_op"] = lo.get("intra_op") or []
         if spec:
             specs[name] = spec
         hi_rows.clear()
@@ -480,7 +493,8 @@ def _parse_input_conditions(rows: list[tuple], input_names: list[str]) -> dict[s
         if side not in ("hi", "lo"):
             continue
         signals = _read_signal_cells_row(row, INPUT_META_COLS + 1, INPUT_COND_SIGNAL_MAX_COLS)
-        row_tuple = (_cell_str(mode_raw), wave, signals, _is_yes(_row_val(row, 5)))
+        intra_op, row_ginv = _parse_input_cond_meta(row)
+        row_tuple = (_cell_str(mode_raw), wave, signals, row_ginv, intra_op)
         if side == "hi":
             hi_rows.append(row_tuple)
         else:
