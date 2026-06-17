@@ -384,6 +384,39 @@ class TestCellCentricDrawio:
         assert "negating=1" not in (child.get("style") or "")
         assert "negating=1" in (merge.get("style") or "")
 
+    def test_group_inv_xor_tree_child_xor_merge_xnor(self):
+        """group_inv + XOR + ≥8 inputs: child XOR, merge XNOR (~(child ^ rights))."""
+        deps = [f"IN_{i}" for i in range(AND_TREE_THRESHOLD)]
+        cfg = PowerSeqConfig(
+            rails=[
+                *[
+                    PowerRail(n, seq_type="input", deb_cycle_hi=1, deb_cycle_lo=1)
+                    for n in deps
+                ],
+                PowerRail(
+                    "OUT",
+                    seq_type="output",
+                    depends_on_lo_groups=[deps],
+                    depends_on_lo_group_inv=[True],
+                    depends_on_lo_intra_op=["xor"],
+                    cycle_hi=1,
+                    cycle_lo=1,
+                ),
+            ]
+        )
+        root = ET.fromstring(generate_drawio(cfg))
+        xor_gates = [
+            c
+            for c in root.iter("mxCell")
+            if "logic_gate" in (c.get("style") or "")
+            and "operation=xor" in (c.get("style") or "")
+        ]
+        assert len(xor_gates) == 2
+        merge = max(xor_gates, key=lambda c: float(c.find("mxGeometry").get("x")))
+        child = min(xor_gates, key=lambda c: float(c.find("mxGeometry").get("x")))
+        assert "negating=1" not in (child.get("style") or "")
+        assert "negating=1" in (merge.get("style") or "")
+
     def test_or_output_not_tree_child_or_merge_nor(self):
         """_or_output_not + ≥8 single-term groups: child OR, merge NOR."""
         deps = [f"IN_{i}" for i in range(AND_TREE_THRESHOLD)]

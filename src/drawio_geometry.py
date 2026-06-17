@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from config_models import PowerRail
+from group_logic import normalize_intra_op
 
 DEP_HIGH = "__HIGH__"
 DEP_LOW = "__LOW__"
@@ -189,8 +190,29 @@ _GATE_STYLE_OR = _load_logic_gate_style("OR1.xml")
 _GATE_STYLE_NOR = _load_logic_gate_style("NOR1.xml")
 
 
+_GATE_STYLE_XOR = _load_logic_gate_style("XOR1.xml")
+_GATE_STYLE_XNOR = _load_logic_gate_style("XNOR1.xml")
+
+_INTRA_POS = {
+    "and": _GATE_STYLE_AND,
+    "or": _GATE_STYLE_OR,
+    "xor": _GATE_STYLE_XOR,
+}
+_INTRA_NEG = {
+    "and": _GATE_STYLE_NAND,
+    "or": _GATE_STYLE_NOR,
+    "xor": _GATE_STYLE_XNOR,
+}
+
+
+def _get_intra_op(r: PowerRail, hl: str, gi: int) -> str:
+    if hl == "hi":
+        return r.get_hi_intra_op(gi)
+    return r.get_lo_intra_op(gi)
+
+
 def _group_output_not(r: PowerRail, hl: str, gi: int) -> bool:
-    """整組 AND 結果反相（group_inv）→ 繪製 NAND（negating=1）。"""
+    """整組結果反相（group_inv）→ 繪製 negating 閘。"""
     groups = r.get_hi_groups() if hl == "hi" else r.get_lo_groups()
     if gi >= len(groups) or len(groups[gi]) < 2:
         return False
@@ -208,11 +230,23 @@ def _or_output_not(r: PowerRail, hl: str) -> bool:
     return all(get_inv(gi) for gi in range(len(groups)))
 
 
-def _and_gate_style(r: PowerRail, hl: str, gi: int) -> str:
-    """AND 或 NAND（group_inv）；2-level tree 時僅 merge 層用此 style，child 恆為 AND。"""
+def _intra_child_gate_style(r: PowerRail, hl: str, gi: int) -> str:
+    """2-level tree 左側 child 閘（不反相）。"""
+    op = normalize_intra_op(_get_intra_op(r, hl, gi))
+    return _INTRA_POS[op]
+
+
+def _intra_merge_gate_style(r: PowerRail, hl: str, gi: int) -> str:
+    """Group 內 merge 閘；group_inv 時用 negating 閘。"""
+    op = normalize_intra_op(_get_intra_op(r, hl, gi))
     if _group_output_not(r, hl, gi):
-        return _GATE_STYLE_NAND
-    return _GATE_STYLE_AND
+        return _INTRA_NEG[op]
+    return _INTRA_POS[op]
+
+
+def _and_gate_style(r: PowerRail, hl: str, gi: int) -> str:
+    """相容別名：intra merge 閘 style。"""
+    return _intra_merge_gate_style(r, hl, gi)
 
 
 def _or_gate_style(r: PowerRail, hl: str) -> str:

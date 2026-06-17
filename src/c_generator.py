@@ -117,6 +117,9 @@ def _c_dep_expr(
     return base
 
 
+from group_logic import c_intra_expr
+
+
 def _groups_to_c_expr(
     groups: list[list[str]],
     rail: PowerRail,
@@ -131,6 +134,8 @@ def _groups_to_c_expr(
     get_use = {"hi": rail.get_hi_use, "lo": rail.get_lo_use, "force": rail.get_force_use}[kind]
     get_group_inv = {"hi": rail.get_hi_group_inv, "lo": rail.get_lo_group_inv,
                      "force": rail.get_force_group_inv}[kind]
+    get_intra_op = {"hi": rail.get_hi_intra_op, "lo": rail.get_lo_intra_op,
+                    "force": rail.get_force_intra_op}[kind]
 
     group_exprs = []
     for gi, group in enumerate(groups):
@@ -139,11 +144,11 @@ def _groups_to_c_expr(
             use = get_use(gi, ii, d)
             term = _c_dep_expr(d, name_to_rail, get_inv(gi, ii, d), use, var_name)
             terms.append(term)
-        group_expr = f"({' && '.join(terms)})"
+        group_expr = c_intra_expr(terms, get_intra_op(gi))
         if get_group_inv(gi):
-            group_expr = f"!{group_expr}"
+            group_expr = f"!({group_expr})"
         group_exprs.append(group_expr)
-    return " || ".join(group_exprs)
+    return " | ".join(group_exprs)
 
 
 _C_BANNER_INNER = 56  # power.c：// 與結尾 // 之間固定 56 字元

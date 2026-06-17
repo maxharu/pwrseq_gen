@@ -64,8 +64,10 @@ class PowerRail:
     depends_on_lo_use_groups: list[list[str]] = field(default_factory=list)
     depends_on_hi_groups: list[list[str]] = field(default_factory=list)  # F-DEP-08: group 內 &，group 間 |
     depends_on_lo_groups: list[list[str]] = field(default_factory=list)
-    depends_on_hi_group_inv: list[bool] = field(default_factory=list)  # 反相整組 AND 結果：!(a & b)
+    depends_on_hi_group_inv: list[bool] = field(default_factory=list)  # 反相整組結果
     depends_on_lo_group_inv: list[bool] = field(default_factory=list)
+    depends_on_hi_intra_op: list[str] = field(default_factory=list)  # group 內 and|or|xor
+    depends_on_lo_intra_op: list[str] = field(default_factory=list)
     # iForce 依賴（與 Hi/Lo 同款結構）：空則 wForce=top iForce port
     depends_on_force: list[str] = field(default_factory=list)
     depends_on_force_inv: dict[str, bool] = field(default_factory=dict)
@@ -74,6 +76,7 @@ class PowerRail:
     depends_on_force_use_groups: list[list[str]] = field(default_factory=list)
     depends_on_force_groups: list[list[str]] = field(default_factory=list)
     depends_on_force_group_inv: list[bool] = field(default_factory=list)
+    depends_on_force_intra_op: list[str] = field(default_factory=list)
     pulse_hi: str = DEFAULT_PULSE  # Hi 週期使用的 pulse（單一訊號）
     pulse_lo: str = DEFAULT_PULSE  # Lo 週期使用的 pulse
     pulse_force: str = DEFAULT_PULSE  # Force 使用的 pulse
@@ -89,11 +92,15 @@ class PowerRail:
     hi_groups: list[list[str]] = field(default_factory=list)
     hi_inv_groups: list[list[bool]] = field(default_factory=list)
     hi_use_groups: list[list[str]] = field(default_factory=list)
+    hi_group_inv: list[bool] = field(default_factory=list)
+    hi_intra_op: list[str] = field(default_factory=list)
     lo_mode: str = "constant_0"
     lo_wave: str = "0"
     lo_groups: list[list[str]] = field(default_factory=list)
     lo_inv_groups: list[list[bool]] = field(default_factory=list)
     lo_use_groups: list[list[str]] = field(default_factory=list)
+    lo_group_inv: list[bool] = field(default_factory=list)
+    lo_intra_op: list[str] = field(default_factory=list)
     cycle_hi: int = 8
     cycle_lo: int = 4
     cycle_force: int = 2
@@ -189,6 +196,25 @@ class PowerRail:
         except IndexError:
             return False
 
+    def _get_intra_op(self, kind: str, group_idx: int) -> str:
+        from group_logic import normalize_intra_op
+
+        attr = f"depends_on_{kind}_intra_op"
+        ops = getattr(self, attr, [])
+        try:
+            return normalize_intra_op(ops[group_idx])
+        except IndexError:
+            return "and"
+
+    def get_hi_intra_op(self, group_idx: int) -> str:
+        return self._get_intra_op("hi", group_idx)
+
+    def get_lo_intra_op(self, group_idx: int) -> str:
+        return self._get_intra_op("lo", group_idx)
+
+    def get_force_intra_op(self, group_idx: int) -> str:
+        return self._get_intra_op("force", group_idx)
+
     def get_depends_on_hi_flat(self) -> list[str]:
         """取得 Hi 依賴扁平列表（供驗證、拓撲用）"""
         groups = self.get_hi_groups()
@@ -209,6 +235,7 @@ _INPUT_WAVE_RAIL_KEYS = frozenset({
     "hi_mode", "lo_mode", "hi_wave", "lo_wave",
     "hi_groups", "lo_groups", "hi_inv_groups", "lo_inv_groups",
     "hi_use_groups", "lo_use_groups",
+    "hi_group_inv", "lo_group_inv", "hi_intra_op", "lo_intra_op",
 })
 
 
@@ -231,12 +258,28 @@ def input_wave_to_dict(rail: PowerRail) -> dict:
         d["hi_inv_groups"] = rail.hi_inv_groups
     if rail.hi_use_groups:
         d["hi_use_groups"] = rail.hi_use_groups
+    if any(rail.hi_group_inv):
+        d["hi_group_inv"] = rail.hi_group_inv
+    if rail.hi_intra_op:
+        from group_logic import normalize_intra_op
+
+        normed = [normalize_intra_op(o) for o in rail.hi_intra_op]
+        if any(o != "and" for o in normed):
+            d["hi_intra_op"] = normed
     if rail.lo_groups:
         d["lo_groups"] = rail.lo_groups
     if rail.lo_inv_groups:
         d["lo_inv_groups"] = rail.lo_inv_groups
     if rail.lo_use_groups:
         d["lo_use_groups"] = rail.lo_use_groups
+    if any(rail.lo_group_inv):
+        d["lo_group_inv"] = rail.lo_group_inv
+    if rail.lo_intra_op:
+        from group_logic import normalize_intra_op
+
+        normed = [normalize_intra_op(o) for o in rail.lo_intra_op]
+        if any(o != "and" for o in normed):
+            d["lo_intra_op"] = normed
     return d
 
 
@@ -247,11 +290,15 @@ def apply_input_wave_dict(rail: PowerRail, data: dict) -> None:
     rail.hi_groups = data.get("hi_groups") or []
     rail.hi_inv_groups = data.get("hi_inv_groups") or []
     rail.hi_use_groups = data.get("hi_use_groups") or []
+    rail.hi_group_inv = data.get("hi_group_inv") or []
+    rail.hi_intra_op = data.get("hi_intra_op") or []
     rail.lo_mode = data.get("lo_mode", "constant_0")
     rail.lo_wave = data.get("lo_wave", "0")
     rail.lo_groups = data.get("lo_groups") or []
     rail.lo_inv_groups = data.get("lo_inv_groups") or []
     rail.lo_use_groups = data.get("lo_use_groups") or []
+    rail.lo_group_inv = data.get("lo_group_inv") or []
+    rail.lo_intra_op = data.get("lo_intra_op") or []
 
 
 def _wavedrom_globals_from_dict(wd: dict | None) -> dict | None:
@@ -277,11 +324,15 @@ def rail_input_wave_spec(rail: PowerRail):
         hi_groups=rail.hi_groups,
         hi_inv_groups=rail.hi_inv_groups,
         hi_use_groups=rail.hi_use_groups,
+        hi_group_inv=rail.hi_group_inv,
+        hi_intra_op=rail.hi_intra_op,
         lo_mode=rail.lo_mode,
         lo_wave=rail.lo_wave,
         lo_groups=rail.lo_groups,
         lo_inv_groups=rail.lo_inv_groups,
         lo_use_groups=rail.lo_use_groups,
+        lo_group_inv=rail.lo_group_inv,
+        lo_intra_op=rail.lo_intra_op,
     )
 
 
@@ -341,12 +392,19 @@ def _cond_kind_to_dict(rail: PowerRail, kind: str) -> dict:
     inv_g = getattr(rail, f"depends_on_{kind}_inv_groups")
     use_g = getattr(rail, f"depends_on_{kind}_use_groups")
     g_inv = getattr(rail, f"depends_on_{kind}_group_inv")
+    intra = getattr(rail, f"depends_on_{kind}_intra_op")
     if inv_g:
         out[f"depends_on_{kind}_inv_groups"] = inv_g
     if use_g:
         out[f"depends_on_{kind}_use_groups"] = use_g
     if any(g_inv):
         out[f"depends_on_{kind}_group_inv"] = g_inv
+    if intra:
+        from group_logic import normalize_intra_op
+
+        normed = [normalize_intra_op(o) for o in intra]
+        if any(o != "and" for o in normed) or len(normed) == len(groups):
+            out[f"depends_on_{kind}_intra_op"] = normed[: len(groups)]
     return out
 
 
@@ -477,6 +535,8 @@ class PowerSeqConfig:
                 depends_on_lo_groups=r.get("depends_on_lo_groups") or [],
                 depends_on_hi_group_inv=r.get("depends_on_hi_group_inv") or [],
                 depends_on_lo_group_inv=r.get("depends_on_lo_group_inv") or [],
+                depends_on_hi_intra_op=r.get("depends_on_hi_intra_op") or [],
+                depends_on_lo_intra_op=r.get("depends_on_lo_intra_op") or [],
                 depends_on_force=r.get("depends_on_force", []),
                 depends_on_force_inv=r.get("depends_on_force_inv", {}),
                 depends_on_force_use=r.get("depends_on_force_use", {}),
@@ -484,6 +544,7 @@ class PowerSeqConfig:
                 depends_on_force_use_groups=r.get("depends_on_force_use_groups") or [],
                 depends_on_force_groups=r.get("depends_on_force_groups") or [],
                 depends_on_force_group_inv=r.get("depends_on_force_group_inv") or [],
+                depends_on_force_intra_op=r.get("depends_on_force_intra_op") or [],
                 pulse_hi=normalize_pulse_name(r.get("pulse_hi", DEFAULT_PULSE)),
                 pulse_lo=normalize_pulse_name(r.get("pulse_lo", DEFAULT_PULSE)),
                 pulse_force=normalize_pulse_name(r.get("pulse_force", DEFAULT_PULSE)),
@@ -503,11 +564,15 @@ class PowerSeqConfig:
                 hi_groups=r.get("hi_groups") or [],
                 hi_inv_groups=r.get("hi_inv_groups") or [],
                 hi_use_groups=r.get("hi_use_groups") or [],
+                hi_group_inv=r.get("hi_group_inv") or [],
+                hi_intra_op=r.get("hi_intra_op") or [],
                 lo_mode=r.get("lo_mode", "constant_0"),
                 lo_wave=r.get("lo_wave", "0"),
                 lo_groups=r.get("lo_groups") or [],
                 lo_inv_groups=r.get("lo_inv_groups") or [],
                 lo_use_groups=r.get("lo_use_groups") or [],
+                lo_group_inv=r.get("lo_group_inv") or [],
+                lo_intra_op=r.get("lo_intra_op") or [],
             )
             _normalize_rail_after_load(rail)
             if seq_type == "input" and not _rail_dict_has_input_wave(r):

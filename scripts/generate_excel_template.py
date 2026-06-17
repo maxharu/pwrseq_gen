@@ -56,7 +56,7 @@ OUTPUT_USE_SUFFIXES = ("|Hi Cond", "|Lo Cond", "|Force Cond")
 
 COND_SIGNAL_INIT_COLS = 8
 COND_SIGNAL_MAX_COLS = 49
-COND_META_COLS = 3
+COND_META_COLS = 4
 
 INPUT_COND_SIGNAL_INIT_COLS = 8
 INPUT_COND_SIGNAL_MAX_COLS = 49
@@ -88,11 +88,11 @@ NODE_ROWS = [
     ),
 ]
 
-# (output_name, cond_type, group_inv, *signals) — 同 Output 後續列 output_name 可留空
+# (output_name, cond_type, operation, group_inv, *signals)
 COND_ROWS = [
-    ("PCH_P0V85A_EN", "Hi", "N", "EKEY", "PRIM_VR_EN", "!RSMRST_N"),
-    ("", "Lo", "N", "Low"),
-    ("", "Force", "N"),
+    ("PCH_P0V85A_EN", "Hi", "AND", "N", "EKEY", "PRIM_VR_EN", "!RSMRST_N"),
+    ("", "Lo", "AND", "N", "Low"),
+    ("", "Force", "AND", "N"),
 ]
 
 # (input_name, side, mode, wave, group_inv, *signals)
@@ -123,8 +123,8 @@ INSTRUCTIONS = [
     "  pulse_timing: Output → Pulse_Force; Input → Pulse_Deb",
     "",
     "Output Conditions (long table)",
-    "  output_name | Cond Type (Hi/Lo/Force) | Group Inv (Y/N) | Signal…",
-    "  Multiple signals on one row = AND; multiple rows same output + type = OR",
+    "  output_name | Cond Type (Hi/Lo/Force) | Operation (AND/OR/XOR) | Group Inv (Y/N) | Signal…",
+    "  Multiple signals on one row = group Operation; multiple rows same output + type = OR",
     "  Prefix ! on signal = invert; blank Group Inv = N (0)",
     "  Output may use NAME|Hi Cond / |Lo Cond / |Force Cond (GUI use dropdown)",
     "  NAME only = Node (self)",
@@ -155,6 +155,7 @@ def _cond_headers():
     cols = [
         ("output_name", "output_name", "Same as Output on Nodes; first row of block"),
         ("cond_type", "Cond Type (Hi/Lo/Force)", "Hi / Lo / Force (dropdown)"),
+        ("operation", "Operation (AND/OR/XOR)", "AND / OR / XOR within this group"),
         ("group_inv", "Group Inv (Y/N)", "Invert whole group; blank = N (0)"),
     ]
     for i in range(1, COND_SIGNAL_INIT_COLS + 1):
@@ -426,14 +427,16 @@ def _write_cond_sheet(wb: Workbook) -> None:
         r = DATA_START_ROW + i
         output_name = row_data[0] if row_data else ""
         cond_type = row_data[1] if len(row_data) > 1 else None
-        group_inv = row_data[2] if len(row_data) > 2 else None
-        signals = row_data[3:] if len(row_data) > 3 else ()
+        operation = row_data[2] if len(row_data) > 2 else "AND"
+        group_inv = row_data[3] if len(row_data) > 3 else None
+        signals = row_data[4:] if len(row_data) > 4 else ()
 
         if output_name:
             block_start = r
         ws.cell(row=r, column=1, value=output_name if output_name else None)
         ws.cell(row=r, column=2, value=cond_type)
-        ws.cell(row=r, column=3, value=group_inv)
+        ws.cell(row=r, column=3, value=operation)
+        ws.cell(row=r, column=4, value=group_inv)
         for si, sig in enumerate(signals, start=1):
             if sig is not None:
                 ws.cell(row=r, column=COND_META_COLS + si, value=sig)
@@ -573,9 +576,9 @@ def _sync_cond_output_names() -> None:
     for name in outputs:
         if name not in blocks:
             blocks[name] = [
-                (name, "Hi", "N"),
-                ("", "Lo", "N"),
-                ("", "Force", "N"),
+                (name, "Hi", "AND", "N"),
+                ("", "Lo", "AND", "N"),
+                ("", "Force", "AND", "N"),
             ]
     COND_ROWS.clear()
     for name in outputs:

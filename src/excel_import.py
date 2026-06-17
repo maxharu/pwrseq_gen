@@ -15,11 +15,12 @@ except ImportError as e:
     raise ImportError("Excel import requires openpyxl: pip install openpyxl") from e
 
 from config_models import DEFAULT_PULSE, PowerRail, PowerSeqConfig, normalize_pulse_name
+from group_logic import is_legacy_group_inv_cell, parse_intra_op_cell
 from wavedrom_sim import DEP_HIGH, DEP_LOW
 
 DATA_START_ROW = 4
 MAX_DATA_ROW_CAP = 5000
-COND_META_COLS = 3
+COND_META_COLS = 4
 INPUT_META_COLS = 5
 COND_SIGNAL_MAX_COLS = 49
 INPUT_COND_SIGNAL_MAX_COLS = 49
@@ -217,28 +218,39 @@ def _read_signal_cells_row(
     return signals
 
 
+def _parse_output_cond_meta(row: tuple) -> tuple[str, bool]:
+    """Return (intra_op, group_inv) from row cols 3–4 (legacy: col3 = group inv only)."""
+    c3 = _row_val(row, 3)
+    if is_legacy_group_inv_cell(c3):
+        return "and", _is_yes(c3)
+    return parse_intra_op_cell(c3), _is_yes(_row_val(row, 4))
+
+
 def _apply_condition_groups(
     rail: PowerRail,
     kind: str,
-    row_groups: list[tuple[list[tuple[str, bool, str]], bool]],
+    row_groups: list[tuple[list[tuple[str, bool, str]], bool, str]],
 ) -> None:
     names_g: list[list[str]] = []
     inv_g: list[list[bool]] = []
     use_g: list[list[str]] = []
     ginv: list[bool] = []
-    for signals, group_inv in row_groups:
+    intra: list[str] = []
+    for signals, group_inv, intra_op in row_groups:
         if not signals:
             continue
         names_g.append([s[0] for s in signals])
         inv_g.append([s[1] for s in signals])
         use_g.append([s[2] for s in signals])
         ginv.append(group_inv)
+        intra.append(intra_op)
 
     prefix = f"depends_on_{kind}"
     setattr(rail, f"{prefix}_groups", names_g)
     setattr(rail, f"{prefix}_inv_groups", inv_g)
     setattr(rail, f"{prefix}_use_groups", use_g)
     setattr(rail, f"{prefix}_group_inv", ginv)
+    setattr(rail, f"{prefix}_intra_op", intra)
 
     flat = [n for g in names_g for n in g]
     setattr(rail, prefix, flat)
@@ -327,7 +339,7 @@ def _parse_nodes(rows: list[tuple], defaults: dict[str, Any]) -> list[PowerRail]
 
 def _parse_output_conditions(rows: list[tuple], rails_by_name: dict[str, PowerRail]) -> None:
     current_output = ""
-    pending: dict[str, list[tuple[list[tuple[str, bool, str]], bool]]] = {
+    pending: dict[str, list[tuple[list[tuple[str, bool, str]], bool, str]]] = {
         "hi": [],
         "lo": [],
         "force": [],
@@ -365,9 +377,9 @@ def _parse_output_conditions(rows: list[tuple], rails_by_name: dict[str, PowerRa
         kind = cond_type.lower()
         if kind not in pending:
             continue
-        group_inv = _is_yes(_row_val(row, 3))
+        intra_op, group_inv = _parse_output_cond_meta(row)
         signals = _read_signal_cells_row(row, COND_META_COLS + 1, COND_SIGNAL_MAX_COLS)
-        pending[kind].append((signals, group_inv))
+        pending[kind].append((signals, group_inv, intra_op))
 
     if current_output:
         flush(current_output)
@@ -399,16 +411,19 @@ def _parse_input_side_rows(
         groups: list[list[str]] = []
         inv_g: list[list[bool]] = []
         use_g: list[list[str]] = []
-        for _mode, _wave, signals, _ginv in rows:
+        ginv: list[bool] = []
+        for _mode, _wave, signals, row_ginv in rows:
             if not signals:
                 continue
             groups.append([s[0] for s in signals])
             inv_g.append([s[1] for s in signals])
             use_g.append([s[2] for s in signals])
+            ginv.append(row_ginv)
         if groups:
             out["groups"] = groups
             out["inv_groups"] = inv_g
             out["use_groups"] = use_g
+            out["group_inv"] = ginv
     return out
 
 
@@ -433,6 +448,7 @@ def _parse_input_conditions(rows: list[tuple], input_names: list[str]) -> dict[s
                 spec["hi_groups"] = hi["groups"]
                 spec["hi_inv_groups"] = hi["inv_groups"]
                 spec["hi_use_groups"] = hi["use_groups"]
+                spec["hi_group_inv"] = hi.get("group_inv") or []
         if lo:
             spec["lo_mode"] = lo["mode"]
             if lo.get("wave") is not None:
@@ -441,6 +457,7 @@ def _parse_input_conditions(rows: list[tuple], input_names: list[str]) -> dict[s
                 spec["lo_groups"] = lo["groups"]
                 spec["lo_inv_groups"] = lo["inv_groups"]
                 spec["lo_use_groups"] = lo["use_groups"]
+                spec["lo_group_inv"] = lo.get("group_inv") or []
         if spec:
             specs[name] = spec
         hi_rows.clear()

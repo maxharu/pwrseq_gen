@@ -52,6 +52,7 @@ from config_models import (
     rail_input_wave_spec,
 )
 from drawio_export import generate_drawio
+from group_logic import INTRA_OP_LABELS, intra_op_label, normalize_intra_op
 from validator import validate
 from verilog_generator import generate_verilog
 from c_generator import generate_c
@@ -119,6 +120,66 @@ COND_THEME = {
     },
 }
 
+
+def _resolve_ctk_color(fg_color, appearance: str | None = None) -> str:
+    """CTk fg_color（含 tuple / transparent）→ tk 可用的單色字串。"""
+    if fg_color in (None, "transparent"):
+        return ""
+    if isinstance(fg_color, (list, tuple)):
+        mode = appearance or ctk.get_appearance_mode()
+        return fg_color[1] if mode == "Dark" else fg_color[0]
+    return str(fg_color)
+
+
+def _make_hscroll_row(parent, *, bg_color: str = "", row_height: int = 34) -> ctk.CTkFrame:
+    """單列橫向捲動容器；回傳 inner frame，子元件以 pack(side=left) 放入。"""
+    shell = ctk.CTkFrame(parent, fg_color="transparent")
+    shell.pack(fill="x", padx=S_SM, pady=S_XS)
+    shell.grid_columnconfigure(0, weight=1)
+
+    canvas = tk.Canvas(
+        shell, height=row_height, highlightthickness=0, borderwidth=0,
+        bg=bg_color or _resolve_ctk_color(parent.cget("fg_color")),
+    )
+    canvas.grid(row=0, column=0, sticky="ew")
+
+    hbar = ctk.CTkScrollbar(shell, orientation="horizontal", command=canvas.xview)
+    inner = ctk.CTkFrame(canvas, fg_color="transparent")
+    win = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+    def _sync_scroll(_evt=None):
+        try:
+            inner.update_idletasks()
+            req_w = inner.winfo_reqwidth()
+            req_h = max(row_height, inner.winfo_reqheight())
+            canvas.configure(scrollregion=(0, 0, req_w, req_h), height=req_h)
+            canvas.itemconfigure(win, width=req_w)
+            viewport = canvas.winfo_width()
+            if req_w > viewport and viewport > 0:
+                canvas.configure(xscrollcommand=hbar.set)
+                if not hbar.winfo_ismapped():
+                    hbar.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+            else:
+                hbar.grid_remove()
+                canvas.configure(xscrollcommand=lambda *_a: None)
+                canvas.xview_moveto(0)
+        except Exception:
+            pass
+
+    def _on_shift_wheel(evt):
+        try:
+            canvas.xview_scroll(int(-1 * (evt.delta / 120)), "units")
+            return "break"
+        except Exception:
+            pass
+
+    inner.bind("<Configure>", _sync_scroll, add="+")
+    shell.bind("<Configure>", _sync_scroll, add="+")
+    for w in (canvas, inner):
+        w.bind("<Shift-MouseWheel>", _on_shift_wheel, add="+")
+    shell.after_idle(_sync_scroll)
+    return inner
+
 TYPE_THEME = {
     "output": {"pill_bg": ("#dbeafe", "#1e3a8a"), "pill_fg": ("#1e3a8a", "#dbeafe")},
     "input":  {"pill_bg": ("#fae8ff", "#581c87"), "pill_fg": ("#581c87", "#fae8ff")},
@@ -177,7 +238,7 @@ class CondSectionFrame(ctk.CTkFrame):
     """Hi / Lo / Force 三段條件區塊的共用實作。
 
     kind: "hi" | "lo" | "force" — 決定配色與標題。
-    groups: list[list[str]]，group 內 AND，groups 間 OR。
+    groups: list[list[str]]，group 內 Operation（AND/OR/XOR），groups 間 OR。
     """
 
     def __init__(self, master, kind: str,
@@ -189,6 +250,7 @@ class CondSectionFrame(ctk.CTkFrame):
                  initial_inv_flat: dict,
                  initial_use_flat: dict,
                  initial_group_inv: Optional[list[bool]] = None,
+                 initial_group_intra_op: Optional[list[str]] = None,
                  show_group_inv: bool = True,
                  on_change: Optional[Callable[[], None]] = None,
                  get_self_name: Optional[Callable[[], str]] = None,
@@ -211,13 +273,18 @@ class CondSectionFrame(ctk.CTkFrame):
         self._init_inv_flat = initial_inv_flat or {}
         self._init_use_flat = initial_use_flat or {}
 
-        # 每個 group 一個布林：反相整組 AND 結果 !(a & b)。與 self.groups 同序。
+        # 每個 group：整組反相、區塊內運算（AND/OR/XOR）。與 self.groups 同序。
         self.group_inv: list[bool] = [bool(x) for x in (initial_group_inv or [])]
+        self.group_intra_op: list[str] = [
+            normalize_intra_op(x) for x in (initial_group_intra_op or [])
+        ]
         self._sync_group_inv_len()
+        self._sync_group_intra_op_len()
 
         self.inv_vars: dict[tuple[int, int], ctk.BooleanVar] = {}
         self.use_vars: dict[tuple[int, int], ctk.StringVar] = {}
         self.group_inv_vars: dict[int, ctk.BooleanVar] = {}
+        self.group_intra_op_vars: dict[int, ctk.StringVar] = {}
         self.rows: dict[tuple[int, int], ctk.CTkFrame] = {}
         self.group_frames: list[dict] = []
 
@@ -240,6 +307,13 @@ class CondSectionFrame(ctk.CTkFrame):
             self.group_inv = self.group_inv + [False] * (n - len(self.group_inv))
         elif len(self.group_inv) > n:
             self.group_inv = self.group_inv[:n]
+
+    def _sync_group_intra_op_len(self):
+        n = len(self.groups)
+        if len(self.group_intra_op) < n:
+            self.group_intra_op = self.group_intra_op + ["and"] * (n - len(self.group_intra_op))
+        elif len(self.group_intra_op) > n:
+            self.group_intra_op = self.group_intra_op[:n]
 
     # ---- initial value lookup ----
     def _get_initial_inv(self, gi: int, ii: int, name: str) -> bool:
@@ -274,7 +348,7 @@ class CondSectionFrame(ctk.CTkFrame):
     def _build_ui(self):
         toolbar = ctk.CTkFrame(self, fg_color="transparent")
         toolbar.pack(fill="x", pady=(0, S_SM))
-        ctk.CTkLabel(toolbar, text="group 內 AND, groups 間 OR",
+        ctk.CTkLabel(toolbar, text="group 內 Operation, groups 間 OR",
                      font=FONT_HINT, text_color="gray").pack(side="left", padx=(0, S_MD))
         ctk.CTkButton(toolbar, text="+ Add Group", width=100,
                       command=self.add_group).pack(side="left")
@@ -290,8 +364,10 @@ class CondSectionFrame(ctk.CTkFrame):
         self.inv_vars.clear()
         self.use_vars.clear()
         self.group_inv_vars.clear()
+        self.group_intra_op_vars.clear()
         self.rows.clear()
         self._sync_group_inv_len()
+        self._sync_group_intra_op_len()
         for gi in range(len(self.groups)):
             self._add_group_ui(gi)
 
@@ -306,23 +382,10 @@ class CondSectionFrame(ctk.CTkFrame):
         )
         frame.pack(fill="x", pady=S_XS, padx=(S_LG, S_SM))
 
-        header = ctk.CTkFrame(frame, fg_color="transparent")
-        header.pack(fill="x", padx=S_SM, pady=S_XS)
+        group_bg = _resolve_ctk_color(frame.cget("fg_color"))
+        header = _make_hscroll_row(frame, bg_color=group_bg, row_height=34)
 
-        # 右側 Inv 須先 pack，否則左側元件會把右緣擠掉（Tk pack 順序）
-        if self.show_group_inv:
-            inv_init = bool(self.group_inv[gi]) if gi < len(self.group_inv) else False
-            gvar = ctk.BooleanVar(value=inv_init)
-            self.group_inv_vars[gi] = gvar
-            gvar.trace_add("write", lambda *_a, g=gi: self._on_group_inv_changed(g))
-            ctk.CTkCheckBox(
-                header, text="Inv", variable=gvar, width=100,
-            ).pack(side="right", padx=(S_SM, 0))
-
-        left_hdr = ctk.CTkFrame(header, fg_color="transparent")
-        left_hdr.pack(side="left", fill="x", expand=True)
-
-        handle = ctk.CTkLabel(left_hdr, text="\u2261", width=18,
+        handle = ctk.CTkLabel(header, text="\u2261", width=18,
                               text_color=("gray40", "gray70"), cursor="hand2")
         handle.pack(side="left", padx=(0, S_SM))
         handle.bind("<ButtonPress-1>",
@@ -332,19 +395,43 @@ class CondSectionFrame(ctk.CTkFrame):
         handle.bind("<ButtonRelease-1>",
                     lambda _e: self._on_group_drag_release())
 
-        ctk.CTkLabel(left_hdr, text=f"Group {gi + 1}",
+        ctk.CTkLabel(header, text=f"Group {gi + 1}",
                      text_color=self.theme["text"],
-                     font=FONT_CHIP, width=60).pack(side="left", padx=(0, S_SM))
+                     font=FONT_CHIP, width=56).pack(side="left", padx=(0, S_SM))
 
         dep_options = self.get_dep_options() or [""]
-        combo = ctk.CTkComboBox(left_hdr, values=dep_options, width=140)
+        combo = ctk.CTkComboBox(header, values=dep_options, width=100)
         combo.pack(side="left", padx=(0, S_SM))
         combo.set(dep_options[0])
 
-        ctk.CTkButton(left_hdr, text="+ Add", width=60,
-                      command=lambda g=gi: self._add_cond_to_group(g)).pack(side="left", padx=(0, S_SM))
-        ctk.CTkButton(left_hdr, text="Del Group", width=80,
-                      command=lambda g=gi: self._remove_group(g)).pack(side="left")
+        ctk.CTkButton(header, text="+ Add", width=56,
+                      command=lambda g=gi: self._add_cond_to_group(g)).pack(
+            side="left", padx=(0, S_SM)
+        )
+        ctk.CTkButton(header, text="Del Group", width=72,
+                      command=lambda g=gi: self._remove_group(g)).pack(
+            side="left", padx=(0, S_SM)
+        )
+
+        op_init = intra_op_label(self.group_intra_op[gi] if gi < len(self.group_intra_op) else "and")
+        op_var = ctk.StringVar(value=op_init)
+        self.group_intra_op_vars[gi] = op_var
+        op_var.trace_add("write", lambda *_a, g=gi: self._on_group_intra_op_changed(g))
+        op_row = ctk.CTkFrame(header, fg_color="transparent")
+        op_row.pack(side="left", padx=(0, S_SM))
+        ctk.CTkLabel(op_row, text="Op", font=FONT_HINT).pack(side="left", padx=(0, 4))
+        ctk.CTkOptionMenu(
+            op_row, values=list(INTRA_OP_LABELS), variable=op_var, width=68,
+        ).pack(side="left")
+
+        if self.show_group_inv:
+            inv_init = bool(self.group_inv[gi]) if gi < len(self.group_inv) else False
+            gvar = ctk.BooleanVar(value=inv_init)
+            self.group_inv_vars[gi] = gvar
+            gvar.trace_add("write", lambda *_a, g=gi: self._on_group_inv_changed(g))
+            ctk.CTkCheckBox(
+                header, text="Inv", variable=gvar, width=72,
+            ).pack(side="left", padx=(0, S_SM))
 
         list_frame = ctk.CTkFrame(frame, fg_color="transparent")
         # list_frame 在首列加入時才 pack
@@ -408,9 +495,20 @@ class CondSectionFrame(ctk.CTkFrame):
                 self.group_inv[gi] = False
         self._fire_change()
 
+    def _on_group_intra_op_changed(self, gi: int):
+        if 0 <= gi < len(self.group_intra_op):
+            try:
+                self.group_intra_op[gi] = normalize_intra_op(
+                    self.group_intra_op_vars[gi].get()
+                )
+            except Exception:
+                self.group_intra_op[gi] = "and"
+        self._fire_change()
+
     def add_group(self):
         self.groups.append([])
         self.group_inv.append(False)
+        self.group_intra_op.append("and")
         self._rebuild_groups_ui()
         self._fire_change()
 
@@ -454,9 +552,12 @@ class CondSectionFrame(ctk.CTkFrame):
         del self.groups[gi]
         if gi < len(self.group_inv):
             del self.group_inv[gi]
+        if gi < len(self.group_intra_op):
+            del self.group_intra_op[gi]
         if not self.groups:
             self.groups = [[]]
             self.group_inv = [False]
+            self.group_intra_op = ["and"]
         self._rebuild_groups_ui()
         # 還原 snapshot：被移除 group 之後的 gi 要左移 1
         for (old_gi, old_ii), (inv, use) in snap.items():
@@ -772,6 +873,8 @@ class CondSectionFrame(ctk.CTkFrame):
         self.groups[:] = [self.groups[old] for old in new_order]
         self._sync_group_inv_len()
         self.group_inv[:] = [self.group_inv[old] for old in new_order]
+        self._sync_group_intra_op_len()
+        self.group_intra_op[:] = [self.group_intra_op[old] for old in new_order]
         self._rebuild_groups_ui()
         for new_gi, old_gi in enumerate(new_order):
             for ii in range(len(self.groups[new_gi])):
@@ -841,6 +944,23 @@ class CondSectionFrame(ctk.CTkFrame):
             result.append(val)
         return result
 
+    def get_group_intra_op(self) -> list[str]:
+        """每個非空 group 的區塊內運算，與 get_groups() 同序。"""
+        result = []
+        for gi, g in enumerate(self.groups):
+            if not g:
+                continue
+            val = "and"
+            if gi in self.group_intra_op_vars:
+                try:
+                    val = normalize_intra_op(self.group_intra_op_vars[gi].get())
+                except Exception:
+                    val = "and"
+            elif gi < len(self.group_intra_op):
+                val = normalize_intra_op(self.group_intra_op[gi])
+            result.append(val)
+        return result
+
     def get_inv_flat(self) -> dict[str, bool]:
         d = {}
         for gi, g in enumerate(self.groups):
@@ -898,6 +1018,8 @@ class InputWaveSidePanel(ctk.CTkFrame):
         groups = getattr(spec, f"{prefix}_groups") or []
         inv_groups = getattr(spec, f"{prefix}_inv_groups") or []
         use_groups = getattr(spec, f"{prefix}_use_groups") or []
+        group_inv = getattr(spec, f"{prefix}_group_inv") or []
+        intra_op = getattr(spec, f"{prefix}_intra_op") or []
 
         hint = ctk.CTkLabel(
             self,
@@ -943,8 +1065,9 @@ class InputWaveSidePanel(ctk.CTkFrame):
             initial_use_groups=use_groups,
             initial_inv_flat={},
             initial_use_flat={},
-            initial_group_inv=[],
-            show_group_inv=False,
+            initial_group_inv=list(group_inv),
+            initial_group_intra_op=list(intra_op),
+            show_group_inv=True,
             on_change=self._fire_change,
             get_self_name=get_self_name,
         )
@@ -999,6 +1122,8 @@ class InputWaveSidePanel(ctk.CTkFrame):
             out["groups"] = self._cond_section.get_groups()
             out["inv_groups"] = self._cond_section.get_inv_groups()
             out["use_groups"] = self._cond_section.get_use_groups()
+            out["group_inv"] = self._cond_section.get_group_inv()
+            out["intra_op"] = self._cond_section.get_group_intra_op()
         return out
 
 
@@ -1062,11 +1187,15 @@ class InputWaveCondFrame(ctk.CTkFrame):
             hi_groups=hi.get("groups") or [],
             hi_inv_groups=hi.get("inv_groups") or [],
             hi_use_groups=hi.get("use_groups") or [],
+            hi_group_inv=hi.get("group_inv") or [],
+            hi_intra_op=hi.get("intra_op") or [],
             lo_mode=lo["mode"],
             lo_wave=lo.get("wave", "0"),
             lo_groups=lo.get("groups") or [],
             lo_inv_groups=lo.get("inv_groups") or [],
             lo_use_groups=lo.get("use_groups") or [],
+            lo_group_inv=lo.get("group_inv") or [],
+            lo_intra_op=lo.get("intra_op") or [],
         )
 
 
@@ -1239,6 +1368,9 @@ class RailEditorFrame(ctk.CTkFrame):
             init_group_inv = {"hi": self.rail.depends_on_hi_group_inv,
                               "lo": self.rail.depends_on_lo_group_inv,
                               "force": self.rail.depends_on_force_group_inv}[kind]
+            init_group_intra_op = {"hi": self.rail.depends_on_hi_intra_op,
+                                   "lo": self.rail.depends_on_lo_intra_op,
+                                   "force": self.rail.depends_on_force_intra_op}[kind]
             sec = CondSectionFrame(
                 tab, kind,
                 get_dep_options=self._dep_options,
@@ -1249,6 +1381,7 @@ class RailEditorFrame(ctk.CTkFrame):
                 initial_inv_flat=init_inv_flat,
                 initial_use_flat=init_use_flat,
                 initial_group_inv=init_group_inv,
+                initial_group_intra_op=init_group_intra_op,
                 get_self_name=lambda: self.rail.name,
             )
             sec.pack(fill="both", expand=True, padx=S_SM, pady=S_SM)
@@ -1394,6 +1527,9 @@ class RailEditorFrame(ctk.CTkFrame):
         hi_group_inv = hi.get_group_inv()
         lo_group_inv = lo.get_group_inv()
         force_group_inv = fo.get_group_inv()
+        hi_group_intra_op = hi.get_group_intra_op()
+        lo_group_intra_op = lo.get_group_intra_op()
+        force_group_intra_op = fo.get_group_intra_op()
 
         seq_type = self.var_type.get()
         if seq_type == "input":
@@ -1403,6 +1539,7 @@ class RailEditorFrame(ctk.CTkFrame):
             hi_inv_groups = lo_inv_groups = force_inv_groups = []
             hi_use_groups = lo_use_groups = force_use_groups = []
             hi_group_inv = lo_group_inv = force_group_inv = []
+            hi_group_intra_op = lo_group_intra_op = force_group_intra_op = []
 
         rail = PowerRail(
             name=rail_name,
@@ -1422,6 +1559,8 @@ class RailEditorFrame(ctk.CTkFrame):
             depends_on_lo_use_groups=lo_use_groups,
             depends_on_hi_group_inv=hi_group_inv,
             depends_on_lo_group_inv=lo_group_inv,
+            depends_on_hi_intra_op=hi_group_intra_op,
+            depends_on_lo_intra_op=lo_group_intra_op,
             depends_on_force=flat_force,
             depends_on_force_groups=groups_force,
             depends_on_force_inv=fo.get_inv_flat() if seq_type != "input" else {},
@@ -1429,6 +1568,7 @@ class RailEditorFrame(ctk.CTkFrame):
             depends_on_force_inv_groups=force_inv_groups,
             depends_on_force_use_groups=force_use_groups,
             depends_on_force_group_inv=force_group_inv,
+            depends_on_force_intra_op=force_group_intra_op,
             pulse_hi=self.var_pulse_hi.get() if seq_type != "input" else DEFAULT_PULSE,
             pulse_lo=self.var_pulse_lo.get() if seq_type != "input" else DEFAULT_PULSE,
             pulse_force=self.var_pulse_force.get() if seq_type != "input" else DEFAULT_PULSE,

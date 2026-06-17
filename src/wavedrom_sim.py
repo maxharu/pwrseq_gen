@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from config_models import PowerSeqConfig, PowerRail, DEFAULT_PULSE, normalize_pulse_name
+from group_logic import eval_intra_op
 
 DEP_HIGH = "__HIGH__"
 DEP_LOW = "__LOW__"
@@ -19,11 +20,15 @@ class InputWaveSpec:
     hi_groups: list[list[str]] = field(default_factory=list)
     hi_inv_groups: list[list[bool]] = field(default_factory=list)
     hi_use_groups: list[list[str]] = field(default_factory=list)
+    hi_group_inv: list[bool] = field(default_factory=list)
+    hi_intra_op: list[str] = field(default_factory=list)
     lo_mode: str = "constant_0"
     lo_wave: str = "0"
     lo_groups: list[list[str]] = field(default_factory=list)
     lo_inv_groups: list[list[bool]] = field(default_factory=list)
     lo_use_groups: list[list[str]] = field(default_factory=list)
+    lo_group_inv: list[bool] = field(default_factory=list)
+    lo_intra_op: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict) -> InputWaveSpec:
@@ -33,11 +38,15 @@ class InputWaveSpec:
             hi_groups=d.get("hi_groups") or [],
             hi_inv_groups=d.get("hi_inv_groups") or [],
             hi_use_groups=d.get("hi_use_groups") or [],
+            hi_group_inv=d.get("hi_group_inv") or [],
+            hi_intra_op=d.get("hi_intra_op") or [],
             lo_mode=d.get("lo_mode", "constant_0"),
             lo_wave=d.get("lo_wave", "0"),
             lo_groups=d.get("lo_groups") or [],
             lo_inv_groups=d.get("lo_inv_groups") or [],
             lo_use_groups=d.get("lo_use_groups") or [],
+            lo_group_inv=d.get("lo_group_inv") or [],
+            lo_intra_op=d.get("lo_intra_op") or [],
         )
 
     def to_dict(self) -> dict:
@@ -52,12 +61,20 @@ class InputWaveSpec:
             d["hi_inv_groups"] = self.hi_inv_groups
         if self.hi_use_groups:
             d["hi_use_groups"] = self.hi_use_groups
+        if any(self.hi_group_inv):
+            d["hi_group_inv"] = self.hi_group_inv
+        if self.hi_intra_op:
+            d["hi_intra_op"] = self.hi_intra_op
         if self.lo_groups:
             d["lo_groups"] = self.lo_groups
         if self.lo_inv_groups:
             d["lo_inv_groups"] = self.lo_inv_groups
         if self.lo_use_groups:
             d["lo_use_groups"] = self.lo_use_groups
+        if any(self.lo_group_inv):
+            d["lo_group_inv"] = self.lo_group_inv
+        if self.lo_intra_op:
+            d["lo_intra_op"] = self.lo_intra_op
         return d
 
 
@@ -272,10 +289,14 @@ def _eval_spec_groups(
     out_hi: dict[str, int],
     out_lo: dict[str, int],
     out_val: dict[str, int],
+    group_inv: list[bool] | None = None,
+    intra_op: list[str] | None = None,
 ) -> int:
-    """評估 input 的 hi/lo 訊號條件（group 內 AND、groups 間 OR）。"""
+    """評估 input 的 hi/lo 訊號條件（group 內 Operation、groups 間 OR）。"""
     if not groups:
         return 0
+    group_inv = group_inv or []
+    intra_op = intra_op or []
     group_results = []
     for gi, group in enumerate(groups):
         if not group:
@@ -302,7 +323,11 @@ def _eval_spec_groups(
                 )
             terms.append(v)
         if terms:
-            group_results.append(1 if all(terms) else 0)
+            op = intra_op[gi] if gi < len(intra_op) else "and"
+            gr = eval_intra_op(op, terms)
+            if gi < len(group_inv) and group_inv[gi]:
+                gr = 1 - gr
+            group_results.append(gr)
     return 1 if any(group_results) else 0
 
 
@@ -322,6 +347,7 @@ def _input_inst_hi_lo(
         hi = _eval_spec_groups(
             spec.hi_groups, spec.hi_inv_groups, spec.hi_use_groups, "hi",
             name_to_rail, raw, out_hi, out_lo, out_val,
+            spec.hi_group_inv, spec.hi_intra_op,
         )
     elif spec.hi_mode == "constant_1":
         hi = 1
@@ -337,6 +363,7 @@ def _input_inst_hi_lo(
         lo = _eval_spec_groups(
             spec.lo_groups, spec.lo_inv_groups, spec.lo_use_groups, "lo",
             name_to_rail, raw, out_hi, out_lo, out_val,
+            spec.lo_group_inv, spec.lo_intra_op,
         )
     elif spec.lo_mode == "custom":
         lo = lo_wave_bits[step] if step < len(lo_wave_bits) else 0
@@ -451,6 +478,8 @@ def _eval_groups(
     get_use = {"hi": rail.get_hi_use, "lo": rail.get_lo_use, "force": rail.get_force_use}[kind]
     get_group_inv = {"hi": rail.get_hi_group_inv, "lo": rail.get_lo_group_inv,
                      "force": rail.get_force_group_inv}[kind]
+    get_intra_op = {"hi": rail.get_hi_intra_op, "lo": rail.get_lo_intra_op,
+                    "force": rail.get_force_intra_op}[kind]
 
     group_results = []
     for gi, group in enumerate(groups):
@@ -465,7 +494,7 @@ def _eval_groups(
                 inv, use,
             )
             terms.append(v)
-        gr = 1 if all(terms) else 0
+        gr = eval_intra_op(get_intra_op(gi), terms)
         if get_group_inv(gi):
             gr = 1 - gr
         group_results.append(gr)
