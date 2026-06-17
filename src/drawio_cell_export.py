@@ -18,7 +18,7 @@ from config_models import PowerSeqConfig, PowerRail
 from drawio_export_options import DrawioExportOptions
 from verilog_generator import _internal_sig
 
-from drawio_export import (  # noqa: E402
+from drawio_geometry import (  # noqa: E402
     AND_GATE_H,
     AND_GATE_W,
     CELL_GROUP_H,
@@ -51,6 +51,8 @@ from drawio_export import (  # noqa: E402
     _and_gate_style,
     _deb_port_label,
     _escape_xml,
+    _GATE_STYLE_AND,
+    _GATE_STYLE_OR,
     _or_gate_style,
 )
 
@@ -259,10 +261,17 @@ def _max_effective_stack(groups: list[list[str]]) -> int:
     return max(_effective_stack_inputs(len(g)) for g in groups)
 
 
+def _or_columns(n: int) -> int:
+    if n < 2:
+        return 0
+    if n < AND_TREE_THRESHOLD:
+        return 1
+    return 2
+
+
 def _gate_depth(groups: list[list[str]]) -> int:
     n_and = sum(_and_columns(len(g)) for g in groups)
-    n_or = 1 if len(groups) >= 2 else 0
-    return n_and + n_or
+    return n_and + _or_columns(len(groups))
 
 
 def _max_group_inputs(groups: list[list[str]]) -> int:
@@ -423,15 +432,19 @@ def _wire_and_branch(
             b.edge(lid, gid, stroke=STROKE_DEFAULT)
         return gid, label_x
 
-    # 2-level cascade per example (1).xml: child AND (left) → merge AND (right);
-    # left_terms feed child; right_terms feed merge directly (second label column).
+    # 2-level cascade: child AND (left) → merge gate (right).
+    # group_inv inverts only at merge (~(child & rights)), not on child (~child).
     mid = (len(terms) + 1) // 2
     left_terms, right_terms = terms[:mid], terms[mid:]
 
     merge_id, merge_gx = _place_gate(b, attach_right, gy, AND_GATE_W, AND_GATE_H, style)
-    child_right = merge_gx - AND_GATE_W - 2 * GAP
     child_id, child_gx = _place_gate(
-        b, child_right, gy, AND_GATE_W, AND_GATE_H, style
+        b,
+        merge_gx - AND_GATE_W - 2 * GAP,
+        gy,
+        AND_GATE_W,
+        AND_GATE_H,
+        _GATE_STYLE_AND,
     )
 
     left_label_x = child_gx - GAP - LABEL_W
@@ -449,6 +462,55 @@ def _wire_and_branch(
         b.edge(lid, merge_id, stroke=STROKE_DEFAULT)
 
     return merge_id, left_label_x
+
+
+def _wire_or_fanin(
+    b: _Builder,
+    rail: PowerRail,
+    hl: str,
+    branch_ids: list[str],
+    deb_id: str,
+    deb_anchor_y: float,
+    gate_right: float,
+    stroke: str,
+    edge_val: str,
+) -> None:
+    """Wire OR groups: single OR, or 2-level tree (child OR → merge OR/NOR)."""
+    if len(branch_ids) == 1:
+        b.edge(branch_ids[0], deb_id, stroke=stroke, value=edge_val)
+        return
+
+    gy = deb_anchor_y - OR_GATE_H / 2
+    merge_style = _or_gate_style(rail, hl)
+
+    if len(branch_ids) < AND_TREE_THRESHOLD:
+        or_id, _ = _place_gate(b, gate_right, gy, OR_GATE_W, OR_GATE_H, merge_style)
+        for bid in branch_ids:
+            b.edge(bid, or_id, stroke=STROKE_DEFAULT)
+        b.edge(or_id, deb_id, stroke=stroke, value=edge_val)
+        return
+
+    # 2-level: child OR (left) → merge OR/NOR (right); invert only at merge when NOR.
+    mid = (len(branch_ids) + 1) // 2
+    left_ids, right_ids = branch_ids[:mid], branch_ids[mid:]
+
+    merge_id, merge_gx = _place_gate(
+        b, gate_right, gy, OR_GATE_W, OR_GATE_H, merge_style
+    )
+    child_id, _ = _place_gate(
+        b,
+        merge_gx - OR_GATE_W - 2 * GAP,
+        gy,
+        OR_GATE_W,
+        OR_GATE_H,
+        _GATE_STYLE_OR,
+    )
+    for bid in left_ids:
+        b.edge(bid, child_id, stroke=STROKE_DEFAULT)
+    b.edge(child_id, merge_id, stroke=STROKE_DEFAULT)
+    for bid in right_ids:
+        b.edge(bid, merge_id, stroke=STROKE_DEFAULT)
+    b.edge(merge_id, deb_id, stroke=stroke, value=edge_val)
 
 
 def _wire_path_v2(
@@ -490,13 +552,11 @@ def _wire_path_v2(
             f"{_internal_sig(rail.name)}_{hl}"
         )
 
-    or_id: str | None = None
     attach_right = gate_right
     if len(parsed_groups) >= 2:
-        gy = deb_anchor_y - OR_GATE_H / 2
-        or_id, attach_right = _place_gate(
-            b, gate_right, gy, OR_GATE_W, OR_GATE_H, _or_gate_style(rail, hl)
-        )
+        attach_right -= OR_GATE_W
+        if len(parsed_groups) >= AND_TREE_THRESHOLD:
+            attach_right -= OR_GATE_W + 2 * GAP
 
     branch_ids: list[str] = []
     for gi, terms in enumerate(parsed_groups):
@@ -509,10 +569,18 @@ def _wire_path_v2(
     if has_export:
         edge_val = _export_edge_label(f"{_internal_sig(rail.name)}_{hl}")
 
-    if or_id is not None:
-        for bid in branch_ids:
-            b.edge(bid, or_id, stroke=STROKE_DEFAULT)
-        b.edge(or_id, deb_id, stroke=stroke, value=edge_val)
+    if len(branch_ids) >= 2:
+        _wire_or_fanin(
+            b,
+            rail,
+            hl,
+            branch_ids,
+            deb_id,
+            deb_anchor_y,
+            gate_right,
+            stroke,
+            edge_val,
+        )
     else:
         b.edge(branch_ids[0], deb_id, stroke=stroke, value=edge_val)
 

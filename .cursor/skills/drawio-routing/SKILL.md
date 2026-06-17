@@ -3,8 +3,8 @@ name: drawio-routing
 description: >-
   pwrseq_gen Draw.io edge routing: (1) Input/input NOT → orthogonal auto;
   (2) Gate output → next-level input (incl. Deb) frozen waypoints, three shapes;
-  (3) Feedback (FB) → five-segment frozen waypoints from Q/~Q/gate per
-  FB_Routing.xml (same-source same-layer shares one X channel). Covers
+  (3) Feedback (FB) → five-segment frozen waypoints from Q/~Q/gate
+  (same-source same-layer shares one X channel). Covers
   feedback_auto_edge_ids, _apply_feedback_routing,
   _build_feedback_source_layer_slots, freeze_edge_routing, _GateExitLanes,
   use=hi/lo passthrough exitX (AND right vs Deb placeholder).
@@ -16,9 +16,9 @@ description: >-
 **三種走線制度**。座標與欄寬見 [drawio-placement](../drawio-placement/SKILL.md)。
 完整規格：`doc/DRAWIO_RULES.md` §五、§八。
 
-實作：`src/drawio_export.py`（legacy emit + Pass 1–3 + `_apply_feedback_routing`）→ `src/drawio_edge_freeze.py`（`freeze_edge_routing`、`restore_orthogonal_auto_routing`）。
+實作：`src/drawio_cell_export.py`（cell-centric grid；**orthogonal auto** 邊）。
 
-**Cell-centric export**（`drawio_cell_export.py`，現行 `generate_drawio`）僅用 Draw.io **orthogonal auto** 邊，**不**走 Rule 3 FB 五段／freeze。跨 Cell `use=hi/lo` 引用：紫色 net label 掛在進 Deb 的最後一邊；水平段長度 = `GATE_CELL_GAP + extra`（`extra` 依 net 名稱長度、40pt 向上取整）。見 [drawio-placement](../drawio-placement/SKILL.md)「Export net name」。
+> **注意：** 舊版三階欄位式佈局（Input→AND→OR→Cell 全圖列）與 FB 五段凍結走線已自程式庫移除。以下 Rule 2／Rule 3 章節僅作歷史參考。
 
 程式對照：[reference.md](reference.md)。
 
@@ -26,8 +26,7 @@ description: >-
 
 | 檔案 | 內容 |
 |------|------|
-| `src/reference/FB_Routing.xml` | Cell FB 五段、Q／~Q 走廊、**同層扇出共用水平段** |
-| `src/reference/PSEQCELL.xml` | Cell 錨點：**O**（cell-centric）；legacy FB 仍參考 Q／~Q（`FB_Routing.xml`） |
+| `src/reference/PSEQCELL.xml` | Cell 錨點：**O**（cell-centric）；legacy FB 仍參考 Q／~Q |
 
 ---
 
@@ -67,7 +66,7 @@ description: >-
 
 判定：`_apply_feedback_routing` 預掃 `q_ids_with_feedback`，再依 `(rail, nq_rev)` 對應同 Cell 的 Q 是否回授。
 
-`FB_Routing.xml` 示意（Q `ey=420`）：
+示意（Q `ey=420`）：
 
 - ② 走廊 `y=360`（`ey−60`）；~Q **有 Q FB** `ey=460` → ② `y=320`（`ey−140`）
 - ~Q **無 Q FB** → ② `y=ey−100`（較淺，避免切上一列 Cell 下緣）
@@ -142,7 +141,7 @@ cell `p3x` 基準算出後可能落在 OR→Cell gap 內**已被佔用**的垂�
 | `test_or_to_or_feedback_uses_five_segment_routing_left_of_or_column` | OR→OR 五段、② 動態、`p3x` 在 OR 左緣左側 |
 | `test_and_to_and_feedback_uses_clear_row_for_segment_two` | AND→AND 五段、② 向上、③ 不壓閘體 |
 
-矩陣範例：`src/reference/drawio_fb_matrix.json` 中 `RAIL_AND` lo 雙輸入 `[FB_HUB, RAIL_NAND]`（`RAIL_NAND` `use=hi`）產生 **RAIL_NAND hi AND → RAIL_AND lo AND** 跨列 gate FB。
+跨列 gate FB 範例：`RAIL_AND` lo 雙輸入 `[FB_HUB, RAIL_NAND]`（`RAIL_NAND` `use=hi`）→ **RAIL_NAND hi AND → RAIL_AND lo AND**。
 
 ---
 
