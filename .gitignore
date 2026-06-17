@@ -13,6 +13,7 @@ __pycache__/
 *.spec
 dist/
 build/
+build-onedir/
 
 # Node (only used for WaveDrom asset/skill tooling)
 node_modules/

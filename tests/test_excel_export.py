@@ -152,3 +152,47 @@ class TestExportRoundtrip:
             assert loaded.wavedrom_scenario["steps"] == 77
         finally:
             os.unlink(out)
+
+    def test_export_clears_rows_beyond_shrunk_nodes(self):
+        """Nodes 從 250 筆縮到 230 筆時，舊資料列應被清除。"""
+        from openpyxl import load_workbook
+
+        large = PowerSeqConfig(
+            module_name="SHRINK",
+            pulses=["Pulse_1us"],
+            rails=[
+                PowerRail(
+                    f"OUT{i}",
+                    seq_type="output",
+                    cycle_hi=1,
+                    depends_on_hi_groups=[["IN_A"]],
+                )
+                for i in range(250)
+            ]
+            + [
+                PowerRail("IN_A", seq_type="input", deb_cycle_hi=1, deb_cycle_lo=1),
+            ],
+        )
+        small = replace(
+            large,
+            rails=large.rails[:230] + [large.rails[-1]],
+        )
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            out = f.name
+        try:
+            export_powerseq_to_excel(large, out)
+            wb = load_workbook(out)
+            ws = wb["Nodes"]
+            assert ws.cell(4 + 249, 1).value == "OUT249"
+            wb.close()
+
+            export_powerseq_to_excel(small, out)
+            wb = load_workbook(out)
+            ws = wb["Nodes"]
+            assert ws.cell(4 + 229, 1).value == "OUT229"
+            assert ws.cell(4 + 230, 1).value == "IN_A"
+            assert ws.cell(4 + 231, 1).value is None
+            assert ws.cell(4 + 249, 1).value is None
+            wb.close()
+        finally:
+            os.unlink(out)

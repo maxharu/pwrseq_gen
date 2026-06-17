@@ -81,6 +81,27 @@ class TestGenerateC:
         assert "void power_timer_10ms_ISR(void)" in out
         assert "power_var.time.t_10ms" in out
 
+    def test_same_pulse_hi_lo_not_forced_to_one(self):
+        """Timing Hi/Lo 同 pulse 時，pwrcell_handle 兩參數皆用該 pulse（不強制 t_lo=1）。"""
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail(
+                    "OUT1",
+                    depends_on_hi=["__HIGH__"],
+                    depends_on_lo=["__LOW__"],
+                    pulse_hi="iPulse_1us",
+                    pulse_lo="iPulse_1us",
+                ),
+            ],
+        )
+        out = generate_c(cfg, output_filename="power.c")
+        assert (
+            "pwrcell_handle(&power_var.out1, power_var.time.t_1us, power_var.time.t_1us, OUT1);"
+            in out
+        )
+        assert "pwrcell_handle(&power_var.out1, power_var.time.t_1us, 1, OUT1);" not in out
+
     def test_groups_and_or(self):
         cfg = PowerSeqConfig(rails=[
             PowerRail("A", seq_type="input", deb_enable=False),
