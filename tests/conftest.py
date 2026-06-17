@@ -13,7 +13,7 @@ from config_models import PowerSeqConfig, PowerRail
 
 @pytest.fixture
 def sample_config_dict():
-    """Sample config matching debug.json structure."""
+    """Sample config for round-trip tests."""
     return {
         "module_name": "PWRSEQ_TOP",
         "clock_freq_mhz": 100.0,

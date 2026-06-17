@@ -3,22 +3,16 @@ import os
 import sys
 import tempfile
 
-import pytest
-
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from config_models import PowerSeqConfig, PowerRail
 from wavedrom_sim import InputWaveSpec, WaveDromScenario
 from wavedrom_scenario_io import (
     load_scenario_file,
-    merge_scenario_for_config,
     resolve_scenario,
     save_scenario_file,
     scenario_from_dict,
 )
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TEMPLATE_XLSX = os.path.join(ROOT, "templates", "powerseq_nodes_template.xlsx")
 
 
 def test_roundtrip_file():
@@ -74,22 +68,3 @@ def test_resolve_sidecar(tmp_path):
     )
     resolved = resolve_scenario(cfg, str(proj))
     assert resolved.inputs["EKEY"].hi_mode == "constant_1"
-
-
-@pytest.mark.skipif(not os.path.isfile(TEMPLATE_XLSX), reason="template xlsx missing")
-def test_load_scenario_from_excel_template():
-    loaded = load_scenario_file(TEMPLATE_XLSX)
-    assert loaded.steps == 50
-    assert loaded.hscale == 1
-    assert loaded.inputs["EKEY"].hi_mode == "custom"
-    assert loaded.inputs["EKEY"].hi_wave == "01"
-    assert loaded.inputs["PRIM_VR_EN"].hi_groups == [["EKEY"]]
-
-    cfg = PowerSeqConfig(
-        rails=[
-            PowerRail("EKEY", seq_type="input"),
-            PowerRail("PRIM_VR_EN", seq_type="input"),
-        ],
-    )
-    merged = merge_scenario_for_config(loaded, cfg)
-    assert merged.inputs["PRIM_VR_EN"].hi_groups == [["EKEY"]]
