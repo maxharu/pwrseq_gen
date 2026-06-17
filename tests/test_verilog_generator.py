@@ -219,7 +219,7 @@ class TestForceCondition:
                      depends_on_force_groups=[["A", "B"], ["C"]]),
         ])
         out = generate_verilog(cfg)
-        assert "assign d_force = (iA & iB) || (iC);" in out
+        assert "assign d_force = (iA & iB) | (iC);" in out
 
     def test_force_inverted(self):
         cfg = PowerSeqConfig(rails=[

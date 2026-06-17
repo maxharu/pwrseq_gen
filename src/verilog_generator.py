@@ -7,6 +7,7 @@
 """
 import os
 from config_models import PowerSeqConfig, PowerRail, DEFAULT_PULSE, pulse_verilog_name
+from group_logic import verilog_intra_expr
 
 
 def _filename_to_module_and_guard(filepath: str) -> tuple[str, str]:
@@ -334,11 +335,11 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
                         )
                         for ii, d in enumerate(group)
                     ]
-                    g_expr = f"({' & '.join(terms)})"
+                    g_expr = verilog_intra_expr(terms, r.get_hi_intra_op(gi))
                     if r.get_hi_group_inv(gi):
                         g_expr = f"!{g_expr}"
                     group_exprs.append(g_expr)
-                lines.append(f"    assign {s}_hi = {' || '.join(group_exprs)};")
+                lines.append(f"    assign {s}_hi = {' | '.join(group_exprs)};")
             else:
                 lines.append(f"    assign {s}_hi = 1'b1;  // No Hi condition")
             lo_groups = r.get_lo_groups()
@@ -353,11 +354,11 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
                         )
                         for ii, d in enumerate(group)
                     ]
-                    g_expr = f"({' & '.join(terms)})"
+                    g_expr = verilog_intra_expr(terms, r.get_lo_intra_op(gi))
                     if r.get_lo_group_inv(gi):
                         g_expr = f"!{g_expr}"
                     group_exprs.append(g_expr)
-                lines.append(f"    assign {s}_lo = {' || '.join(group_exprs)};")
+                lines.append(f"    assign {s}_lo = {' | '.join(group_exprs)};")
             else:
                 lines.append(f"    assign {s}_lo = 1'b0;  // No Lo condition (F-DEP-06)")
             force_groups = r.get_force_groups()
@@ -372,11 +373,11 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
                         )
                         for ii, d in enumerate(group)
                     ]
-                    g_expr = f"({' & '.join(terms)})"
+                    g_expr = verilog_intra_expr(terms, r.get_force_intra_op(gi))
                     if r.get_force_group_inv(gi):
                         g_expr = f"!{g_expr}"
                     group_exprs.append(g_expr)
-                lines.append(f"    assign {s}_force = {' || '.join(group_exprs)};")
+                lines.append(f"    assign {s}_force = {' | '.join(group_exprs)};")
             else:
                 lines.append(f"    assign {s}_force = 1'b0;  // No Force condition")
             lines.append("")

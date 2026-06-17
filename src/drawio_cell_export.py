@@ -51,7 +51,8 @@ from drawio_geometry import (  # noqa: E402
     _and_gate_style,
     _deb_port_label,
     _escape_xml,
-    _GATE_STYLE_AND,
+    _intra_child_gate_style,
+    _intra_merge_gate_style,
     _GATE_STYLE_OR,
     _or_gate_style,
 )
@@ -410,7 +411,7 @@ def _wire_and_branch(
     deb_anchor_y: float,
     attach_right: float,
 ) -> tuple[str, float]:
-    """Wire one AND group; attach_right is the right edge to abut. Returns (out_id, left_edge)."""
+    """Wire one group (intra AND/OR/XOR); attach_right is the right edge to abut."""
     if len(terms) == 1:
         # Direct label→Deb: same clearance as gate output→Cell (GATE_CELL_GAP only).
         label_right = attach_right
@@ -421,10 +422,10 @@ def _wire_and_branch(
         return lid, label_x
 
     gy = deb_anchor_y - AND_GATE_H / 2
-    style = _and_gate_style(rail, hl, gi)
+    merge_style = _intra_merge_gate_style(rail, hl, gi)
 
     if len(terms) < AND_TREE_THRESHOLD:
-        gid, gx = _place_gate(b, attach_right, gy, AND_GATE_W, AND_GATE_H, style)
+        gid, gx = _place_gate(b, attach_right, gy, AND_GATE_W, AND_GATE_H, merge_style)
         label_x = gx - GAP - LABEL_W
         for ii, term in enumerate(terms):
             ly = _label_y_for_input(hl, deb_anchor_y, ii)
@@ -432,19 +433,18 @@ def _wire_and_branch(
             b.edge(lid, gid, stroke=STROKE_DEFAULT)
         return gid, label_x
 
-    # 2-level cascade: child AND (left) → merge gate (right).
-    # group_inv inverts only at merge (~(child & rights)), not on child (~child).
+    # 2-level cascade: child gate (left, 不反相) → merge gate (right；group_inv 時 XNOR/NAND/NOR)。
     mid = (len(terms) + 1) // 2
     left_terms, right_terms = terms[:mid], terms[mid:]
 
-    merge_id, merge_gx = _place_gate(b, attach_right, gy, AND_GATE_W, AND_GATE_H, style)
+    merge_id, merge_gx = _place_gate(b, attach_right, gy, AND_GATE_W, AND_GATE_H, merge_style)
     child_id, child_gx = _place_gate(
         b,
         merge_gx - AND_GATE_W - 2 * GAP,
         gy,
         AND_GATE_W,
         AND_GATE_H,
-        _GATE_STYLE_AND,
+        _intra_child_gate_style(rail, hl, gi),
     )
 
     left_label_x = child_gx - GAP - LABEL_W
@@ -456,7 +456,7 @@ def _wire_and_branch(
 
     right_label_x = merge_gx - GAP - LABEL_W
     for ii, term in enumerate(right_terms):
-        # Index 0 on merge AND is reserved for child AND output (example (2).xml).
+        # merge 閘 input 0 保留給 child 輸出（example (2).xml）。
         ly = _label_y_for_input(hl, deb_anchor_y, ii + 1)
         lid = _add_term_label(b, right_label_x, ly, term)
         b.edge(lid, merge_id, stroke=STROKE_DEFAULT)

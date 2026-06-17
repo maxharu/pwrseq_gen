@@ -25,6 +25,7 @@ from config_models import (
     normalize_pulse_name,
     rail_input_wave_spec,
 )
+from group_logic import intra_op_label
 from excel_template_layout import apply_nodes_sheet_header_rows
 from excel_import import (
     COND_META_COLS,
@@ -232,8 +233,8 @@ def _cond_type_fill(cond_type: str | None) -> PatternFill | None:
     return None
 
 
-def _output_cond_rows(rail: PowerRail) -> list[tuple[str, str, str, list[str]]]:
-    rows: list[tuple[str, str, str, list[str]]] = []
+def _output_cond_rows(rail: PowerRail) -> list[tuple[str, str, str, str, list[str]]]:
+    rows: list[tuple[str, str, str, str, list[str]]] = []
     block_started = False
     accessors = {
         "hi": (
@@ -241,6 +242,7 @@ def _output_cond_rows(rail: PowerRail) -> list[tuple[str, str, str, list[str]]]:
             rail.get_hi_inv,
             rail.get_hi_use,
             rail.get_hi_group_inv,
+            rail.get_hi_intra_op,
             "Hi",
         ),
         "lo": (
@@ -248,6 +250,7 @@ def _output_cond_rows(rail: PowerRail) -> list[tuple[str, str, str, list[str]]]:
             rail.get_lo_inv,
             rail.get_lo_use,
             rail.get_lo_group_inv,
+            rail.get_lo_intra_op,
             "Lo",
         ),
         "force": (
@@ -255,15 +258,16 @@ def _output_cond_rows(rail: PowerRail) -> list[tuple[str, str, str, list[str]]]:
             rail.get_force_inv,
             rail.get_force_use,
             rail.get_force_group_inv,
+            rail.get_force_intra_op,
             "Force",
         ),
     }
     for kind in ("hi", "lo", "force"):
-        groups_fn, get_inv, get_use, get_ginv, label = accessors[kind]
+        groups_fn, get_inv, get_use, get_ginv, get_intra, label = accessors[kind]
         groups = groups_fn()
         non_empty = [g for g in groups if g]
         if not non_empty:
-            rows.append((rail.name if not block_started else "", label, "N", []))
+            rows.append((rail.name if not block_started else "", label, "AND", "N", []))
             block_started = True
             continue
         for gi, group in enumerate(groups):
@@ -274,14 +278,15 @@ def _output_cond_rows(rail: PowerRail) -> list[tuple[str, str, str, list[str]]]:
                 for ii, n in enumerate(group)
             ]
             ginv = "Y" if get_ginv(gi) else "N"
-            rows.append((rail.name if not block_started else "", label, ginv, signals))
+            op = intra_op_label(get_intra(gi))
+            rows.append((rail.name if not block_started else "", label, op, ginv, signals))
             block_started = True
     return rows
 
 
 def _write_output_conditions(ws, config: PowerSeqConfig) -> None:
     sig_end = COND_META_COLS + COND_SIGNAL_MAX_COLS
-    all_rows: list[tuple[str, str, str, list[str]]] = []
+    all_rows: list[tuple[str, str, str, str, list[str]]] = []
     for rail in config.rails:
         if rail.seq_type != "output":
             continue
@@ -290,7 +295,7 @@ def _write_output_conditions(ws, config: PowerSeqConfig) -> None:
 
     block_starts: list[tuple[int, int]] = []
     block_start = DATA_START_ROW
-    for i, (output_name, cond_type, group_inv, signals) in enumerate(all_rows):
+    for i, (output_name, cond_type, intra_op, group_inv, signals) in enumerate(all_rows):
         r = DATA_START_ROW + i
         if output_name:
             if i > 0:
@@ -298,7 +303,8 @@ def _write_output_conditions(ws, config: PowerSeqConfig) -> None:
             block_start = r
         ws.cell(r, 1, value=output_name or None)
         ws.cell(r, 2, value=cond_type)
-        ws.cell(r, 3, value=group_inv)
+        ws.cell(r, 3, value=intra_op)
+        ws.cell(r, 4, value=group_inv)
         fill = _cond_type_fill(cond_type)
         for si, sig in enumerate(signals, start=1):
             ws.cell(r, COND_META_COLS + si, value=sig)
@@ -324,6 +330,7 @@ def _side_rows(spec: InputWaveSpec, side: str) -> list[tuple[str, str | None, st
     groups = getattr(spec, f"{side}_groups") or []
     inv_groups = getattr(spec, f"{side}_inv_groups") or []
     use_groups = getattr(spec, f"{side}_use_groups") or []
+    group_inv_list = getattr(spec, f"{side}_group_inv") or []
     non_empty = [g for g in groups if g]
     if not non_empty:
         return [(INPUT_MODE_LABELS["depends"], None, "N", [])]
@@ -333,12 +340,13 @@ def _side_rows(spec: InputWaveSpec, side: str) -> list[tuple[str, str | None, st
             continue
         inv_g = inv_groups[gi] if gi < len(inv_groups) else []
         use_g = use_groups[gi] if gi < len(use_groups) else []
+        ginv = "Y" if (gi < len(group_inv_list) and group_inv_list[gi]) else "N"
         signals = []
         for ii, n in enumerate(group):
             inv = inv_g[ii] if ii < len(inv_g) else False
             use = use_g[ii] if ii < len(use_g) else "self"
             signals.append(format_signal_cell(n, inv, use))
-        rows.append((INPUT_MODE_LABELS["depends"], None, "N", signals))
+        rows.append((INPUT_MODE_LABELS["depends"], None, ginv, signals))
     return rows
 
 

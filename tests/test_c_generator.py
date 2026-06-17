@@ -109,4 +109,4 @@ class TestGenerateC:
             PowerRail("C", depends_on_hi=["__HIGH__"], depends_on_hi_groups=[["A", "B"]]),
         ])
         out = generate_c(cfg, output_filename="power.c")
-        assert "oemgpio_DI_Get(A) && oemgpio_DI_Get(B)" in out
+        assert "oemgpio_DI_Get(A) & oemgpio_DI_Get(B)" in out
