@@ -1,13 +1,9 @@
 """
-Export Power Sequence dependency as Draw.io XML.
+Export Power Sequence dependency as Draw.io XML (cell-centric grid).
 
-版面與樣式依專案內 DRAWIO_RULES.md 實作，摘要如下：
-- 規則一（輸入）：label 與 input NOT 皆 **rotation=90**；依 config 由**右→左**每欄 40pt，若**前一個** input 有 NOT 則下一個再左 40pt；垂直錨點見 `INPUT_NOT.xml`（NOT 底邊在**最上 Cell 上緣之上 40pt**、40pt 對齊；label 在 NOT 上方）；NOT **左 20pt**；走線**先下後右**。
-- 規則二（邏輯閘）：X 三層 ①AND/NAND→②OR/NOR（若有）→③Cell；② 在 ① 後、③ 前，不同欄；AND/NAND、OR/NOR 垂直＝global catalog 鍊＋Y slack（去重）；Cell 列距＋回授 slack；`group_inv`→NAND/NOR；閘 output 先右走 **40×n**。
-- 規則三（PSEQCELL）：5 個獨立 cells（inner + H_Deb + L_Deb + Q + ~Q），無 group；對應 PSEQCELL.v 之 iHi/iLo/iForce/o；連到 H_Deb 實心綠、連到 L_Deb 實心紅。
-- 規則四（輸出）：直接從 O 矩形右側拉一條水平邊到輸出名稱文字框，無小圓圈、無轉角。
-- 規則五（連接線）：線寬 2pt、交叉處弧線跳接（jumpStyle=arc）、一律實線；預設黑、Hi 綠、Lo 紅；正交、少交叉；不穿越元件；**相同 source 允許水平重疊、垂直不重疊**，不同 source 則水平/垂直皆錯開；**source/destination 一律水平連接，水平段至少 40pt**；waypoint 處與輸入同高可不對齊 40pt。
-- 規則六：不同 source 走線不重疊、箭頭與分岔清楚；常數見 DRAWIO_RULES.md。
+Each output rail is an independent block on a single-page multi-column grid:
+input / cond labels → local AND/OR → PSEQCELL → output name.
+Cross-cell deps use Verilog-style cond names ({internal_sig}_{hi|lo}). Force is not drawn.
 """
 import random
 import re
@@ -49,6 +45,10 @@ CELL_NQ_W = 20
 CELL_NQ_H = 20
 CELL_NQ_X = 60
 CELL_NQ_Y = CELL_L_DEB_Y
+CELL_O_W = 20
+CELL_O_H = 20
+CELL_O_X = 60
+CELL_O_Y = 30
 # 版面規則：欄位水平間距 GAP（40pt）；Cell 列間基本間距 ROW_GAP（40pt）
 GRID = 40
 FB_Q_RIGHT = GRID
@@ -81,8 +81,8 @@ CELL_START_X = _align40(GAP * 8)  # 320（參考）
 OUTPUT_NAME_GAP = _align40(120)       # Cell 右緣 → 輸出名稱欄淨空（pt）
 OUTPUT_NAME_NOT_EXTRA = 80            # 任一 output 用 O 側 NOT 時，全列再 +80pt
 OUTPUT_NAME_OFFSET_X = CELL_GROUP_W + OUTPUT_NAME_GAP  # 預設參考（無 output NOT）
-# 輸出名稱 y 與 Q 垂直置中對齊，使 Q→名稱為水平直線
-OUTPUT_NAME_OFFSET_Y = CELL_Q_Y + CELL_Q_H // 2 - INPUT_LABEL_H // 2
+# 輸出名稱 y 與 O 垂直置中對齊，使 O→名稱為水平直線（載入 PSEQCELL.xml 後重算）
+OUTPUT_NAME_OFFSET_Y = CELL_O_Y + CELL_O_H // 2 - INPUT_LABEL_H // 2
 # 連接線顏色：Hi 實心紅、Lo 實心綠、Feedback 實心藍、預設實心黑（一律實線）
 STROKE_HI = "#ff0000"
 STROKE_LO = "#008000"
@@ -126,6 +126,7 @@ _PSEQCELL_STYLE_INNER = "rounded=0;whiteSpace=wrap;html=1;"
 _PSEQCELL_STYLE_H_DEB = "rounded=1;whiteSpace=wrap;html=1;"
 _PSEQCELL_STYLE_L_DEB = "rounded=1;whiteSpace=wrap;html=1;"
 _PSEQCELL_STYLE_Q = "rounded=1;whiteSpace=wrap;html=1;"
+_PSEQCELL_STYLE_O = "rounded=1;whiteSpace=wrap;html=1;"
 
 
 def _parse_pulse_period(pulse_name: str) -> tuple[int, str] | None:
@@ -179,9 +180,12 @@ def _load_pseqcell_layout() -> None:
     global CELL_GROUP_W, CELL_GROUP_H, CELL_INNER_X, CELL_INNER_W, CELL_INNER_H
     global CELL_H_DEB_W, CELL_H_DEB_H, CELL_L_DEB_W, CELL_L_DEB_H
     global CELL_H_DEB_Y, CELL_L_DEB_Y
+    global CELL_O_W, CELL_O_H, CELL_O_X, CELL_O_Y
     global CELL_Q_W, CELL_Q_H, CELL_Q_X, CELL_Q_Y
     global CELL_NQ_W, CELL_NQ_H, CELL_NQ_X, CELL_NQ_Y
-    global _PSEQCELL_STYLE_INNER, _PSEQCELL_STYLE_H_DEB, _PSEQCELL_STYLE_L_DEB, _PSEQCELL_STYLE_Q
+    global OUTPUT_NAME_OFFSET_Y
+    global _PSEQCELL_STYLE_INNER, _PSEQCELL_STYLE_H_DEB, _PSEQCELL_STYLE_L_DEB
+    global _PSEQCELL_STYLE_Q, _PSEQCELL_STYLE_O
 
     path = _REFERENCE_DIR / "PSEQCELL.xml"
     parts: dict[str, tuple[int, int, int, int]] = {}
@@ -211,6 +215,9 @@ def _load_pseqcell_layout() -> None:
         elif val == "L_Deb":
             parts["l_deb"] = (x, y, w, h)
             styles["l_deb"] = style
+        elif val == "O":
+            parts["o"] = (x, y, w, h)
+            styles["o"] = style
         elif val == "Q":
             parts["q"] = (x, y, w, h)
             styles["q"] = style
@@ -221,7 +228,10 @@ def _load_pseqcell_layout() -> None:
             parts["inner"] = (x, y, w, h)
             styles["inner"] = style
 
-    required = ("inner", "h_deb", "l_deb", "q", "nq")
+    if "o" in parts:
+        required = ("inner", "h_deb", "l_deb", "o")
+    else:
+        required = ("inner", "h_deb", "l_deb", "q", "nq")
     missing = [k for k in required if k not in parts]
     if missing:
         raise ValueError(f"PSEQCELL.xml missing parts: {missing}")
@@ -233,16 +243,27 @@ def _load_pseqcell_layout() -> None:
     CELL_H_DEB_W, CELL_H_DEB_H, CELL_H_DEB_Y = hw, hh, hy
     _, ly, lw, lh = parts["l_deb"]
     CELL_L_DEB_W, CELL_L_DEB_H, CELL_L_DEB_Y = lw, lh, ly
-    qx, qy, qw, qh = parts["q"]
-    CELL_Q_X, CELL_Q_Y, CELL_Q_W, CELL_Q_H = qx, qy, qw, qh
-    nx, ny, nw, nh = parts["nq"]
-    CELL_NQ_X, CELL_NQ_Y, CELL_NQ_W, CELL_NQ_H = nx, ny, nw, nh
+    if "o" in parts:
+        ox, oy, ow, oh = parts["o"]
+        CELL_O_X, CELL_O_Y, CELL_O_W, CELL_O_H = ox, oy, ow, oh
+        CELL_Q_X, CELL_Q_Y, CELL_Q_W, CELL_Q_H = ox, oy, ow, oh
+        _PSEQCELL_STYLE_O = styles["o"]
+        _PSEQCELL_STYLE_Q = styles["o"]
+    else:
+        qx, qy, qw, qh = parts["q"]
+        CELL_Q_X, CELL_Q_Y, CELL_Q_W, CELL_Q_H = qx, qy, qw, qh
+        CELL_O_X, CELL_O_Y, CELL_O_W, CELL_O_H = qx, qy, qw, qh
+        _PSEQCELL_STYLE_Q = styles["q"]
+        _PSEQCELL_STYLE_O = styles["q"]
+    if "nq" in parts:
+        nx, ny, nw, nh = parts["nq"]
+        CELL_NQ_X, CELL_NQ_Y, CELL_NQ_W, CELL_NQ_H = nx, ny, nw, nh
     CELL_GROUP_W = group_w or iw
     CELL_GROUP_H = group_h or ih
     _PSEQCELL_STYLE_INNER = styles["inner"]
     _PSEQCELL_STYLE_H_DEB = _style_align_left(styles["h_deb"])
     _PSEQCELL_STYLE_L_DEB = _style_align_left(styles["l_deb"])
-    _PSEQCELL_STYLE_Q = styles["q"]
+    OUTPUT_NAME_OFFSET_Y = CELL_O_Y + CELL_O_H // 2 - INPUT_LABEL_H // 2
 
 
 def _load_logic_gate_style(xml_name: str) -> str:
@@ -426,13 +447,34 @@ def _count_feedback_trunks(
     return n, trunk_and, has_rsmrst
 
 
+def _and_fb_source_key_for_dep(
+    d: str,
+    *,
+    inv: bool,
+    use: str,
+    name_to_rail: dict[str, PowerRail],
+    idx_map: dict[tuple[str, str, int], int],
+) -> tuple:
+    """對應 Pass 3 後實際 FB 來源（Q／~Q／AND output），供 placement 幹線寬度估算。"""
+    if inv and name_to_rail[d].seq_type != "input":
+        return ("nq", d)
+    if use == "self" and name_to_rail[d].seq_type != "input":
+        return ("q", d)
+    src_idx = _departing_and_index(d, use, idx_map=idx_map, name_to_rail=name_to_rail)
+    if src_idx is not None:
+        return ("and_idx", src_idx)
+    if use in ("hi", "lo") and name_to_rail[d].seq_type != "input":
+        return ("or", d, use)
+    return ("q", d)
+
+
 def _estimate_and_lane_count(
     outputs: list[PowerRail],
     output_to_row: dict[str, int],
     name_to_rail: dict[str, PowerRail],
     valid: set[str],
 ) -> int:
-    """預估 AND 層唯一 FB source 數（Q／~Q／departing AND／RSMRST），供 placement 左幹線寬度。"""
+    """預估 AND 層唯一 FB source 數（Q／~Q／departing AND／OR／RSMRST），供 placement 左幹線寬度。"""
     n_trunk, trunk_and, has_rsmrst = _count_feedback_trunks(
         outputs, output_to_row, name_to_rail, valid
     )
@@ -445,6 +487,8 @@ def _estimate_and_lane_count(
     for tgt in outputs:
         for hl, groups in [("hi", tgt.get_hi_groups()), ("lo", tgt.get_lo_groups())]:
             for gi, group in enumerate(groups):
+                if len(group) < 2:
+                    continue
                 for ii, d in enumerate(group):
                     if d not in valid or d in CONST_DEPS:
                         continue
@@ -452,7 +496,7 @@ def _estimate_and_lane_count(
                         continue
                     src_row = output_to_row.get(d)
                     tgt_row = output_to_row.get(tgt.name)
-                    if src_row is None or tgt_row is None or src_row == tgt_row:
+                    if src_row is None or tgt_row is None:
                         continue
                     use = (
                         tgt.get_hi_use(gi, ii, d)
@@ -466,13 +510,19 @@ def _estimate_and_lane_count(
                     )
                     if d == "RSMRST_N":
                         continue
-                    src_idx = _departing_and_index(
-                        d, use, idx_map=idx_map, name_to_rail=name_to_rail
-                    )
-                    if src_idx is not None:
-                        keys.add(("and_idx", src_idx))
+                    if src_row == tgt_row:
+                        if not inv and use == "self":
+                            keys.add(("q", d))
                         continue
-                    keys.add(("nq", d) if inv else ("q", d))
+                    keys.add(
+                        _and_fb_source_key_for_dep(
+                            d,
+                            inv=inv,
+                            use=use,
+                            name_to_rail=name_to_rail,
+                            idx_map=idx_map,
+                        )
+                    )
     return max(n_trunk, len(keys), 1)
 
 
@@ -2816,7 +2866,7 @@ def _build_feedback_source_layer_slots(
     for layer, src_ids in sources_by_layer.items():
         cap = caps[layer]
         for i, src_id in enumerate(sorted(src_ids)):
-            slots[(src_id, layer)] = i
+            slots[(src_id, layer)] = min(i, cap - 1)
     return slots
 
 
@@ -2860,7 +2910,7 @@ class _FbRouteSpec:
 def _plan_global_feedback_y_rows(
     specs: list[_FbRouteSpec],
     *,
-    gate_boxes: list[tuple[float, float, float, float]],
+    obstacle_boxes: list[tuple[float, float, float, float]],
     and_rev: dict[int, tuple[str, str, int]],
     or_rev: dict[int, tuple[str, str]],
 ) -> dict[str, float]:
@@ -2899,7 +2949,7 @@ def _plan_global_feedback_y_rows(
                 nominal,
                 spec.p1x,
                 spec.p3x,
-                gate_boxes,
+                obstacle_boxes,
                 avoid=used_fb_rows,
                 extra_avoid_y=rail_rows.get(spec.rail_name, []),
             )
@@ -2934,6 +2984,36 @@ def _collect_logic_gate_boxes(
         h = float(geo.get("height", 0))
         boxes.append((x, x + w, y, y + h))
     return boxes
+
+
+def _collect_cell_inner_boxes(
+    root: ET.Element,
+) -> list[tuple[float, float, float, float]]:
+    """Power Cell inner 80×80 的 (x0, x1, y0, y1) 佔位框（含上下緣）。"""
+    boxes: list[tuple[float, float, float, float]] = []
+    for cell in root.iter("mxCell"):
+        if cell.get("vertex") != "1":
+            continue
+        if cell.get("style") != _PSEQCELL_STYLE_INNER:
+            continue
+        geo = cell.find("mxGeometry")
+        if geo is None:
+            continue
+        x = float(geo.get("x", 0))
+        y = float(geo.get("y", 0))
+        w = float(geo.get("width", 0))
+        h = float(geo.get("height", 0))
+        boxes.append((x, x + w, y, y + h))
+    return boxes
+
+
+def _merge_obstacle_boxes(
+    *box_lists: list[tuple[float, float, float, float]],
+) -> list[tuple[float, float, float, float]]:
+    merged: list[tuple[float, float, float, float]] = []
+    for boxes in box_lists:
+        merged.extend(boxes)
+    return merged
 
 
 def _first_clear_up_y(
@@ -3024,6 +3104,8 @@ def _apply_feedback_routing(
         and_cap=and_fb_lane_cap,
     )
     gate_boxes = _collect_logic_gate_boxes(root)
+    cell_boxes = _collect_cell_inner_boxes(root)
+    obstacle_boxes = _merge_obstacle_boxes(gate_boxes, cell_boxes)
 
     # issue 3：cell 回授垂直幹線需避開「實際被佔用」的垂直車道（既有正向邊垂直段
     # ＋ gate-profile 回授的 ① stub 車道），尤其 OR 閘 gate-exit stub。
@@ -3073,6 +3155,38 @@ def _apply_feedback_routing(
             continue
         if _sid in q_rev:
             q_ids_with_feedback.add(_sid)
+
+    # 同 Cell 欄（相同 exit X）的 Q／~Q 回授：② 垂直段錯開 stub
+    cell_col_stub_rank: dict[int, int] = {}
+    cell_col_pending: dict[int, list[tuple[float, int]]] = {}
+    for cell in root.iter("mxCell"):
+        if cell.get("edge") != "1":
+            continue
+        eid = cell.get("id")
+        if eid is None or eid not in feedback_auto_edge_ids:
+            continue
+        try:
+            src_id = int(cell.get("source") or "")
+        except ValueError:
+            continue
+        profile = _feedback_profile(
+            src_id, q_box_id_map=q_box_id_map, nq_box_id_map=nq_box_id_map
+        )
+        if profile not in ("q", "nq"):
+            continue
+        s_box = _vertex_geom(root, cell.get("source") or "")
+        if s_box is None:
+            continue
+        sty = cell.get("style") or ""
+        ex, ey = _anchor_xy(
+            s_box, _style_float(sty, "exitX", 1.0), _style_float(sty, "exitY", 0.5)
+        )
+        col_key = int(_align40(ex))
+        cell_col_pending.setdefault(col_key, []).append((ey, src_id))
+    for _items in cell_col_pending.values():
+        for rank, (_, sid) in enumerate(sorted(_items, key=lambda t: (-t[0], t[1]))):
+            cell_col_stub_rank[sid] = rank
+    cell_col_used_p1x: set[int] = set()
 
     fb_specs: list[_FbRouteSpec] = []
     for cell in root.iter("mxCell"):
@@ -3140,7 +3254,12 @@ def _apply_feedback_routing(
             stub_right = gate_right_x.get(src_id, and_col_x + AND_GATE_W)
             p1x = float(gate_exit_lanes.stub_x(src_id, stub_right))
         else:
-            p1x = ex + right_delta
+            stub_rank = cell_col_stub_rank.get(src_id, 0)
+            candidate = int(_align40(ex + right_delta + stub_rank * GRID))
+            while candidate in cell_col_used_p1x:
+                candidate += GRID
+            cell_col_used_p1x.add(candidate)
+            p1x = float(candidate)
 
         slot = source_layer_slots.get((src_id, tgt_layer), 0)
         p3x = _feedback_channel_x(
@@ -3156,6 +3275,10 @@ def _apply_feedback_routing(
             tgt_rail=tgt_rail,
             row_gate_layout=row_gate_layout,
         )
+        if tgt_layer == "and":
+            p3x = min(p3x, float(and_col_x - GAP))
+        elif tgt_layer == "or":
+            p3x = min(p3x, float(or_col_x_fn(tgt_rail) - GAP))
         if tgt_layer == "cell":
             if src_id in source_cell_x:
                 p3x = source_cell_x[src_id]
@@ -3195,7 +3318,7 @@ def _apply_feedback_routing(
 
     p2y_plan = _plan_global_feedback_y_rows(
         fb_specs,
-        gate_boxes=gate_boxes,
+        obstacle_boxes=obstacle_boxes,
         and_rev=and_rev,
         or_rev=or_rev,
     )
@@ -3487,1525 +3610,13 @@ def _row_height_for_output(r: PowerRail) -> int:
     return _align40(max_bottom)
 
 
+
 def generate_drawio(
     config: PowerSeqConfig,
     *,
     options: DrawioExportOptions | None = None,
 ) -> str:
-    """
-    Generate Draw.io XML per PSEQCELL.xml（RTL：PSEQCELL.v）:
-    - Only output rails become nodes (Power Sequence Cell: inner + H_Deb + L_Deb + Q + ~Q，無 group）。
-    - Input rails are text labels only; 反相一律用共用 NOT 閘呈現（非舊版 ~Name 文字）。
+    """Generate cell-centric Draw.io XML (single-page grid)."""
+    from drawio_cell_export import generate_drawio as _generate
 
-    版面：output power cell 依 config.rails 宣告順序由上而下排列；
-    走線重疊規則由 ``options`` 控制（預設：同 source 水平可重疊、其餘不重疊）。
-    """
-    _ = options or DrawioExportOptions.defaults()
-    name_to_rail = {r.name: r for r in config.rails}
-    valid = set(name_to_rail.keys())
-    inputs = [r for r in config.rails if r.seq_type == "input"]
-    outputs_raw = [r for r in config.rails if r.seq_type == "output"]
-    outputs = outputs_raw  # 依 config 宣告順序由上而下
-
-    # 偵測是否有 inv=True（任何反相皆用共用 NOT 閘，佔用 AND 欄左側空間）
-    _has_not_gate = False
-    _has_input_not = False  # 有 input 訊號被反相 → 需要 input NOT 欄
-    _has_logic_not = False  # 有 output 訊號被反相 → 需要 logic NOT 欄（在 AND 左側）
-    for r in outputs:
-        for hl, groups in [("hi", r.get_hi_groups()), ("lo", r.get_lo_groups())]:
-            for gi, g in enumerate(groups):
-                for ii, d in enumerate(g):
-                    if d not in valid or d in CONST_DEPS:
-                        continue
-                    inv = r.get_hi_inv(gi, ii, d) if hl == "hi" else r.get_lo_inv(gi, ii, d)
-                    if not inv:
-                        continue
-                    if name_to_rail[d].seq_type == "input":
-                        _has_input_not = True
-                    else:
-                        _has_logic_not = True
-    _has_not_gate = _has_input_not or _has_logic_not
-
-    # 需共用 NOT 閘的 input / output（inv 用法）
-    out_names = {r.name for r in outputs_raw}
-    inputs_with_not: set[str] = set()
-    outputs_with_not: set[str] = set()
-    for r in outputs_raw:
-        for hl, groups in [("hi", r.get_hi_groups()), ("lo", r.get_lo_groups())]:
-            for gi, g in enumerate(groups):
-                for ii, d in enumerate(g):
-                    if d not in valid or d in CONST_DEPS:
-                        continue
-                    inv = r.get_hi_inv(gi, ii, d) if hl == "hi" else r.get_lo_inv(gi, ii, d)
-                    if not inv:
-                        continue
-                    if name_to_rail[d].seq_type == "input":
-                        inputs_with_not.add(d)
-                    elif d in out_names:
-                        outputs_with_not.add(d)
-
-    # 規則二：欄間距 GAP（40pt）、列距 ROW_GAP（40pt）。Cell→輸出名稱固定 120pt（有 output NOT 則 200pt）。
-
-    output_to_row: dict[str, int] = {r.name: j for j, r in enumerate(outputs)}
-
-    and_index_per_key: dict[tuple[str, str, int], tuple[int, int]] = {}
-    for j, r in enumerate(outputs):
-        hi_groups = r.get_hi_groups()
-        lo_groups = r.get_lo_groups()
-        for hl, groups in [("hi", hi_groups), ("lo", lo_groups)]:
-            base = OR_GATE_OFFSET_HI_Y if hl == "hi" else OR_GATE_OFFSET_LO_Y
-            idx = 0
-            for gi, g in enumerate(groups):
-                if len(g) >= 2:
-                    and_index_per_key[(r.name, hl, gi)] = (j, base + idx * AND_GATE_DY)
-                    idx += 1
-
-    or_index_per_key = _build_or_index_per_key(outputs)
-    cell_row_slack = _feedback_y_slack_between_cell_rows(
-        outputs, output_to_row, name_to_rail, valid
-    )
-
-    # 動態行高：依 AND/OR 數量；有 output NOT 者下一列從 NOT 下方開始
-    row_heights: list[int] = []
-    row_y_base: list[int] = []
-    acc = MARGIN
-    for j, r in enumerate(outputs):
-        y = _align40(acc)
-        row_y_base.append(y)
-        h = _align40(_row_height_for_output(r))
-        row_heights.append(h)
-        row_gap_extra = cell_row_slack.get(j, 0)
-        acc = y + h + ROW_GAP + row_gap_extra
-
-    # 僅建立「有被使用」的 input 標籤（無論是否反相皆為單一正向標籤），並記錄第一個使用者
-    used_inputs_set: set[str] = set()
-    input_first_output: dict[str, str] = {}  # input name -> 第一個使用它的 output name（依 config 序）
-    for r in outputs:
-        for d in r.get_depends_on_hi_flat() + r.get_depends_on_lo_flat():
-            if d not in valid or d in CONST_DEPS:
-                continue
-            if name_to_rail[d].seq_type == "input":
-                if d not in input_first_output:
-                    input_first_output[d] = r.name
-                used_inputs_set.add(d)
-    _input_order = lambda n: next(i for i, r in enumerate(config.rails) if r.name == n)
-    used_inputs_list = sorted(used_inputs_set, key=_input_order)
-    all_input_names = list(used_inputs_list)
-    total_input_w = _input_band_width(used_inputs_list, inputs_with_not)
-
-    # Input 標籤：rotation=90，依 config 由右→左排列（見 _layout_input_positions）
-    # 依「第一個使用該 input 的 output 所在列」分組，同列內依 config 序；每列第一個 input 對齊該列 OR 高
-    row_to_inputs: dict[int, list[str]] = {}
-    for name in all_input_names:
-        row = output_to_row.get(input_first_output.get(name, ""), 0)
-        row_to_inputs.setdefault(row, []).append(name)
-    for row in row_to_inputs:
-        row_to_inputs[row].sort(key=_input_order)
-
-    catalog, idx_map = _build_and_catalog(outputs)
-    or_catalog, or_idx_map = _build_or_catalog(outputs)
-    layout_feedback_dep_keys = _build_layout_feedback_dep_keys(
-        outputs, output_to_row, name_to_rail, valid
-    )
-    feedback_y_slack = _feedback_y_slack_after_and(
-        outputs, output_to_row, name_to_rail, valid, and_index_per_key
-    )
-    feedback_or_y_slack = _feedback_y_slack_after_or(
-        outputs, output_to_row, name_to_rail, valid, or_index_per_key
-    )
-    row_py = list(row_y_base)
-    and_top_y = _chain_and_top_y(
-        row_py, catalog, and_index_per_key, feedback_y_slack, name_to_rail
-    )
-    or_top_y = _chain_or_top_y(
-        row_py, or_catalog, or_index_per_key, feedback_or_y_slack
-    )
-    and_lane_idx, or_lane_idx = _build_gate_lane_indices(
-        outputs,
-        catalog,
-        idx_map,
-        or_catalog,
-        or_idx_map,
-        output_to_row=output_to_row,
-        name_to_rail=name_to_rail,
-        valid=valid,
-        and_top_y=and_top_y,
-        or_top_y=or_top_y,
-        row_py=row_py,
-    )
-
-    def _and_y_top(rail: str, hl: str, gi: int) -> int:
-        return and_top_y[idx_map[(rail, hl, gi)]]
-
-    def _and_y_center(rail: str, hl: str, gi: int) -> int:
-        return and_top_y[idx_map[(rail, hl, gi)]] + AND_GATE_H // 2
-
-    def _or_y_top(rail: str, hl: str) -> int:
-        g = or_idx_map.get((rail, hl))
-        if g is None:
-            j = output_to_row[rail]
-            off = OR_GATE_OFFSET_HI_Y if hl == "hi" else OR_GATE_OFFSET_LO_Y
-            return row_py[j] + off
-        return or_top_y[g]
-
-    def _or_y_center(rail: str, hl: str) -> int:
-        return _or_y_top(rail, hl) + OR_GATE_H // 2
-
-    def _row_bottom(j: int) -> int:
-        gs = [g for key, g in idx_map.items() if and_index_per_key[key][0] == j]
-        og = [g for key, g in or_idx_map.items() if or_index_per_key[key][0] == j]
-        extents: list[int] = []
-        if gs:
-            extents.extend(and_top_y[g] + AND_GATE_H for g in gs)
-        if og:
-            extents.extend(or_top_y[g] + OR_GATE_H for g in og)
-        if extents:
-            return max(extents)
-        return row_py[j] + row_heights[j]
-
-    min_cell_top_y = _align40(min(row_py))
-    input_row_y = _input_row_y(min_cell_top_y)
-
-    positions_in = _layout_input_positions(
-        used_inputs_list, inputs_with_not,
-        _align40(MARGIN + total_input_w),
-        input_row_y,
-    )
-
-    # --- Channel Assignment (Phase B) ---
-    # input→gate 不佔寬；input 與 AND 之間僅留「回授幹線」：每條 40pt（見 _count_feedback_trunks）。
-    # Cell→輸出名稱：固定 120pt（任一 output NOT 則全圖 200pt）；跨列走 stub lane（(1+n)×40）。
-
-    feedback_n_trunks, _feedback_and, _feedback_rsmrst = _count_feedback_trunks(
-        outputs, output_to_row, name_to_rail, valid
-    )
-    feedback_n = max(
-        feedback_n_trunks,
-        _estimate_and_lane_count(outputs, output_to_row, name_to_rail, valid),
-    )
-    left_channel_w = feedback_n * GRID
-
-    post_input_x = _align40(MARGIN + total_input_w + GAP)
-    channel_x_left = post_input_x
-    and_col_x = _align40(post_input_x + left_channel_w + GAP)
-    row_gate_layout = _compute_row_gate_layouts(
-        outputs,
-        and_col_x,
-        name_to_rail,
-        valid,
-        output_to_row=output_to_row,
-        and_index_per_key=and_index_per_key,
-        idx_map=idx_map,
-        and_top_y=and_top_y,
-        row_py=row_py,
-        or_idx_map=or_idx_map,
-        or_top_y=or_top_y,
-    )
-    max_cell_start_x = max(lay.cell_start_x for lay in row_gate_layout.values())
-    input_band_right = channel_x_left - GAP
-    positions_in = _layout_input_positions(
-        used_inputs_list, inputs_with_not, input_band_right, input_row_y
-    )
-    input_right = input_band_right
-
-    any_output_not = bool(outputs_with_not)
-    output_name_offset_x = CELL_GROUP_W + _output_name_channel_gap(any_output_not)
-
-    def _cell_x(rail_name: str) -> int:
-        return row_gate_layout[rail_name].cell_start_x
-
-    def _or_col_x(rail_name: str) -> int:
-        lay = row_gate_layout[rail_name]
-        assert lay.or_col_x is not None
-        return lay.or_col_x
-
-    def _and_gate_offset_x(rail_name: str) -> int:
-        return and_col_x - _cell_x(rail_name)
-
-    def _or_gate_offset_x(rail_name: str) -> int:
-        return _or_col_x(rail_name) - _cell_x(rail_name)
-
-    def _deb_entry_x(rail_name: str) -> int:
-        return _cell_x(rail_name) + CELL_INNER_X
-
-    positions_out: dict[str, tuple[int, int]] = {
-        r.name: (row_gate_layout[r.name].cell_start_x, _align40(row_py[j]))
-        for j, r in enumerate(outputs)
-    }
-    min_cell_top_y = min(y for _, y in positions_out.values())
-
-    # 記錄每個 rail 的 Hi/Lo 邏輯輸出 cell id（AND/OR 閘或直連來源），
-    # 供 use_mode="hi"/"lo" 時作為出發點（而非 H_Deb/L_Deb 本身）。
-    # 邊生成迴圈依拓撲序處理，確保被依賴者的 ID 在被引用前已記錄。
-    hi_logic_out_id: dict[str, int] = {}
-    lo_logic_out_id: dict[str, int] = {}
-
-    cell_id = 2
-    out_inner_id: dict[str, int] = {}
-    h_deb_id_map: dict[str, int] = {}
-    l_deb_id_map: dict[str, int] = {}
-    q_box_id_map: dict[str, int] = {}
-    nq_box_id_map: dict[str, int] = {}
-    in_label_id: dict[str, int] = {}
-    # (rail_name, "hi"|"lo", group_index) -> AND gate cell id（僅當該 group 有 2+ 訊號時）
-    and_gate_id: dict[tuple[str, str, int], int] = {}
-    or_gate_id: dict[tuple[str, str], int] = {}
-    # 共用 NOT 閘：key = (來源 d, use_mode)，value = NOT 閘 cell id
-    not_gate_id: dict[tuple[str, str], int] = {}
-    input_not_src_ids: set[str] = set()
-    # 記錄所有 inv=True 的邊：edge id (str) -> (來源 d, use_mode)；
-    # post-fix 會為每個唯一 (d, use_mode) 建立一顆共用 NOT 閘，並把這些邊 source 替換為 NOT 閘 id。
-    _inv_edges: dict[str, tuple[str, str]] = {}
-    _fixed_not_edge_ids: set[str] = set()
-
-    mxfile = ET.Element(
-        "mxfile",
-        {"host": "app.diagrams.net", "agent": "PowerSeqGen", "version": "29.6.0"},
-    )
-    diagram = ET.SubElement(mxfile, "diagram", {"name": "PowerSeq", "id": _random_diagram_id()})
-    model = ET.SubElement(diagram, "mxGraphModel", {
-        "dx": "1579", "dy": "459", "grid": "1", "gridSize": "10",
-        "guides": "1", "tooltips": "1", "connect": "1", "arrows": "1",
-        "fold": "1", "page": "1", "pageScale": "1", "pageWidth": "827", "pageHeight": "1169",
-        "math": "0", "shadow": "0",
-        "jumpStyle": EDGE_JUMP_STYLE, "jumpSize": str(EDGE_JUMP_SIZE),
-    })
-    root = ET.SubElement(model, "root")
-    ET.SubElement(root, "mxCell", {"id": "0"})
-    ET.SubElement(root, "mxCell", {"id": "1", "parent": "0"})
-
-    style_input_label = (
-        "text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;"
-        "align=right;verticalAlign=middle;rounded=0;direction=east;rotation=90;"
-    )
-    style_input_not_gate = (
-        "verticalLabelPosition=bottom;shadow=0;dashed=0;align=center;html=1;"
-        "verticalAlign=top;shape=mxgraph.electrical.logic_gates.inverter_2;rotation=90;"
-    )
-    gate_exit_lanes = _GateExitLanes()
-    feedback_auto_edge_ids: set[str] = set()
-    style_output_name = "text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;rounded=0;"
-    style_edge_o_to_name = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;strokeColor=%s;endArrow=classic;endFill=1;" % STROKE_DEFAULT
-    # 邏輯閘左側輸入 pin：numInputs=1（AND1.xml 等）唯一錨點 entryY=0.5；多扇入共用此點
-    # exit_left 應只在 source 是 output cell（取 H_Deb/L_Deb 訊號）時使用；
-    # source 是 input label 時 input 沒有 H/L 概念，一律從右邊出（exitX=1）。
-    def _is_deb_placeholder(from_id: int) -> bool:
-        return from_id in h_deb_id_map.values() or from_id in l_deb_id_map.values()
-
-    def _use_hi_lo_deb_placeholder_exit(from_id: int, use_mode: str) -> bool:
-        """use=hi/lo 且來源仍為上游 H/L_Deb 佔位符時，才從左側出（Pass 1 再換成 logic out）。"""
-        return use_mode in ("hi", "lo") and _is_deb_placeholder(from_id)
-
-    def _style_edge_to_gate_entry(entry_y: float, source_id: int, use_mode: str | None) -> str:
-        is_input_src = source_id in set(in_label_id.values())
-        # 僅 Deb 佔位符從左側出；logic_out（Q/~Q/AND/OR）一律 exitX=1。
-        exit_left = (
-            use_mode in ("hi", "lo")
-            and not is_input_src
-            and _is_deb_placeholder(source_id)
-        )
-        ex = 0 if exit_left else 1
-        return (
-            "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;"
-            "exitX=%d;exitY=0.5;exitDx=0;exitDy=0;"
-            "entryX=0;entryY=%.2f;entryDx=0;entryDy=0;entryPerimeter=0;strokeColor=%s;endArrow=classic;endFill=1;" % (ex, entry_y, STROKE_DEFAULT)
-        )
-    def _gate_entry_y(index: int, total: int) -> float:
-        """AND/OR/NAND/NOR（numInputs=1）唯一輸入錨點；多條入邊共用 entryY=0.5。"""
-        del index, total  # 保留簽名供呼叫端；單一輸入點與扇入數無關
-        return _GATE_ENTRY_AY
-    # 規則三：連到 H_Deb 實心綠、連到 L_Deb 實心紅
-    style_and_to_cell_hi = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;strokeColor=%s;" % STROKE_HI
-    style_and_to_cell_lo = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;strokeColor=%s;" % STROKE_LO
-    style_or_to_cell_hi = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;strokeColor=%s;" % STROKE_HI
-    style_or_to_cell_lo = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;strokeColor=%s;" % STROKE_LO
-
-    # 1) Input 文字標籤（僅有被依賴的 input）
-    for name in used_inputs_list:
-        ix, iy = positions_in[name]
-        nid = cell_id
-        cell_id += 1
-        in_label_id[name] = nid
-        cell = ET.SubElement(root, "mxCell", {
-            "id": str(nid), "parent": "1", "style": style_input_label,
-            "value": _escape_xml(name), "vertex": "1"
-        })
-        ET.SubElement(cell, "mxGeometry", {
-            "height": str(INPUT_LABEL_H), "width": str(INPUT_LABEL_W), "x": str(ix), "y": str(iy),
-            "as": "geometry"
-        })
-
-    # 2) Output 節點：依 PSEQCELL.xml — inner + H/L_Deb + Q + ~Q + name + Q→name
-    for r in outputs:
-        px, py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
-        inner_id = cell_id; cell_id += 1
-        h_deb_id = cell_id; cell_id += 1
-        l_deb_id = cell_id; cell_id += 1
-        q_box_id = cell_id; cell_id += 1
-        nq_box_id = cell_id; cell_id += 1
-        name_label_id = cell_id; cell_id += 1
-        edge_q_to_name_id = cell_id; cell_id += 1
-        out_inner_id[r.name] = inner_id
-        h_deb_id_map[r.name] = h_deb_id
-        l_deb_id_map[r.name] = l_deb_id
-        q_box_id_map[r.name] = q_box_id
-        nq_box_id_map[r.name] = nq_box_id
-
-        # 先放 inner（底層），再放 H_Deb/L_Deb/Q/~Q（上層），確保 z-order
-        inner = ET.SubElement(root, "mxCell", {
-            "id": str(inner_id), "parent": "1", "style": _PSEQCELL_STYLE_INNER, "value": "", "vertex": "1"
-        })
-        ET.SubElement(inner, "mxGeometry", {
-            "height": str(CELL_INNER_H), "width": str(CELL_INNER_W),
-            "x": str(px + CELL_INNER_X), "y": str(py), "as": "geometry"
-        })
-
-        h_deb = ET.SubElement(root, "mxCell", {
-            "id": str(h_deb_id), "parent": "1", "style": _PSEQCELL_STYLE_H_DEB,
-            "value": _deb_port_label("H", r.cycle_hi, r.pulse_hi), "vertex": "1",
-        })
-        ET.SubElement(h_deb, "mxGeometry", {
-            "height": str(CELL_H_DEB_H), "width": str(CELL_H_DEB_W),
-            "x": str(px + CELL_INNER_X), "y": str(py + CELL_H_DEB_Y), "as": "geometry"
-        })
-
-        l_deb = ET.SubElement(root, "mxCell", {
-            "id": str(l_deb_id), "parent": "1", "style": _PSEQCELL_STYLE_L_DEB,
-            "value": _deb_port_label("L", r.cycle_lo, r.pulse_lo), "vertex": "1",
-        })
-        ET.SubElement(l_deb, "mxGeometry", {
-            "height": str(CELL_L_DEB_H), "width": str(CELL_L_DEB_W),
-            "x": str(px + CELL_INNER_X), "y": str(py + CELL_L_DEB_Y), "as": "geometry"
-        })
-
-        q_box = ET.SubElement(root, "mxCell", {
-            "id": str(q_box_id), "parent": "1", "style": _PSEQCELL_STYLE_Q, "value": "Q", "vertex": "1"
-        })
-        ET.SubElement(q_box, "mxGeometry", {
-            "height": str(CELL_Q_H), "width": str(CELL_Q_W),
-            "x": str(px + CELL_Q_X), "y": str(py + CELL_Q_Y), "as": "geometry"
-        })
-        nq_box = ET.SubElement(root, "mxCell", {
-            "id": str(nq_box_id), "parent": "1", "style": _PSEQCELL_STYLE_Q, "value": "~Q", "vertex": "1"
-        })
-        ET.SubElement(nq_box, "mxGeometry", {
-            "height": str(CELL_NQ_H), "width": str(CELL_NQ_W),
-            "x": str(px + CELL_NQ_X), "y": str(py + CELL_NQ_Y), "as": "geometry"
-        })
-
-        name_label = ET.SubElement(root, "mxCell", {
-            "id": str(name_label_id), "parent": "1", "style": style_output_name,
-            "value": _escape_xml(r.name), "vertex": "1"
-        })
-        ET.SubElement(name_label, "mxGeometry", {
-            "height": str(INPUT_LABEL_H), "width": str(INPUT_LABEL_W),
-            "x": str(_align40(px + output_name_offset_x)), "y": str(_align10(py + OUTPUT_NAME_OFFSET_Y)),
-            "as": "geometry"
-        })
-
-        # Q → 輸出名稱（水平、無轉角）
-        edge_q_to_name = ET.SubElement(root, "mxCell", {
-            "id": str(edge_q_to_name_id), "edge": "1", "parent": "1",
-            "source": str(q_box_id), "target": str(name_label_id),
-            "style": style_edge_o_to_name, "value": ""
-        })
-        ET.SubElement(edge_q_to_name, "mxGeometry", {"relative": "1", "as": "geometry"})
-
-    # 每個 cell id 的垂直中心 y（用於 AND/OR 依垂直位置接 input pin，減少走線交叉）
-    id_to_y_center: dict[int, int] = {}
-    for name, nid in in_label_id.items():
-        id_to_y_center[nid] = _input_label_center_y(positions_in[name][1])
-    for name, nid in out_inner_id.items():
-        id_to_y_center[nid] = positions_out[name][1] + CELL_GROUP_H // 2
-    for name, qid in q_box_id_map.items():
-        py = positions_out[name][1]
-        id_to_y_center[qid] = py + CELL_Q_Y + CELL_Q_H // 2
-    for name, nqid in nq_box_id_map.items():
-        py = positions_out[name][1]
-        id_to_y_center[nqid] = py + CELL_NQ_Y + CELL_NQ_H // 2
-    for name, hid in h_deb_id_map.items():
-        py = positions_out[name][1]
-        id_to_y_center[hid] = py + CELL_H_DEB_Y + CELL_H_DEB_H // 2
-    for name, lid in l_deb_id_map.items():
-        py = positions_out[name][1]
-        id_to_y_center[lid] = py + CELL_L_DEB_Y + CELL_L_DEB_H // 2
-
-    # 每個 label id 所屬的 row（僅在「不同 row」時加 waypoints，與 debug_golden 一致）
-    id_to_row: dict[int, int] = {}
-    for name, nid in in_label_id.items():
-        id_to_row[nid] = output_to_row.get(input_first_output.get(name, ""), 0)
-    inner_id_to_row: dict[int, int] = {out_inner_id[name]: output_to_row[name] for name in output_to_row}
-    inner_id_to_output: dict[int, str] = {v: k for k, v in out_inner_id.items()}
-
-    and_gate_y: dict[int, int] = {}  # AND gate id -> y 中心，供排序用
-    gate_right_x: dict[int, int] = {}  # 邏輯閘 id -> 右緣 x
-
-    # 3) 依賴邊：依 group 繪製；單一訊號直連 H/L，兩訊號以上經 AND 閘。規則五：走線經 waypoint 繞開元件、不重疊；Hi 綠、Lo 虛線紅。
-    style_hi_to_cell = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;strokeColor=%s;" % STROKE_HI
-    style_lo_to_cell = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;strokeColor=%s;" % STROKE_LO
-    style_hi_to_cell_left = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;strokeColor=%s;" % STROKE_HI
-    style_lo_to_cell_left = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=blockThin;endFill=1;strokeColor=%s;" % STROKE_LO
-
-    def _source_id(d: str, inv: bool, is_hi: bool, use_mode: str = "self") -> int | None:
-        """依賴來源的「邏輯來源」cell id。
-
-        use_mode:
-          'self' = Node 自身輸出 (inner)
-          'hi'   = 該節點 Hi 依賴邏輯的輸出（AND/OR 閘）
-          'lo'   = 該節點 Lo 依賴邏輯的輸出（AND/OR 閘）
-
-        use_mode="hi"/"lo" 時優先回傳上游已登記的 logic_out（Q/~Q/AND/OR 輸出腳）；
-        尚未建立時才回傳 H_Deb/L_Deb 佔位（Pass 1 替換，相容處理順序）。
-        inv=True 不再走 ~Name 文字標籤，而是由 post-fix 統一插入「共用 NOT 閘」
-        並將 source 替換為 NOT 閘 id；本函式忽略 inv 參數。
-        """
-        if name_to_rail[d].seq_type == "input":
-            return in_label_id.get(d)
-        if use_mode == "hi":
-            if d in hi_logic_out_id:
-                return hi_logic_out_id[d]
-            return h_deb_id_map.get(d) or out_inner_id.get(d)
-        if use_mode == "lo":
-            if d in lo_logic_out_id:
-                return lo_logic_out_id[d]
-            return l_deb_id_map.get(d) or out_inner_id.get(d)
-        return q_box_id_map.get(d)
-
-    def _logic_output_pin(dep_rail: str, inv: bool, use_mode: str, from_id: int) -> int:
-        """列內 hi/lo 邏輯完成後，對外扇出的輸出腳（Cell Q/~Q 或 AND/OR 右側，非 Deb）。"""
-        if name_to_rail[dep_rail].seq_type == "input":
-            return from_id
-        if use_mode == "hi" and dep_rail in hi_logic_out_id:
-            pin = hi_logic_out_id[dep_rail]
-        elif use_mode == "lo" and dep_rail in lo_logic_out_id:
-            pin = lo_logic_out_id[dep_rail]
-        else:
-            pin = from_id
-        return _coerce_cell_out_id(
-            dep_rail,
-            pin,
-            inv=inv,
-            out_inner_id=out_inner_id,
-            q_box_id_map=q_box_id_map,
-            nq_box_id_map=nq_box_id_map,
-        )
-
-    for r in outputs:
-        to_inner = out_inner_id.get(r.name)
-        to_h_deb = h_deb_id_map.get(r.name)
-        to_l_deb = l_deb_id_map.get(r.name)
-        if to_inner is None or to_h_deb is None or to_l_deb is None:
-            continue
-
-        hi_groups = r.get_hi_groups()
-        if len(hi_groups) >= 2:
-            # 每筆 = (from_id, dep_name_if_direct_inv 或 None, use_mode)；後者用於 OR 邊建立時記 _inv_edges
-            group_outputs_hi: list[tuple[int, str, str | None, str, int]] = []
-            for gi, group in enumerate(hi_groups):
-                if not group:
-                    continue
-                inv_list = [r.get_hi_inv(gi, ii, d) for ii, d in enumerate(group)]
-                use_list = [r.get_hi_use(gi, ii, d) for ii, d in enumerate(group)]
-                if len(group) == 1:
-                    d = group[0]
-                    if d in valid and d not in CONST_DEPS:
-                        from_id = _source_id(d, inv_list[0], True, use_list[0])
-                        if from_id is not None:
-                            group_outputs_hi.append(
-                                (from_id, d, d if inv_list[0] else None, use_list[0], gi)
-                            )
-                else:
-                    key_hi = (r.name, "hi", gi)
-                    if key_hi not in and_gate_id:
-                        aid = cell_id
-                        cell_id += 1
-                        and_gate_id[key_hi] = aid
-                        _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
-                        and_cell = ET.SubElement(root, "mxCell", {
-                            "id": str(aid), "parent": "1", "style": _and_gate_style(r, "hi", gi), "value": "", "vertex": "1"
-                        })
-                        ET.SubElement(and_cell, "mxGeometry", {
-                            "height": str(AND_GATE_H), "width": str(AND_GATE_W),
-                            "x": str(_px + _and_gate_offset_x(r.name)), "y": str(_and_y_top(r.name, "hi", gi)),
-                            "as": "geometry"
-                        })
-                        _ay = _and_y_center(r.name, "hi", gi)
-                        and_gate_y[aid] = _ay
-                        id_to_y_center[aid] = _ay
-                        gate_right_x[aid] = and_col_x + AND_GATE_W
-                        _register_gate_catalog(gate_exit_lanes, aid, and_lane_idx.get(key_hi))
-                    and_srcs = []
-                    for i, d in enumerate(group):
-                        if d not in valid or d in CONST_DEPS:
-                            continue
-                        from_id = _source_id(d, inv_list[i], True, use_list[i])
-                        if from_id is not None:
-                            and_srcs.append((from_id, d, inv_list[i], use_list[i], i))
-                    and_srcs.sort(key=lambda t: id_to_y_center.get(t[0], 0))
-                    for i, (from_id, d, inv, _um, ii) in enumerate(and_srcs):
-                        sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs)), from_id, _um)
-                        eid = str(cell_id)
-                        cell = ET.SubElement(root, "mxCell", {"id": eid, "style": sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(and_gate_id[key_hi])})
-                        if inv:
-                            _inv_edges[eid] = (d, _um)
-                        cell_id += 1
-                        geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                        if name_to_rail[d].seq_type == "input":
-                            lab = positions_in.get(d)
-                            if lab:
-                                gy = _and_y_center(r.name, "hi", gi)
-                                _wire_input_to_gate(geo, lab, gy)
-                        else:
-                            _wire_and_dep_non_input(
-                                geo, eid, from_id, d,
-                                _and_y_center(r.name, "hi", gi), r.name,
-                                "hi", gi, ii,
-                                use_mode=_um,
-                                layout_feedback_dep_keys=layout_feedback_dep_keys,
-                                feedback_auto_edge_ids=feedback_auto_edge_ids,
-                                inner_id_to_row=inner_id_to_row,
-                                inner_id_to_output=inner_id_to_output,
-                                output_to_row=output_to_row,
-                                hi_logic_out_id=hi_logic_out_id,
-                                lo_logic_out_id=lo_logic_out_id,
-                                q_box_id_map=q_box_id_map,
-                                nq_box_id_map=nq_box_id_map,
-                                and_gate_id=and_gate_id,
-                                or_gate_id=or_gate_id,
-                                and_idx_map=idx_map,
-                                name_to_rail=name_to_rail,
-                                positions_out=positions_out,
-                                id_to_y_center=id_to_y_center,
-                                gate_exit_lanes=gate_exit_lanes,
-                                gate_right_x=gate_right_x,
-                                and_col_x=and_col_x,
-                            )
-                        geo.text = "\n            "
-                    _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
-                    logic_hi = and_gate_id[key_hi]
-                    group_outputs_hi.append((logic_hi, r.name, None, "self", gi))
-            if group_outputs_hi:
-                or_id = cell_id
-                cell_id += 1
-                or_gate_id[(r.name, "hi")] = or_id
-                _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
-                _or_top = _or_y_top(r.name, "hi")
-                _oy = _or_top + OR_GATE_H // 2
-                id_to_y_center[or_id] = _oy
-                gate_right_x[or_id] = _or_col_x(r.name) + OR_GATE_W
-                or_cell = ET.SubElement(root, "mxCell", {
-                    "id": str(or_id), "parent": "1", "style": _or_gate_style(r, "hi"), "value": "", "vertex": "1"
-                })
-                ET.SubElement(or_cell, "mxGeometry", {
-                    "height": str(OR_GATE_H), "width": str(OR_GATE_W),
-                    "x": str(_px + _or_gate_offset_x(r.name)), "y": str(_or_top),
-                    "as": "geometry"
-                })
-                _register_gate_catalog(
-                    gate_exit_lanes, or_id, or_lane_idx.get((r.name, "hi"))
-                )
-                sorted_hi = sorted(group_outputs_hi, key=lambda t: id_to_y_center.get(t[0], 0))
-                hi_gate_out_ids = {
-                    and_gate_id[k] for k in and_gate_id if k[0] == r.name and k[1] == "hi"
-                }
-                for idx, (src_id, dep_name, dep_inv, dep_um, dep_gi) in enumerate(sorted_hi):
-                    sty = _style_edge_to_gate_entry(_gate_entry_y(idx, len(sorted_hi)), src_id, dep_um)
-                    eid = str(cell_id)
-                    cell = ET.SubElement(root, "mxCell", {"id": eid, "style": sty, "edge": "1", "parent": "1", "source": str(src_id), "target": str(or_id)})
-                    if dep_inv is not None:
-                        _inv_edges[eid] = (dep_inv, dep_um)
-                    cell_id += 1
-                    geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                    _oy = _or_y_center(r.name, "hi")
-                    if src_id in hi_gate_out_ids:
-                        _wire_and_or_output(
-                            gate_exit_lanes, geo, src_id,
-                            id_to_y_center[src_id], _oy, gate_right_x[src_id],
-                        )
-                    elif src_id in id_to_row:
-                        # 輸入→OR：freeze_edge_routing 會補 stub waypoints
-                        pass
-                    else:
-                        is_fb = _mark_traced_layout_feedback_edge(
-                            feedback_auto_edge_ids,
-                            eid,
-                            src_id,
-                            dep_name,
-                            dep_um,
-                            r.name,
-                            "hi",
-                            dep_gi,
-                            0,
-                            layout_feedback_dep_keys=layout_feedback_dep_keys,
-                            output_to_row=output_to_row,
-                            q_box_id_map=q_box_id_map,
-                            nq_box_id_map=nq_box_id_map,
-                            hi_logic_out_id=hi_logic_out_id,
-                            lo_logic_out_id=lo_logic_out_id,
-                            and_gate_id=and_gate_id,
-                            or_gate_id=or_gate_id,
-                            and_idx_map=idx_map,
-                            name_to_rail=name_to_rail,
-                            inner_id_to_row=inner_id_to_row,
-                            inner_id_to_output=inner_id_to_output,
-                            tgt_layer="or",
-                        )
-                        if not is_fb:
-                            src_row = _logic_gate_source_row(
-                                src_id,
-                                dep_name,
-                                and_gate_id=and_gate_id,
-                                or_gate_id=or_gate_id,
-                                inner_id_to_row=inner_id_to_row,
-                                inner_id_to_output=inner_id_to_output,
-                                output_to_row=output_to_row,
-                            )
-                            tgt_row = output_to_row[r.name]
-                            or_entry_x = _or_col_x(r.name)
-                            _sy = id_to_y_center.get(src_id)
-                            if _sy is not None:
-                                _right = _logic_source_right_x(
-                                    src_id,
-                                    inner_id_to_output=inner_id_to_output,
-                                    q_box_id_map=q_box_id_map,
-                                    nq_box_id_map=nq_box_id_map,
-                                    positions_out=positions_out,
-                                    gate_right_x=gate_right_x,
-                                    and_col_x=and_col_x,
-                                )
-                                if src_row is not None and src_row < tgt_row:
-                                    gate_exit_lanes.wire_via_channel(
-                                        geo, src_id, _right, _sy, or_entry_x, _oy
-                                    )
-                                else:
-                                    gate_exit_lanes.wire_vertical(
-                                        geo, src_id, _right, _sy, _oy
-                                    )
-                    geo.text = "\n            "
-                or_out_hi = or_id
-                cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": style_or_to_cell_hi, "edge": "1", "parent": "1", "source": str(or_out_hi), "target": str(to_h_deb)})
-                cell_id += 1
-                geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                _deb_y = _py + CELL_H_DEB_Y + CELL_H_DEB_H // 2
-                gate_exit_lanes.wire_via_channel(
-                    geo, or_out_hi, gate_right_x[or_out_hi], id_to_y_center[or_out_hi],
-                    _deb_entry_x(r.name), _deb_y,
-                    max_lx=_deb_entry_x(r.name) - GRID,
-                )
-                geo.text = "\n            "
-                hi_logic_out_id[r.name] = or_out_hi
-        else:
-            for gi, group in enumerate(hi_groups):
-                if not group:
-                    continue
-                inv_list = [r.get_hi_inv(gi, ii, d) for ii, d in enumerate(group)]
-                use_list = [r.get_hi_use(gi, ii, d) for ii, d in enumerate(group)]
-                if len(group) == 1:
-                    d = group[0]
-                    if d not in valid or d in CONST_DEPS:
-                        continue
-                    _iv = inv_list[0]
-                    _use = use_list[0]
-                    from_id = _source_id(d, _iv, True, _use)
-                    if from_id is None:
-                        continue
-                    _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
-                    is_input_dep = name_to_rail[d].seq_type == "input"
-                    # input→Cell 與 inv=True 一律走「正向邊」(source=來源, target=H_Deb)：
-                    # source 為 input label 者自動歸 Rule 1 正交自動（不畫反向標示邊）。
-                    _sty = (
-                        style_hi_to_cell_left
-                        if _use_hi_lo_deb_placeholder_exit(from_id, _use)
-                        else style_hi_to_cell
-                    )
-                    eid = str(cell_id)
-                    cell = ET.SubElement(root, "mxCell", {"id": eid, "style": _sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(to_h_deb)})
-                    if _iv:
-                        _inv_edges[str(cell_id)] = (d, _use)
-                    cell_id += 1
-                    geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                    if not is_input_dep:
-                        deb_y = _py + CELL_H_DEB_Y + CELL_H_DEB_H // 2
-                        src_row = _dep_source_row(
-                            from_id,
-                            d,
-                            inner_id_to_row=inner_id_to_row,
-                            inner_id_to_output=inner_id_to_output,
-                            output_to_row=output_to_row,
-                        )
-                        tgt_row = output_to_row[r.name]
-                        if _mark_layout_feedback_edge(
-                            feedback_auto_edge_ids,
-                            eid,
-                            layout_feedback_dep_keys=layout_feedback_dep_keys,
-                            tgt_rail=r.name,
-                            hl="hi",
-                            gi=gi,
-                            ii=0,
-                            dep_name=d,
-                        ):
-                            pass
-                        elif src_row is not None and src_row < tgt_row:
-                            _sy = id_to_y_center.get(from_id, _py + 40)
-                            _right = _logic_source_right_x(
-                                from_id,
-                                inner_id_to_output=inner_id_to_output,
-                                q_box_id_map=q_box_id_map,
-                                nq_box_id_map=nq_box_id_map,
-                                positions_out=positions_out,
-                                gate_right_x=gate_right_x,
-                                and_col_x=and_col_x,
-                            )
-                            gate_exit_lanes.wire_via_channel(
-                                geo, from_id, _right, _sy, _deb_entry_x(r.name), deb_y
-                            )
-                        elif src_row is not None and src_row > tgt_row:
-                            # 上行回授（含 Q／~Q）→ 交由五段凍結回授走線（依 profile）。
-                            feedback_auto_edge_ids.add(eid)
-                        else:
-                            _sy = id_to_y_center.get(from_id, _py + 40)
-                            _right = _logic_source_right_x(
-                                from_id,
-                                inner_id_to_output=inner_id_to_output,
-                                q_box_id_map=q_box_id_map,
-                                nq_box_id_map=nq_box_id_map,
-                                positions_out=positions_out,
-                                gate_right_x=gate_right_x,
-                                and_col_x=and_col_x,
-                            )
-                            above_y = _align40(_py - GRID)
-                            lx = gate_exit_lanes.stub_x(from_id, _right)
-                            _add_edge_points(
-                                geo,
-                                [(lx, _sy), (lx, above_y), (lx, deb_y), (_deb_entry_x(r.name), deb_y)],
-                                align=[False, True, True, True],
-                            )
-                    geo.text = "\n            "
-                    hi_logic_out_id.setdefault(
-                        r.name, _logic_output_pin(d, _iv, _use, from_id)
-                    )
-                else:
-                    key_hi = (r.name, "hi", gi)
-                    if key_hi not in and_gate_id:
-                        aid = cell_id
-                        cell_id += 1
-                        and_gate_id[key_hi] = aid
-                        _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
-                        and_cell = ET.SubElement(root, "mxCell", {
-                            "id": str(aid), "parent": "1", "style": _and_gate_style(r, "hi", gi), "value": "", "vertex": "1"
-                        })
-                        ET.SubElement(and_cell, "mxGeometry", {
-                            "height": str(AND_GATE_H), "width": str(AND_GATE_W),
-                            "x": str(_px + _and_gate_offset_x(r.name)), "y": str(_and_y_top(r.name, "hi", gi)),
-                            "as": "geometry"
-                        })
-                        _ay = _and_y_center(r.name, "hi", gi)
-                        and_gate_y[aid] = _ay
-                        id_to_y_center[aid] = _ay
-                        gate_right_x[aid] = and_col_x + AND_GATE_W
-                        _register_gate_catalog(gate_exit_lanes, aid, and_lane_idx.get(key_hi))
-                    and_id = and_gate_id[key_hi]
-                    and_srcs = [(_source_id(d, inv_list[i], True, use_list[i]), d, use_list[i], inv_list[i], i) for i, d in enumerate(group) if d in valid and d not in CONST_DEPS and _source_id(d, inv_list[i], True, use_list[i]) is not None]
-                    and_srcs = [(fid, d, um, iv, ii) for (fid, d, um, iv, ii) in and_srcs if fid is not None]
-                    and_srcs.sort(key=lambda t: id_to_y_center.get(t[0], 0))
-                    for i, (from_id, d, _um, _iv, ii) in enumerate(and_srcs):
-                        sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs)), from_id, _um)
-                        eid = str(cell_id)
-                        cell = ET.SubElement(root, "mxCell", {"id": eid, "style": sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(and_id)})
-                        if _iv:
-                            _inv_edges[eid] = (d, _um)
-                        cell_id += 1
-                        geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                        if name_to_rail[d].seq_type == "input":
-                            lab = positions_in.get(d)
-                            if lab:
-                                gy = _and_y_center(r.name, "hi", gi)
-                                _wire_input_to_gate(geo, lab, gy)
-                        else:
-                            _wire_and_dep_non_input(
-                                geo, eid, from_id, d,
-                                _and_y_center(r.name, "hi", gi), r.name,
-                                "hi", gi, ii,
-                                use_mode=_um,
-                                layout_feedback_dep_keys=layout_feedback_dep_keys,
-                                feedback_auto_edge_ids=feedback_auto_edge_ids,
-                                inner_id_to_row=inner_id_to_row,
-                                inner_id_to_output=inner_id_to_output,
-                                output_to_row=output_to_row,
-                                hi_logic_out_id=hi_logic_out_id,
-                                lo_logic_out_id=lo_logic_out_id,
-                                q_box_id_map=q_box_id_map,
-                                nq_box_id_map=nq_box_id_map,
-                                and_gate_id=and_gate_id,
-                                or_gate_id=or_gate_id,
-                                and_idx_map=idx_map,
-                                name_to_rail=name_to_rail,
-                                positions_out=positions_out,
-                                id_to_y_center=id_to_y_center,
-                                gate_exit_lanes=gate_exit_lanes,
-                                gate_right_x=gate_right_x,
-                                and_col_x=and_col_x,
-                            )
-                        geo.text = "\n            "
-                    _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
-                    and_id = and_gate_id[key_hi]
-                    logic_hi = and_id
-                    cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": style_and_to_cell_hi, "edge": "1", "parent": "1", "source": str(logic_hi), "target": str(to_h_deb)})
-                    cell_id += 1
-                    geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                    _hy = _py + CELL_H_DEB_Y + CELL_H_DEB_H // 2
-                    gate_exit_lanes.wire_via_channel(
-                        geo, logic_hi, gate_right_x[logic_hi], id_to_y_center[logic_hi],
-                        _deb_entry_x(r.name), _hy,
-                    )
-                    geo.text = "\n            "
-                    hi_logic_out_id[r.name] = logic_hi
-
-        lo_groups = r.get_lo_groups()
-        if len(lo_groups) >= 2:
-            group_outputs_lo: list[tuple[int, str, str | None, str, int]] = []
-            for gi, group in enumerate(lo_groups):
-                if not group:
-                    continue
-                inv_list = [r.get_lo_inv(gi, ii, d) for ii, d in enumerate(group)]
-                use_list = [r.get_lo_use(gi, ii, d) for ii, d in enumerate(group)]
-                if len(group) == 1:
-                    d = group[0]
-                    if d in valid and d not in CONST_DEPS:
-                        from_id = _source_id(d, inv_list[0], False, use_list[0])
-                        if from_id is not None:
-                            group_outputs_lo.append(
-                                (from_id, d, d if inv_list[0] else None, use_list[0], gi)
-                            )
-                else:
-                    key_lo = (r.name, "lo", gi)
-                    if key_lo not in and_gate_id:
-                        aid = cell_id
-                        cell_id += 1
-                        and_gate_id[key_lo] = aid
-                        _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
-                        and_cell = ET.SubElement(root, "mxCell", {
-                            "id": str(aid), "parent": "1", "style": _and_gate_style(r, "lo", gi), "value": "", "vertex": "1"
-                        })
-                        ET.SubElement(and_cell, "mxGeometry", {
-                            "height": str(AND_GATE_H), "width": str(AND_GATE_W),
-                            "x": str(_px + _and_gate_offset_x(r.name)), "y": str(_and_y_top(r.name, "lo", gi)),
-                            "as": "geometry"
-                        })
-                        _ay = _and_y_center(r.name, "lo", gi)
-                        and_gate_y[aid] = _ay
-                        id_to_y_center[aid] = _ay
-                        gate_right_x[aid] = and_col_x + AND_GATE_W
-                        _register_gate_catalog(gate_exit_lanes, aid, and_lane_idx.get(key_lo))
-                    and_srcs_lo = []
-                    for i, d in enumerate(group):
-                        if d not in valid or d in CONST_DEPS:
-                            continue
-                        from_id = _source_id(d, inv_list[i], False, use_list[i])
-                        if from_id is not None:
-                            and_srcs_lo.append((from_id, d, inv_list[i], use_list[i], i))
-                    and_srcs_lo.sort(key=lambda t: id_to_y_center.get(t[0], 0))
-                    for i, (from_id, d, inv, _um, ii) in enumerate(and_srcs_lo):
-                        sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs_lo)), from_id, _um)
-                        eid = str(cell_id)
-                        cell = ET.SubElement(root, "mxCell", {"id": eid, "style": sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(and_gate_id[key_lo])})
-                        if inv:
-                            _inv_edges[eid] = (d, _um)
-                        cell_id += 1
-                        geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                        if name_to_rail[d].seq_type == "input":
-                            lab = positions_in.get(d)
-                            if lab:
-                                gy = _and_y_center(r.name, "lo", gi)
-                                _wire_input_to_gate(geo, lab, gy)
-                        else:
-                            _wire_and_dep_non_input(
-                                geo, eid, from_id, d,
-                                _and_y_center(r.name, "lo", gi), r.name,
-                                "lo", gi, ii,
-                                use_mode=_um,
-                                layout_feedback_dep_keys=layout_feedback_dep_keys,
-                                feedback_auto_edge_ids=feedback_auto_edge_ids,
-                                inner_id_to_row=inner_id_to_row,
-                                inner_id_to_output=inner_id_to_output,
-                                output_to_row=output_to_row,
-                                hi_logic_out_id=hi_logic_out_id,
-                                lo_logic_out_id=lo_logic_out_id,
-                                q_box_id_map=q_box_id_map,
-                                nq_box_id_map=nq_box_id_map,
-                                and_gate_id=and_gate_id,
-                                or_gate_id=or_gate_id,
-                                and_idx_map=idx_map,
-                                name_to_rail=name_to_rail,
-                                positions_out=positions_out,
-                                id_to_y_center=id_to_y_center,
-                                gate_exit_lanes=gate_exit_lanes,
-                                gate_right_x=gate_right_x,
-                                and_col_x=and_col_x,
-                            )
-                        geo.text = "\n            "
-                    _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
-                    logic_lo = and_gate_id[key_lo]
-                    group_outputs_lo.append((logic_lo, r.name, None, "self", gi))
-            if group_outputs_lo:
-                or_id = cell_id
-                cell_id += 1
-                or_gate_id[(r.name, "lo")] = or_id
-                _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
-                _or_top = _or_y_top(r.name, "lo")
-                _oy = _or_top + OR_GATE_H // 2
-                id_to_y_center[or_id] = _oy
-                gate_right_x[or_id] = _or_col_x(r.name) + OR_GATE_W
-                or_cell = ET.SubElement(root, "mxCell", {
-                    "id": str(or_id), "parent": "1", "style": _or_gate_style(r, "lo"), "value": "", "vertex": "1"
-                })
-                ET.SubElement(or_cell, "mxGeometry", {
-                    "height": str(OR_GATE_H), "width": str(OR_GATE_W),
-                    "x": str(_px + _or_gate_offset_x(r.name)), "y": str(_or_top),
-                    "as": "geometry"
-                })
-                _register_gate_catalog(
-                    gate_exit_lanes, or_id, or_lane_idx.get((r.name, "lo"))
-                )
-                sorted_lo = sorted(group_outputs_lo, key=lambda t: id_to_y_center.get(t[0], 0))
-                lo_gate_out_ids = {
-                    and_gate_id[k] for k in and_gate_id if k[0] == r.name and k[1] == "lo"
-                }
-                for idx, (src_id, dep_name, dep_inv, dep_um, dep_gi) in enumerate(sorted_lo):
-                    sty = _style_edge_to_gate_entry(_gate_entry_y(idx, len(sorted_lo)), src_id, dep_um)
-                    eid = str(cell_id)
-                    cell = ET.SubElement(root, "mxCell", {"id": eid, "style": sty, "edge": "1", "parent": "1", "source": str(src_id), "target": str(or_id)})
-                    if dep_inv is not None:
-                        _inv_edges[eid] = (dep_inv, dep_um)
-                    cell_id += 1
-                    geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                    _oy = _or_y_center(r.name, "lo")
-                    if src_id in lo_gate_out_ids:
-                        _wire_and_or_output(
-                            gate_exit_lanes, geo, src_id,
-                            id_to_y_center[src_id], _oy, gate_right_x[src_id],
-                        )
-                    elif src_id in id_to_row:
-                        # 輸入→OR：freeze_edge_routing 會補 stub waypoints
-                        pass
-                    else:
-                        is_fb = _mark_traced_layout_feedback_edge(
-                            feedback_auto_edge_ids,
-                            eid,
-                            src_id,
-                            dep_name,
-                            dep_um,
-                            r.name,
-                            "lo",
-                            dep_gi,
-                            0,
-                            layout_feedback_dep_keys=layout_feedback_dep_keys,
-                            output_to_row=output_to_row,
-                            q_box_id_map=q_box_id_map,
-                            nq_box_id_map=nq_box_id_map,
-                            hi_logic_out_id=hi_logic_out_id,
-                            lo_logic_out_id=lo_logic_out_id,
-                            and_gate_id=and_gate_id,
-                            or_gate_id=or_gate_id,
-                            and_idx_map=idx_map,
-                            name_to_rail=name_to_rail,
-                            inner_id_to_row=inner_id_to_row,
-                            inner_id_to_output=inner_id_to_output,
-                            tgt_layer="or",
-                        )
-                        if not is_fb:
-                            src_row = _logic_gate_source_row(
-                                src_id,
-                                dep_name,
-                                and_gate_id=and_gate_id,
-                                or_gate_id=or_gate_id,
-                                inner_id_to_row=inner_id_to_row,
-                                inner_id_to_output=inner_id_to_output,
-                                output_to_row=output_to_row,
-                            )
-                            tgt_row = output_to_row[r.name]
-                            or_entry_x = _or_col_x(r.name)
-                            _sy = id_to_y_center.get(src_id)
-                            if _sy is not None:
-                                _right = _logic_source_right_x(
-                                    src_id,
-                                    inner_id_to_output=inner_id_to_output,
-                                    q_box_id_map=q_box_id_map,
-                                    nq_box_id_map=nq_box_id_map,
-                                    positions_out=positions_out,
-                                    gate_right_x=gate_right_x,
-                                    and_col_x=and_col_x,
-                                )
-                                if src_row is not None and src_row < tgt_row:
-                                    gate_exit_lanes.wire_via_channel(
-                                        geo, src_id, _right, _sy, or_entry_x, _oy
-                                    )
-                                else:
-                                    gate_exit_lanes.wire_vertical(
-                                        geo, src_id, _right, _sy, _oy
-                                    )
-                    geo.text = "\n            "
-                or_out_lo = or_id
-                cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": style_or_to_cell_lo, "edge": "1", "parent": "1", "source": str(or_out_lo), "target": str(to_l_deb)})
-                cell_id += 1
-                geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                _deb_y = _py + CELL_L_DEB_Y + CELL_L_DEB_H // 2
-                gate_exit_lanes.wire_via_channel(
-                    geo, or_out_lo, gate_right_x[or_out_lo], id_to_y_center[or_out_lo],
-                    _deb_entry_x(r.name), _deb_y,
-                    max_lx=_deb_entry_x(r.name) - GRID,
-                )
-                geo.text = "\n            "
-                lo_logic_out_id[r.name] = or_out_lo
-        else:
-            for gi, group in enumerate(lo_groups):
-                if not group:
-                    continue
-                inv_list = [r.get_lo_inv(gi, ii, d) for ii, d in enumerate(group)]
-                use_list = [r.get_lo_use(gi, ii, d) for ii, d in enumerate(group)]
-                if len(group) == 1:
-                    d = group[0]
-                    if d not in valid or d in CONST_DEPS:
-                        continue
-                    _iv = inv_list[0]
-                    _use = use_list[0]
-                    from_id = _source_id(d, _iv, False, _use)
-                    if from_id is None:
-                        continue
-                    _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
-                    is_input_dep = name_to_rail[d].seq_type == "input"
-                    # input→Cell 與 inv=True 一律走「正向邊」(source=來源, target=L_Deb)：
-                    # source 為 input label 者自動歸 Rule 1 正交自動（不畫反向標示邊）。
-                    _sty = (
-                        style_lo_to_cell_left
-                        if _use_hi_lo_deb_placeholder_exit(from_id, _use)
-                        else style_lo_to_cell
-                    )
-                    eid = str(cell_id)
-                    cell = ET.SubElement(root, "mxCell", {"id": eid, "style": _sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(to_l_deb)})
-                    if _iv:
-                        _inv_edges[str(cell_id)] = (d, _use)
-                    cell_id += 1
-                    geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                    if not is_input_dep:
-                        deb_y = _py + CELL_L_DEB_Y + CELL_L_DEB_H // 2
-                        src_row = _dep_source_row(
-                            from_id,
-                            d,
-                            inner_id_to_row=inner_id_to_row,
-                            inner_id_to_output=inner_id_to_output,
-                            output_to_row=output_to_row,
-                        )
-                        tgt_row = output_to_row[r.name]
-                        if _mark_layout_feedback_edge(
-                            feedback_auto_edge_ids,
-                            eid,
-                            layout_feedback_dep_keys=layout_feedback_dep_keys,
-                            tgt_rail=r.name,
-                            hl="lo",
-                            gi=gi,
-                            ii=0,
-                            dep_name=d,
-                        ):
-                            pass
-                        elif src_row is not None and src_row < tgt_row:
-                            _sy = id_to_y_center.get(from_id, _py + 40)
-                            _right = _logic_source_right_x(
-                                from_id,
-                                inner_id_to_output=inner_id_to_output,
-                                q_box_id_map=q_box_id_map,
-                                nq_box_id_map=nq_box_id_map,
-                                positions_out=positions_out,
-                                gate_right_x=gate_right_x,
-                                and_col_x=and_col_x,
-                            )
-                            gate_exit_lanes.wire_via_channel(
-                                geo, from_id, _right, _sy, _deb_entry_x(r.name), deb_y
-                            )
-                        elif src_row is not None and src_row > tgt_row:
-                            # 上行回授（含 Q／~Q）→ 交由五段凍結回授走線（依 profile）。
-                            feedback_auto_edge_ids.add(eid)
-                        else:
-                            _sy = id_to_y_center.get(from_id, _py + 40)
-                            _right = _logic_source_right_x(
-                                from_id,
-                                inner_id_to_output=inner_id_to_output,
-                                q_box_id_map=q_box_id_map,
-                                nq_box_id_map=nq_box_id_map,
-                                positions_out=positions_out,
-                                gate_right_x=gate_right_x,
-                                and_col_x=and_col_x,
-                            )
-                            above_y = _align40(_py - GRID)
-                            lx = gate_exit_lanes.stub_x(from_id, _right)
-                            _add_edge_points(
-                                geo,
-                                [(lx, _sy), (lx, above_y), (lx, deb_y), (_deb_entry_x(r.name), deb_y)],
-                                align=[False, True, True, True],
-                            )
-                    geo.text = "\n            "
-                    lo_logic_out_id.setdefault(
-                        r.name, _logic_output_pin(d, _iv, _use, from_id)
-                    )
-                else:
-                    key_lo = (r.name, "lo", gi)
-                    if key_lo not in and_gate_id:
-                        aid = cell_id
-                        cell_id += 1
-                        and_gate_id[key_lo] = aid
-                        _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
-                        and_cell = ET.SubElement(root, "mxCell", {
-                            "id": str(aid), "parent": "1", "style": _and_gate_style(r, "lo", gi), "value": "", "vertex": "1"
-                        })
-                        ET.SubElement(and_cell, "mxGeometry", {
-                            "height": str(AND_GATE_H), "width": str(AND_GATE_W),
-                            "x": str(_px + _and_gate_offset_x(r.name)), "y": str(_and_y_top(r.name, "lo", gi)),
-                            "as": "geometry"
-                        })
-                        _ay = _and_y_center(r.name, "lo", gi)
-                        and_gate_y[aid] = _ay
-                        id_to_y_center[aid] = _ay
-                        gate_right_x[aid] = and_col_x + AND_GATE_W
-                        _register_gate_catalog(gate_exit_lanes, aid, and_lane_idx.get(key_lo))
-                    and_id = and_gate_id[key_lo]
-                    and_srcs_lo2 = [(_source_id(d, inv_list[i], False, use_list[i]), d, use_list[i], inv_list[i], i) for i, d in enumerate(group) if d in valid and d not in CONST_DEPS and _source_id(d, inv_list[i], False, use_list[i]) is not None]
-                    and_srcs_lo2 = [(fid, d, um, iv, ii) for (fid, d, um, iv, ii) in and_srcs_lo2 if fid is not None]
-                    and_srcs_lo2.sort(key=lambda t: id_to_y_center.get(t[0], 0))
-                    for i, (from_id, d, _um, _iv, ii) in enumerate(and_srcs_lo2):
-                        sty = _style_edge_to_gate_entry(_gate_entry_y(i, len(and_srcs_lo2)), from_id, _um)
-                        eid = str(cell_id)
-                        cell = ET.SubElement(root, "mxCell", {"id": eid, "style": sty, "edge": "1", "parent": "1", "source": str(from_id), "target": str(and_id)})
-                        if _iv:
-                            _inv_edges[eid] = (d, _um)
-                        cell_id += 1
-                        geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                        if name_to_rail[d].seq_type == "input":
-                            lab = positions_in.get(d)
-                            if lab:
-                                gy = _and_y_center(r.name, "lo", gi)
-                                _wire_input_to_gate(geo, lab, gy)
-                        else:
-                            _wire_and_dep_non_input(
-                                geo, eid, from_id, d,
-                                _and_y_center(r.name, "lo", gi), r.name,
-                                "lo", gi, ii,
-                                use_mode=_um,
-                                layout_feedback_dep_keys=layout_feedback_dep_keys,
-                                feedback_auto_edge_ids=feedback_auto_edge_ids,
-                                inner_id_to_row=inner_id_to_row,
-                                inner_id_to_output=inner_id_to_output,
-                                output_to_row=output_to_row,
-                                hi_logic_out_id=hi_logic_out_id,
-                                lo_logic_out_id=lo_logic_out_id,
-                                q_box_id_map=q_box_id_map,
-                                nq_box_id_map=nq_box_id_map,
-                                and_gate_id=and_gate_id,
-                                or_gate_id=or_gate_id,
-                                and_idx_map=idx_map,
-                                name_to_rail=name_to_rail,
-                                positions_out=positions_out,
-                                id_to_y_center=id_to_y_center,
-                                gate_exit_lanes=gate_exit_lanes,
-                                gate_right_x=gate_right_x,
-                                and_col_x=and_col_x,
-                            )
-                        geo.text = "\n            "
-                    _px, _py = positions_out.get(r.name, (_cell_x(r.name), MARGIN))
-                    and_id = and_gate_id[key_lo]
-                    logic_lo = and_id
-                    cell = ET.SubElement(root, "mxCell", {"id": str(cell_id), "style": style_and_to_cell_lo, "edge": "1", "parent": "1", "source": str(logic_lo), "target": str(to_l_deb)})
-                    cell_id += 1
-                    geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
-                    _ly = _py + CELL_L_DEB_Y + CELL_L_DEB_H // 2
-                    gate_exit_lanes.wire_via_channel(
-                        geo, logic_lo, gate_right_x[logic_lo], id_to_y_center[logic_lo],
-                        _deb_entry_x(r.name), _ly,
-                    )
-                    geo.text = "\n            "
-                    lo_logic_out_id[r.name] = logic_lo
-
-    # --- Post-fix ---
-    # 三個 pass：
-    # Pass 1: 將「use_mode=hi/lo 但非 inv」的邊 source 從 H_Deb/L_Deb 佔位符替換為邏輯輸出 cell；
-    #         同時修正 style：exitX=0（H_Deb 左側）→ exitX=1（AND/OR 閘右側）。
-    # Pass 2: 為每個唯一 (來源 d, use_mode) 建立一顆「共用 NOT 閘」。
-    #         input NOT：label 右/下 40pt；output NOT：O 矩形右/下 40pt。
-    # Pass 3: 將所有 inv=True 的邊 source 替換為對應 NOT 閘 id；修正 style 與走線。
-    style_not_gate_out = (
-        "verticalLabelPosition=bottom;shadow=0;dashed=0;align=center;html=1;"
-        "verticalAlign=top;shape=mxgraph.electrical.logic_gates.inverter_2"
-    )
-    style_logic_to_not = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;strokeColor=%s;endArrow=classic;endFill=1;"
-    style_src_to_not = style_logic_to_not % STROKE_DEFAULT
-
-    h_deb_ids: dict[int, str] = {nid: rname for rname, nid in h_deb_id_map.items()}
-    l_deb_ids: dict[int, str] = {nid: rname for rname, nid in l_deb_id_map.items()}
-
-    and_rev_pass1 = {v: k for k, v in and_gate_id.items()}
-    or_rev_pass1 = {v: k for k, v in or_gate_id.items()}
-    deb_tgt_row: dict[int, int] = {}
-    for rname, nid in h_deb_id_map.items():
-        deb_tgt_row[nid] = output_to_row[rname]
-    for rname, nid in l_deb_id_map.items():
-        deb_tgt_row[nid] = output_to_row[rname]
-
-    # ---- Pass 1: use=hi/lo 非 inv 的邊 source 替換 ----
-    inv_edge_ids = set(_inv_edges.keys())
-    for edge_cell in list(root.iter("mxCell")):
-        if edge_cell.get("edge") != "1":
-            continue
-        if edge_cell.get("id") in inv_edge_ids:
-            continue  # inv 邊由 Pass 3 處理
-        src_str = edge_cell.get("source")
-        if src_str is None:
-            continue
-        try:
-            src_id = int(src_str)
-        except ValueError:
-            continue
-        sty = edge_cell.get("style", "")
-        if "exitX=0" not in sty:
-            continue
-        real_id = None
-        if src_id in h_deb_ids:
-            real_id = hi_logic_out_id.get(h_deb_ids[src_id])
-        elif src_id in l_deb_ids:
-            real_id = lo_logic_out_id.get(l_deb_ids[src_id])
-        if real_id is None or real_id == src_id:
-            continue
-        upstream_rail = h_deb_ids.get(src_id) or l_deb_ids.get(src_id)
-        real_id = _coerce_cell_out_id(
-            upstream_rail,
-            real_id,
-            inv=False,
-            out_inner_id=out_inner_id,
-            q_box_id_map=q_box_id_map,
-            nq_box_id_map=nq_box_id_map,
-        )
-        if upstream_rail is None:
-            continue
-        hl_pass = "hi" if src_id in h_deb_ids else "lo"
-        tgt_str = edge_cell.get("target")
-        if tgt_str is None:
-            continue
-        try:
-            tgt_id = int(tgt_str)
-        except ValueError:
-            continue
-        edge_cell.set("source", str(real_id))
-        sty = sty.replace("exitX=0", "exitX=1")
-        sty = sty.replace("exitY=0.25", "exitY=0.5").replace("exitY=0.75", "exitY=0.5")
-        edge_cell.set("style", sty)
-        src_row = _pass1_real_source_row(
-            real_id,
-            upstream_rail,
-            inner_id_to_row=inner_id_to_row,
-            hi_logic_out_id=hi_logic_out_id,
-            lo_logic_out_id=lo_logic_out_id,
-            and_gate_id=and_gate_id,
-            or_gate_id=or_gate_id,
-            q_box_id_map=q_box_id_map,
-            nq_box_id_map=nq_box_id_map,
-            output_to_row=output_to_row,
-        )
-        tgt_row: int | None = None
-        if tgt_id in and_rev_pass1:
-            tgt_row = output_to_row[and_rev_pass1[tgt_id][0]]
-        elif tgt_id in or_rev_pass1:
-            tgt_row = output_to_row[or_rev_pass1[tgt_id][0]]
-        elif tgt_id in deb_tgt_row:
-            tgt_row = deb_tgt_row[tgt_id]
-        edge_id_str = edge_cell.get("id")
-        if edge_id_str is not None and src_row is not None and tgt_row is not None and _pass1_is_layout_feedback(
-            upstream_rail,
-            src_row,
-            tgt_row,
-            tgt_id,
-            hl_pass,
-            layout_feedback_dep_keys=layout_feedback_dep_keys,
-            and_rev_pass1=and_rev_pass1,
-            deb_tgt_row=deb_tgt_row,
-            output_to_row=output_to_row,
-        ):
-            feedback_auto_edge_ids.add(edge_id_str)
-            _clear_edge_waypoints(edge_cell.find("mxGeometry"))
-        else:
-            _rewire_pass1_logic_edge(
-                edge_cell.find("mxGeometry"),
-                real_id,
-                tgt_id,
-                upstream_rail=upstream_rail,
-                hl=hl_pass,
-                gate_exit_lanes=gate_exit_lanes,
-                gate_right_x=gate_right_x,
-                id_to_y_center=id_to_y_center,
-                output_to_row=output_to_row,
-                and_gate_id=and_gate_id,
-                or_gate_id=or_gate_id,
-                h_deb_id_map=h_deb_id_map,
-                l_deb_id_map=l_deb_id_map,
-                and_col_x=and_col_x,
-                or_col_x_fn=_or_col_x,
-                row_py=row_py,
-                deb_entry_x_fn=_deb_entry_x,
-                row_bottom_fn=_row_bottom,
-                name_to_rail=name_to_rail,
-                entry_ay=_style_float(sty, "entryY", 0.5),
-            )
-
-    # ---- Pass 2: 為每個唯一 (d, use_mode) 建立共用 NOT 閘 ----
-    def _logic_source_id(d: str, use_mode: str) -> int | None:
-        """根據 (d, use_mode) 取得真正的邏輯來源 cell id。"""
-        if name_to_rail[d].seq_type == "input":
-            return in_label_id.get(d)
-        if use_mode == "hi":
-            return hi_logic_out_id.get(d) or q_box_id_map.get(d)
-        if use_mode == "lo":
-            return lo_logic_out_id.get(d) or q_box_id_map.get(d)
-        return q_box_id_map.get(d)
-
-    unique_inv_keys: list[tuple[str, str]] = []
-    seen = set()
-    for k in _inv_edges.values():
-        if k not in seen:
-            seen.add(k)
-            unique_inv_keys.append(k)
-
-    for d, use_mode in unique_inv_keys:
-        is_input_src = name_to_rail[d].seq_type == "input"
-        if not is_input_src:
-            not_gate_id[(d, use_mode)] = nq_box_id_map[d]
-            continue
-        label_xy = positions_in[d]
-        not_x, not_y = _input_not_position(label_xy, min_cell_top_y)
-        src_id = _logic_source_id(d, use_mode)
-        if src_id is None:
-            continue
-        nid = cell_id
-        cell_id += 1
-        not_gate_id[(d, use_mode)] = nid
-        input_not_src_ids.add(str(nid))
-        not_cell = ET.SubElement(root, "mxCell", {
-            "id": str(nid), "parent": "1", "style": style_input_not_gate, "value": "", "vertex": "1"
-        })
-        ET.SubElement(not_cell, "mxGeometry", {
-            "height": str(NOT_GATE_H), "width": str(NOT_GATE_W),
-            "x": str(not_x), "y": str(not_y), "as": "geometry"
-        })
-        id_to_y_center[nid] = not_y + NOT_GATE_H // 2
-
-        e_src_to_not = ET.SubElement(root, "mxCell", {
-            "id": str(cell_id), "style": style_src_to_not,
-            "edge": "1", "parent": "1", "source": str(src_id), "target": str(nid),
-        })
-        _fixed_not_edge_ids.add(str(cell_id))
-        cell_id += 1
-        geo_not = ET.SubElement(e_src_to_not, "mxGeometry", {"relative": "1", "as": "geometry"})
-        lx, ly = positions_in[d]
-        _add_edge_points(
-            geo_not,
-            _input_to_not_waypoints((lx, ly), (not_x, not_y)),
-            align=False,
-        )
-
-    # ---- Pass 3: 把所有 inv 邊 source 替換為 NOT 閘 id ----
-    for edge_cell in list(root.iter("mxCell")):
-        edge_id_str = edge_cell.get("id")
-        if edge_id_str not in _inv_edges:
-            continue
-        d, use_mode = _inv_edges[edge_id_str]
-        nid = not_gate_id.get((d, use_mode))
-        if nid is None:
-            continue
-        sty = edge_cell.get("style", "")
-        sty = sty.replace("exitX=0", "exitX=1")
-        sty = sty.replace("exitY=0.25", "exitY=0.5").replace("exitY=0.75", "exitY=0.5")
-        edge_cell.set("style", sty)
-        edge_cell.set("source", str(nid))
-        geo = edge_cell.find("mxGeometry")
-        if geo is not None:
-            for arr in list(geo):
-                if arr.tag == "Array" and arr.get("as") == "points":
-                    geo.remove(arr)
-
-    input_auto_src_ids = {str(v) for v in in_label_id.values()} | input_not_src_ids
-    gate_source_stubs = {
-        str(eid): float(stub) for eid, stub in gate_exit_lanes.catalog_stub_items().items()
-    }
-    n_and_total = _count_total_and_gates(outputs)
-    m_or_total = _count_total_or_gates(outputs)
-    fb_cell_total = _count_cell_fb_to_deb(outputs, output_to_row, name_to_rail, valid)
-    fb_or_total = _count_or_fb_routing_slots(
-        outputs, output_to_row, name_to_rail, valid
-    )
-    exempt_ao, exempt_ac, exempt_oc = _count_direct_horizontal_exempts(
-        outputs,
-        output_to_row,
-        name_to_rail,
-        valid,
-        and_index_per_key,
-        idx_map,
-        and_top_y,
-        row_py,
-        or_idx_map=or_idx_map,
-        or_top_y=or_top_y,
-    )
-    _supplement_traced_feedback_edges(
-        root,
-        feedback_auto_edge_ids,
-        output_to_row=output_to_row,
-        q_box_id_map=q_box_id_map,
-        nq_box_id_map=nq_box_id_map,
-        and_gate_id=and_gate_id,
-        or_gate_id=or_gate_id,
-        and_idx_map=idx_map,
-        name_to_rail=name_to_rail,
-        inner_id_to_row=inner_id_to_row,
-        inner_id_to_output=inner_id_to_output,
-        deb_tgt_row=deb_tgt_row,
-    )
-    _apply_feedback_routing(
-        root,
-        feedback_auto_edge_ids,
-        channel_x_left=channel_x_left,
-        feedback_n=feedback_n,
-        fb_cell=fb_cell_total,
-        fb_or=fb_or_total,
-        and_col_x=and_col_x,
-        n_and=n_and_total,
-        exempt_ac=exempt_ac,
-        exempt_ao=exempt_ao,
-        m_or=m_or_total,
-        exempt_oc=exempt_oc,
-        row_gate_layout=row_gate_layout,
-        q_box_id_map=q_box_id_map,
-        nq_box_id_map=nq_box_id_map,
-        gate_exit_lanes=gate_exit_lanes,
-        gate_right_x=gate_right_x,
-        and_gate_id=and_gate_id,
-        or_gate_id=or_gate_id,
-        deb_tgt_row=deb_tgt_row,
-        h_deb_id_map=h_deb_id_map,
-        l_deb_id_map=l_deb_id_map,
-        output_to_row=output_to_row,
-        or_col_x_fn=_or_col_x,
-        deb_entry_x_fn=_deb_entry_x,
-    )
-    freeze_edge_routing(
-        root,
-        skip_source_ids=input_auto_src_ids,
-        source_min_stub=gate_source_stubs,
-    )
-    restore_orthogonal_auto_routing(root, input_auto_src_ids)
-    _apply_feedback_edge_color(root, feedback_auto_edge_ids)
-    _apply_edge_wire_style(root)
-
-    rough = ET.tostring(mxfile, encoding="unicode", default_namespace="")
-    dom = minidom.parseString(rough)
-    pretty = dom.documentElement.toprettyxml(indent="  ", encoding=None)
-    decl = '<?xml version="1.0" encoding="UTF-8"?>\n'
-    if pretty.strip().startswith("<?xml"):
-        out = decl + pretty.split("\n", 1)[-1]
-    else:
-        out = decl + pretty
-    return out.replace('"/>', '" />')
+    return _generate(config, options=options)

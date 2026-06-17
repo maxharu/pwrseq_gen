@@ -16,7 +16,9 @@ description: >-
 **三種走線制度**。座標與欄寬見 [drawio-placement](../drawio-placement/SKILL.md)。
 完整規格：`doc/DRAWIO_RULES.md` §五、§八。
 
-實作：`src/drawio_export.py`（emit + Pass 1–3 + `_apply_feedback_routing`）→ `src/drawio_edge_freeze.py`（`freeze_edge_routing`、`restore_orthogonal_auto_routing`）。
+實作：`src/drawio_export.py`（legacy emit + Pass 1–3 + `_apply_feedback_routing`）→ `src/drawio_edge_freeze.py`（`freeze_edge_routing`、`restore_orthogonal_auto_routing`）。
+
+**Cell-centric export**（`drawio_cell_export.py`，現行 `generate_drawio`）僅用 Draw.io **orthogonal auto** 邊，**不**走 Rule 3 FB 五段／freeze。跨 Cell `use=hi/lo` 引用：紫色 net label 掛在進 Deb 的最後一邊；水平段長度 = `GATE_CELL_GAP + extra`（`extra` 依 net 名稱長度、40pt 向上取整）。見 [drawio-placement](../drawio-placement/SKILL.md)「Export net name」。
 
 程式對照：[reference.md](reference.md)。
 
@@ -25,7 +27,7 @@ description: >-
 | 檔案 | 內容 |
 |------|------|
 | `src/reference/FB_Routing.xml` | Cell FB 五段、Q／~Q 走廊、**同層扇出共用水平段** |
-| `src/reference/PSEQCELL.xml` | Cell 錨點：Q 對齊 H_Deb、~Q 對齊 L_Deb（RTL `PSEQCELL.v`） |
+| `src/reference/PSEQCELL.xml` | Cell 錨點：**O**（cell-centric）；legacy FB 仍參考 Q／~Q（`FB_Routing.xml`） |
 
 ---
 

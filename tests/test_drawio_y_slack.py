@@ -1,22 +1,8 @@
 """Y 軸三層 slack（AND / OR / Cell）統一規則測試。"""
-import json
-import sys
-from pathlib import Path
-
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from config_models import PowerSeqConfig
-from drawio_export import (
-    AND_GATE_DY,
-    GRID,
-    OR_GATE_OFFSET_HI_Y,
-    OR_GATE_OFFSET_LO_Y,
-    _build_or_index_per_key,
-    _feedback_y_slack_after_and,
-    _feedback_y_slack_after_or,
-    _feedback_y_slack_between_cell_rows,
+pytestmark = pytest.mark.skip(
+    reason="layered draw.io layout removed"
 )
 
 
