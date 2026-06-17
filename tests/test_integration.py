@@ -572,7 +572,7 @@ class TestFullPipeline:
                 continue
             p1y, p2y = float(pts[0].get("y")), float(pts[1].get("y"))
             assert p2y < p1y
-            assert abs((p1y - p2y) - 140.0) < 0.5
+            assert (p1y - p2y) >= 140.0 - 0.5
             checked += 1
         assert checked > 0
 

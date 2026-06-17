@@ -426,6 +426,59 @@ def _count_feedback_trunks(
     return n, trunk_and, has_rsmrst
 
 
+def _estimate_and_lane_count(
+    outputs: list[PowerRail],
+    output_to_row: dict[str, int],
+    name_to_rail: dict[str, PowerRail],
+    valid: set[str],
+) -> int:
+    """預估 AND 層唯一 FB source 數（Q／~Q／departing AND／RSMRST），供 placement 左幹線寬度。"""
+    n_trunk, trunk_and, has_rsmrst = _count_feedback_trunks(
+        outputs, output_to_row, name_to_rail, valid
+    )
+    keys: set[tuple] = set()
+    for idx in trunk_and:
+        keys.add(("and_idx", idx))
+    if has_rsmrst:
+        keys.add(("rsmrst",))
+    _, idx_map = _build_and_catalog(outputs)
+    for tgt in outputs:
+        for hl, groups in [("hi", tgt.get_hi_groups()), ("lo", tgt.get_lo_groups())]:
+            for gi, group in enumerate(groups):
+                for ii, d in enumerate(group):
+                    if d not in valid or d in CONST_DEPS:
+                        continue
+                    if name_to_rail[d].seq_type == "input":
+                        continue
+                    src_row = output_to_row.get(d)
+                    tgt_row = output_to_row.get(tgt.name)
+                    if src_row is None or tgt_row is None or src_row == tgt_row:
+                        continue
+                    use = (
+                        tgt.get_hi_use(gi, ii, d)
+                        if hl == "hi"
+                        else tgt.get_lo_use(gi, ii, d)
+                    )
+                    inv = (
+                        tgt.get_hi_inv(gi, ii, d)
+                        if hl == "hi"
+                        else tgt.get_lo_inv(gi, ii, d)
+                    )
+                    if d == "RSMRST_N":
+                        continue
+                    src_idx = _departing_and_index(
+                        d, use, idx_map=idx_map, name_to_rail=name_to_rail
+                    )
+                    if src_idx is not None:
+                        keys.add(("and_idx", src_idx))
+                        continue
+                    keys.add(("nq", d) if inv else ("q", d))
+    return max(n_trunk, len(keys), 1)
+
+
+_FB_FAMILY_PRIO = {"gate": 0, "q": 1, "nq": 2}
+
+
 LayoutFeedbackDepKey = tuple[str, str, int, int, str]
 
 
@@ -2763,8 +2816,102 @@ def _build_feedback_source_layer_slots(
     for layer, src_ids in sources_by_layer.items():
         cap = caps[layer]
         for i, src_id in enumerate(sorted(src_ids)):
-            slots[(src_id, layer)] = min(i, cap - 1)
+            slots[(src_id, layer)] = i
     return slots
+
+
+def _feedback_source_rail(
+    src_id: int,
+    *,
+    q_rev: dict[int, str],
+    nq_rev: dict[int, str],
+    and_rev: dict[int, tuple[str, str, int]],
+    or_rev: dict[int, tuple[str, str]],
+) -> str:
+    if src_id in nq_rev:
+        return nq_rev[src_id]
+    if src_id in q_rev:
+        return q_rev[src_id]
+    if src_id in and_rev:
+        return and_rev[src_id][0]
+    if src_id in or_rev:
+        return or_rev[src_id][0]
+    return f"__src_{src_id}"
+
+
+@dataclass
+class _FbRouteSpec:
+    edge_cell: ET.Element
+    eid: str
+    src_id: int
+    profile: str
+    rail_name: str
+    ey: float
+    ty: float
+    p1x: float
+    tgt_layer: str
+    tgt_rail: str
+    entry_x: float
+    up_delta: float
+    p3x: float
+    sty: str
+
+
+def _plan_global_feedback_y_rows(
+    specs: list[_FbRouteSpec],
+    *,
+    gate_boxes: list[tuple[float, float, float, float]],
+    and_rev: dict[int, tuple[str, str, int]],
+    or_rev: dict[int, tuple[str, str]],
+) -> dict[str, float]:
+    """C.1：依目標層／來源列／profile 全局排序後分配 ② 橫列 Y。"""
+    used_fb_rows: list[tuple[float, float, float]] = []
+    rail_rows: dict[str, list[float]] = {}
+    source_layer_row: dict[tuple[int, str], float] = {}
+    p2y_by_eid: dict[str, float] = {}
+
+    ordered = sorted(
+        specs,
+        key=lambda s: (
+            s.tgt_layer,
+            -s.ey,
+            _FB_FAMILY_PRIO.get(s.profile, 9),
+            s.rail_name,
+            s.src_id,
+        ),
+    )
+    for spec in ordered:
+        key = (spec.src_id, spec.tgt_layer)
+        if key in source_layer_row:
+            p2y_by_eid[spec.eid] = source_layer_row[key]
+            continue
+
+        nominal = spec.ey - spec.up_delta
+        use_dynamic = spec.profile in ("q", "nq") or (
+            spec.profile == "gate"
+            and (
+                (spec.tgt_layer == "and" and spec.src_id in and_rev)
+                or (spec.tgt_layer == "or" and spec.src_id in or_rev)
+            )
+        )
+        if use_dynamic:
+            p2y = _first_clear_up_y(
+                nominal,
+                spec.p1x,
+                spec.p3x,
+                gate_boxes,
+                avoid=used_fb_rows,
+                extra_avoid_y=rail_rows.get(spec.rail_name, []),
+            )
+        else:
+            p2y = nominal
+
+        source_layer_row[key] = p2y
+        p2y_by_eid[spec.eid] = p2y
+        used_fb_rows.append((p2y, min(spec.p1x, spec.p3x), max(spec.p1x, spec.p3x)))
+        rail_rows.setdefault(spec.rail_name, []).append(p2y)
+
+    return p2y_by_eid
 
 
 def _collect_logic_gate_boxes(
@@ -2796,11 +2943,13 @@ def _first_clear_up_y(
     gate_boxes: list[tuple[float, float, float, float]],
     *,
     avoid: list[tuple[float, float, float]] | None = None,
+    extra_avoid_y: list[float] | None = None,
     max_steps: int = 60,
 ) -> float:
     """自 start_y 起一律向上（y 遞減）逐格(GRID)搜尋，回傳第一條同時滿足：
     (1) 與 [xa, xb] 內任何閘體／閘邊不重疊；
     (2) 不與其他 source 已佔用且 x 區間重疊的回授橫列同列；
+    (3) 不與 extra_avoid_y 同列（同 rail 協調）；
     的 40 對齊水平列；找不到則回傳原值。avoid 為 (y, x0, x1) 清單。"""
     lo_x, hi_x = (xa, xb) if xa <= xb else (xb, xa)
     crossed = [
@@ -2813,6 +2962,8 @@ def _first_clear_up_y(
         for (ay, ax0, ax1) in (avoid or [])
         if ax1 >= lo_x and ax0 <= hi_x
     ]
+    if extra_avoid_y:
+        avoid_rows.extend(extra_avoid_y)
     y = _align40(start_y)
     for _ in range(max_steps):
         gate_ok = all(not (gy0 <= y <= gy1) for gy0, gy1 in crossed)
@@ -2873,10 +3024,6 @@ def _apply_feedback_routing(
         and_cap=and_fb_lane_cap,
     )
     gate_boxes = _collect_logic_gate_boxes(root)
-    # 同一 source 共用一條回授橫列；不同 source 之間（含跨層）橫列須錯開。
-    source_and_row: dict[int, float] = {}
-    source_or_row: dict[int, float] = {}
-    used_fb_rows: list[tuple[float, float, float]] = []
 
     # issue 3：cell 回授垂直幹線需避開「實際被佔用」的垂直車道（既有正向邊垂直段
     # ＋ gate-profile 回授的 ① stub 車道），尤其 OR 閘 gate-exit stub。
@@ -2907,7 +3054,6 @@ def _apply_feedback_routing(
         _sr = gate_right_x.get(_sid)
         if _sr is None:
             continue
-        # gate-profile 回授 ① 一律走 catalog (1+n)×40 預留通道（每顆閘各自一條）。
         occupied_vx.add(int(_align40(gate_exit_lanes.stub_x(_sid, _sr))))
     assigned_cell_vx: set[int] = set()
     source_cell_x: dict[int, float] = {}
@@ -2928,6 +3074,7 @@ def _apply_feedback_routing(
         if _sid in q_rev:
             q_ids_with_feedback.add(_sid)
 
+    fb_specs: list[_FbRouteSpec] = []
     for cell in root.iter("mxCell"):
         if cell.get("edge") != "1":
             continue
@@ -2944,6 +3091,7 @@ def _apply_feedback_routing(
             continue
         try:
             src_id = int(src_s)
+            tgt_id = int(tgt_s)
         except ValueError:
             continue
         sty = cell.get("style") or ""
@@ -2952,7 +3100,7 @@ def _apply_feedback_routing(
         entry_ax = _style_float(sty, "entryX", 0.0)
         entry_ay = _style_float(sty, "entryY", 0.5)
         ex, ey = _anchor_xy(s_box, exit_ax, exit_ay)
-        tx, ty = _anchor_xy(t_box, entry_ax, entry_ay)
+        ty = _anchor_xy(t_box, entry_ax, entry_ay)[1]
 
         profile = _feedback_profile(
             src_id, q_box_id_map=q_box_id_map, nq_box_id_map=nq_box_id_map
@@ -2973,12 +3121,6 @@ def _apply_feedback_routing(
             right_delta = 0
             up_delta = FB_Q_UP
 
-        try:
-            tgt_id = int(tgt_s)
-        except ValueError:
-            continue
-        tgt_layer: str | None = None
-        tgt_rail = ""
         if tgt_id in and_rev:
             tgt_layer = "and"
             tgt_rail = and_rev[tgt_id][0]
@@ -2995,16 +3137,10 @@ def _apply_feedback_routing(
             continue
 
         if profile == "gate":
-            # ① 一律走到該閘「轉角輸出」的預留 stub 通道（catalog (1+n)×40，每顆閘各自一條）；
-            # 不同 source 不共用同一 X 通道（含 OR→OR）。placement 已預留此通道。
             stub_right = gate_right_x.get(src_id, and_col_x + AND_GATE_W)
             p1x = float(gate_exit_lanes.stub_x(src_id, stub_right))
         else:
             p1x = ex + right_delta
-        p1y = ey
-        # Q／~Q／閘：第二段一律先向上（40+20pt）；第四段再依目標 Y 上／下
-        p2y = ey - up_delta
-        p2x = p1x
 
         slot = source_layer_slots.get((src_id, tgt_layer), 0)
         p3x = _feedback_channel_x(
@@ -3020,11 +3156,8 @@ def _apply_feedback_routing(
             tgt_rail=tgt_rail,
             row_gate_layout=row_gate_layout,
         )
-        # issue 3：cell 回授垂直幹線若落在被佔用的車道（OR 閘 gate-exit stub 等），
-        # 往左（朝 OR 欄）逐格挪到無垂直線的空車道，避免與 OR 回授路線重疊。
         if tgt_layer == "cell":
             if src_id in source_cell_x:
-                # 同一 source 同層共用一條 X 通道（不可因避讓被拆成多條）。
                 p3x = source_cell_x[src_id]
             else:
                 _floor_x = and_col_x + AND_GATE_W + GAP
@@ -3035,35 +3168,55 @@ def _apply_feedback_routing(
                 assigned_cell_vx.add(_cx)
                 source_cell_x[src_id] = p3x
 
-        # AND→AND／OR→OR（gate profile）：② 上移量感知上下相鄰閘佔位，停到真正乾淨的列，
-        # 避免橫線壓在相鄰閘邊（密集 80pt 堆疊時 40 對齊會落在閘邊）。
-        if profile == "gate" and tgt_layer == "and" and src_id in and_rev:
-            if src_id in source_and_row:
-                p2y = source_and_row[src_id]
-            else:
-                p2y = _first_clear_up_y(
-                    p2y, p1x, p3x, gate_boxes, avoid=used_fb_rows
-                )
-                source_and_row[src_id] = p2y
-            p2x = p1x
-        elif profile == "gate" and tgt_layer == "or" and src_id in or_rev:
-            if src_id in source_or_row:
-                p2y = source_or_row[src_id]
-            else:
-                p2y = _first_clear_up_y(
-                    p2y, p1x, p3x, gate_boxes, avoid=used_fb_rows
-                )
-                source_or_row[src_id] = p2y
-            p2x = p1x
+        fb_specs.append(
+            _FbRouteSpec(
+                edge_cell=cell,
+                eid=eid,
+                src_id=src_id,
+                profile=profile,
+                rail_name=_feedback_source_rail(
+                    src_id,
+                    q_rev=q_rev,
+                    nq_rev=nq_rev,
+                    and_rev=and_rev,
+                    or_rev=or_rev,
+                ),
+                ey=ey,
+                ty=ty,
+                p1x=p1x,
+                tgt_layer=tgt_layer,
+                tgt_rail=tgt_rail,
+                entry_x=entry_x,
+                up_delta=up_delta,
+                p3x=p3x,
+                sty=sty,
+            )
+        )
+
+    p2y_plan = _plan_global_feedback_y_rows(
+        fb_specs,
+        gate_boxes=gate_boxes,
+        and_rev=and_rev,
+        or_rev=or_rev,
+    )
+
+    for spec in fb_specs:
+        p1x = spec.p1x
+        p1y = spec.ey
+        p2y = p2y_plan[spec.eid]
+        p2x = p1x
+        p3x = spec.p3x
         p3y = p2y
         p4x = p3x
-        p4y = ty
-        # 記錄本邊橫列（y 與 x 區間），供後續其他 source 的 OR 回授避開同列重疊。
-        used_fb_rows.append((p2y, min(p1x, p3x), max(p1x, p3x)))
+        p4y = spec.ty
+        entry_x = spec.entry_x
+        ty = spec.ty
 
-        geo = cell.find("mxGeometry")
+        geo = spec.edge_cell.find("mxGeometry")
         if geo is None:
-            geo = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
+            geo = ET.SubElement(
+                spec.edge_cell, "mxGeometry", {"relative": "1", "as": "geometry"}
+            )
         _clear_edge_waypoints(geo)
         fb_pts = [(p1x, p1y), (p2x, p2y), (p3x, p3y), (p4x, p4y), (entry_x, ty)]
         fb_align = [(True, False), (True, True), (True, True), (True, False), (True, False)]
@@ -3072,7 +3225,7 @@ def _apply_feedback_routing(
             x = _align40(px) if do_ax else round(float(px))
             y = _align40(py) if do_ay else round(float(py))
             ET.SubElement(arr, "mxPoint", {"x": str(x), "y": str(y)})
-        cell.set("style", _style_to_frozen_none(sty))
+        spec.edge_cell.set("style", _style_to_frozen_none(spec.sty))
 
 
 def _apply_feedback_edge_color(
@@ -3523,8 +3676,12 @@ def generate_drawio(
     # input→gate 不佔寬；input 與 AND 之間僅留「回授幹線」：每條 40pt（見 _count_feedback_trunks）。
     # Cell→輸出名稱：固定 120pt（任一 output NOT 則全圖 200pt）；跨列走 stub lane（(1+n)×40）。
 
-    feedback_n, _feedback_and, _feedback_rsmrst = _count_feedback_trunks(
+    feedback_n_trunks, _feedback_and, _feedback_rsmrst = _count_feedback_trunks(
         outputs, output_to_row, name_to_rail, valid
+    )
+    feedback_n = max(
+        feedback_n_trunks,
+        _estimate_and_lane_count(outputs, output_to_row, name_to_rail, valid),
     )
     left_channel_w = feedback_n * GRID
 
