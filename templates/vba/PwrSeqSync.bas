@@ -806,6 +806,9 @@ Public Sub SyncListsNodeNames()
   For r = PWRSEQ_DATA_START_ROW To PWRSEQ_MAX_ROW
     name = Trim$(CStr(g_wsNodes.Cells(r, 1).Value))
     AppendUniqueName known, nextRow, name
+    If Len(name) > 0 Then
+      AppendUniqueName known, nextRow, "!" & name
+    End If
     If Len(name) > 0 And IsOutputType(g_wsNodes.Cells(r, 2).Value) Then
       AppendUniqueName known, nextRow, name & USE_SUFFIX_HI
       AppendUniqueName known, nextRow, name & USE_SUFFIX_LO

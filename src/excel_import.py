@@ -34,6 +34,35 @@ SIGNAL_PRESETS_HIGH = frozenset({"High", "固定為高", "Constant High"})
 SIGNAL_PRESETS_LOW = frozenset({"Low", "固定為低", "Constant Low"})
 OUTPUT_USE_SUFFIXES = ("|Hi Cond", "|Lo Cond", "|Force Cond")
 
+
+def build_signal_dropdown_entries(
+    nodes: list[tuple[str, str]],
+    *,
+    extra: list[str] | None = None,
+) -> list[str]:
+    """Build Lists column-A entries: presets, each node, !node, output use suffixes, extras."""
+    entries = ["High", "Low"]
+    seen = set(entries)
+    for name, typ in nodes:
+        if not name:
+            continue
+        for item in (name, f"!{name}"):
+            if item not in seen:
+                entries.append(item)
+                seen.add(item)
+        if str(typ).strip().lower() == "output":
+            for suffix in OUTPUT_USE_SUFFIXES:
+                item = f"{name}{suffix}"
+                if item not in seen:
+                    entries.append(item)
+                    seen.add(item)
+    for sig in sorted(extra or ()):
+        if sig and sig not in seen:
+            entries.append(sig)
+            seen.add(sig)
+    return entries
+
+
 INPUT_MODE_MAP = {
     "low (0)": "constant_0",
     "high (1)": "constant_1",

@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 from excel_import import (
     _parse_input_cond_meta,
     _parse_output_cond_meta,
+    build_signal_dropdown_entries,
     parse_signal_cell,
 )
 from wavedrom_sim import DEP_HIGH, DEP_LOW
@@ -36,6 +37,19 @@ class TestParseSignalCell:
         assert parse_signal_cell("OUT|Hi Cond") == ("OUT", False, "hi")
         assert parse_signal_cell("Low") == (DEP_LOW, False, "self")
         assert parse_signal_cell("High") == (DEP_HIGH, False, "self")
+
+
+class TestBuildSignalDropdownEntries:
+    def test_includes_inverted_node_names(self):
+        nodes = [("IN_A", "input"), ("OUT_B", "output")]
+        entries = build_signal_dropdown_entries(nodes)
+        assert entries[:2] == ["High", "Low"]
+        assert "IN_A" in entries
+        assert "!IN_A" in entries
+        assert "OUT_B" in entries
+        assert "!OUT_B" in entries
+        assert "OUT_B|Hi Cond" in entries
+        assert "!OUT_B|Hi Cond" not in entries
 
 
 class TestLastUsedRow:

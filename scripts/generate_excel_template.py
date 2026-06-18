@@ -30,6 +30,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(ROOT, "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
+from excel_import import build_signal_dropdown_entries
 from excel_template_layout import apply_nodes_sheet_header_rows, node_sheet_headers
 OUT_PATH = os.path.join(ROOT, "templates", "powerseq_nodes_template.xlsm")
 TMP_XLSX = os.path.join(ROOT, "templates", "_powerseq_nodes_template_build.xlsx")
@@ -258,22 +259,8 @@ def _autosize_columns(ws, max_col: int, min_width: int = 9, max_width: int = 28)
 
 
 def _collect_signal_list_entries() -> list[str]:
-    entries: list[str] = list(SIGNAL_PRESETS)
-    seen = set(entries)
-    for row in NODE_ROWS:
-        name, typ = row[0], row[1]
-        if name not in seen:
-            entries.append(name)
-            seen.add(name)
-        if typ == "Output":
-            for suffix in OUTPUT_USE_SUFFIXES:
-                item = f"{name}{suffix}"
-                if item not in seen:
-                    entries.append(item)
-                    seen.add(item)
-    if "RSMRST_N" not in seen:
-        entries.append("RSMRST_N")
-    return entries
+    nodes = [(row[0], row[1]) for row in NODE_ROWS]
+    return build_signal_dropdown_entries(nodes, extra=["RSMRST_N"])
 
 
 def _write_lists_sheet(wb: Workbook, pulses: list[str]) -> list[str]:
