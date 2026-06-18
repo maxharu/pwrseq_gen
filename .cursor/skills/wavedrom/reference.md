@@ -140,6 +140,21 @@ Example: `edge: ['b-|a t1', 'c-|->e t4', 'g<->h 3 ms']`
 
 Optional label after node pair: `'a~b t1'` — text follows the connection spec.
 
+**pwrseq_gen export** uses directed splines `-~>` only. Condition edges come from
+`_build_condition_edges()` in `wavedrom_export.py`:
+
+- One arrow per Hi/Lo dependency leaf: first matching dep transition → output transition.
+- `edge_kinds` filters Hi (`0→1` on dep) vs Lo (`1→0` on dep) arrows.
+- Pending edges sorted by `(out_step, dep_step)`; node letters assigned globally by
+  `(step, lane name)` before edges are emitted.
+
+| Lane prefix | Node pool (chronological) |
+|-------------|---------------------------|
+| `o*` (output) | lowercase → uppercase → `0-9@#$%&?` |
+| `i*` (input) | uppercase → `0-9@#$%&?` → lowercase |
+
+See `WaveDromExportOptions.edge_kinds` and GUI **Condition arrows** radio.
+
 ---
 
 ## pwrseq_gen: values_to_wave
