@@ -1,16 +1,25 @@
 """Tests for excel_import.py"""
 import os
 import sys
+import tempfile
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
+from config_models import PowerRail, PowerSeqConfig
 from excel_import import (
     _parse_input_cond_meta,
     _parse_output_cond_meta,
     build_signal_dropdown_entries,
+    load_powerseq_from_excel,
     parse_signal_cell,
 )
 from wavedrom_sim import DEP_HIGH, DEP_LOW
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TEMPLATE_XLSX = os.path.join(ROOT, "templates", "powerseq_nodes_template.xlsx")
+HAS_TEMPLATE = os.path.isfile(TEMPLATE_XLSX)
 
 
 class TestParseCondMeta:
@@ -72,3 +81,68 @@ class TestLastUsedRow:
         wb = Workbook()
         ws = wb.active
         assert last_used_row(ws, min_row=DATA_START_ROW, max_col=5) == DATA_START_ROW - 1
+
+
+@pytest.mark.skipif(not HAS_TEMPLATE, reason="excel template missing")
+class TestLoadWavedromConfigGlobals:
+    def test_wavedrom_steps_hscale_from_config_sheet(self):
+        from excel_export import export_powerseq_to_excel
+
+        cfg = PowerSeqConfig(
+            module_name="WD_CFG",
+            pulses=["Pulse_1us"],
+            rails=[
+                PowerRail(
+                    "OUT_ONLY",
+                    seq_type="output",
+                    cycle_hi=1,
+                    cycle_lo=1,
+                    depends_on_hi=["__HIGH__"],
+                ),
+            ],
+            wavedrom_scenario={"steps": 120, "hscale": 3},
+        )
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            path = f.name
+        try:
+            export_powerseq_to_excel(cfg, path)
+            loaded = load_powerseq_from_excel(path)
+            assert loaded.wavedrom_scenario is not None
+            assert loaded.wavedrom_scenario["steps"] == 120
+            assert loaded.wavedrom_scenario["hscale"] == 3
+        finally:
+            os.unlink(path)
+
+    def test_wavedrom_steps_without_input_conditions(self):
+        from openpyxl import load_workbook
+
+        from excel_export import export_powerseq_to_excel
+
+        cfg = PowerSeqConfig(
+            module_name="WD_NO_IN",
+            pulses=["Pulse_1us"],
+            rails=[
+                PowerRail(
+                    "OUT_ONLY",
+                    seq_type="output",
+                    cycle_hi=1,
+                    cycle_lo=1,
+                    depends_on_hi=["__HIGH__"],
+                ),
+            ],
+            wavedrom_scenario={"steps": 88},
+        )
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            path = f.name
+        try:
+            export_powerseq_to_excel(cfg, path)
+            wb = load_workbook(path)
+            if "Input Conditions" in wb.sheetnames:
+                del wb["Input Conditions"]
+            wb.save(path)
+            wb.close()
+            loaded = load_powerseq_from_excel(path)
+            assert loaded.wavedrom_scenario is not None
+            assert loaded.wavedrom_scenario["steps"] == 88
+        finally:
+            os.unlink(path)

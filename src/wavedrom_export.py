@@ -303,18 +303,54 @@ def _place_edge_node(
     return letter
 
 
-def _build_condition_edges(
+def _build_export_lanes(
+    config: PowerSeqConfig,
+    result: SimResult,
+    include_rails: frozenset[str] | None,
+) -> tuple[list[dict], dict[str, dict]]:
+    """Build exported signal lanes and port-name lookup."""
+    lanes_by_port: dict[str, dict] = {}
+    signals: list[dict] = []
+    steps = result.steps
+    for r in config.rails:
+        if include_rails is not None and r.name not in include_rails:
+            continue
+        if r.seq_type == "input":
+            lane = _lane_dict(
+                _port_name(r.name, "i"),
+                result.raw_inputs.get(r.name, []),
+                steps,
+            )
+            signals.append(lane)
+            lanes_by_port[lane["name"]] = lane
+        elif r.has_pseqcell:
+            sig = _internal_sig(r.name)
+            lane = _lane_dict(
+                _port_name(r.name, "o"),
+                result.output_values.get(sig, []),
+                steps,
+            )
+            signals.append(lane)
+            lanes_by_port[lane["name"]] = lane
+    if not signals:
+        signals = [{"name": "_empty", "wave": "0"}]
+    return signals, lanes_by_port
+
+
+ConditionEdgePending = tuple[int, int, dict, dict, str]
+
+
+def _collect_condition_edge_pending(
     config: PowerSeqConfig,
     result: SimResult,
     lanes_by_port: dict[str, dict],
     *,
     edge_kinds: frozenset[str] | None = None,
-) -> list[str]:
-    """One arrow per Hi/Lo dependency: dep transition → output transition."""
+) -> list[ConditionEdgePending]:
+    """Dep/out lane pairs with simulation step indices (before node letters)."""
     kinds = edge_kinds if edge_kinds is not None else WAVEDROM_EDGE_BOTH
-    pending: list[tuple[int, int, dict, dict, str]] = []
+    pending: list[ConditionEdgePending] = []
     name_to_rail = {r.name: r for r in config.rails}
-    steps = result.steps
 
     for rail in config.rails:
         if not rail.has_pseqcell:
@@ -356,7 +392,13 @@ def _build_condition_edges(
                     pending.append((dep_step, out_step, dep_lane, out_lane, kind))
 
     pending.sort(key=lambda item: (item[1], item[0]))
+    return pending
 
+
+def _node_edges_from_pending(
+    steps: int,
+    pending: list[ConditionEdgePending],
+) -> list[str]:
     alloc = _NodeAllocator()
     at_index: dict[tuple[str, int], str] = {}
     placement_order: list[tuple[int, str, dict, int]] = []
@@ -378,6 +420,20 @@ def _build_condition_edges(
         out_node = at_index[(out_name, out_idx)]
         edges.append(f"{dep_node}-~>{out_node}")
     return edges
+
+
+def _build_condition_edges(
+    config: PowerSeqConfig,
+    result: SimResult,
+    lanes_by_port: dict[str, dict],
+    *,
+    edge_kinds: frozenset[str] | None = None,
+) -> list[str]:
+    """One arrow per Hi/Lo dependency: dep transition → output transition."""
+    pending = _collect_condition_edge_pending(
+        config, result, lanes_by_port, edge_kinds=edge_kinds,
+    )
+    return _node_edges_from_pending(result.steps, pending)
 
 
 def validate_wavedrom_doc(doc: dict, steps: int | None = None) -> list[str]:
@@ -439,31 +495,7 @@ def generate_wavedrom(
     result = simulate(config, scenario)
     steps = result.steps
 
-    lanes_by_port: dict[str, dict] = {}
-    signals: list = []
-    for r in config.rails:
-        if include_rails is not None and r.name not in include_rails:
-            continue
-        if r.seq_type == "input":
-            lane = _lane_dict(
-                _port_name(r.name, "i"),
-                result.raw_inputs.get(r.name, []),
-                steps,
-            )
-            signals.append(lane)
-            lanes_by_port[lane["name"]] = lane
-        elif r.has_pseqcell:
-            sig = _internal_sig(r.name)
-            lane = _lane_dict(
-                _port_name(r.name, "o"),
-                result.output_values.get(sig, []),
-                steps,
-            )
-            signals.append(lane)
-            lanes_by_port[lane["name"]] = lane
-
-    if not signals:
-        signals = [{"name": "_empty", "wave": "0"}]
+    signals, lanes_by_port = _build_export_lanes(config, result, include_rails)
 
     edges = _build_condition_edges(
         config, result, lanes_by_port, edge_kinds=edge_kinds,

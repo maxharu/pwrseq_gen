@@ -303,6 +303,14 @@ def _apply_condition_groups(
     setattr(rail, f"{prefix}_use", use_dict)
 
 
+def _wavedrom_scenario_from_config_defaults(defaults: dict[str, Any]) -> dict:
+    """Global WaveDrom steps/hscale from Config sheet (GUI toolbar reads this)."""
+    out: dict = {"steps": defaults["wavedrom_steps"]}
+    if defaults["wavedrom_hscale"] != 1:
+        out["hscale"] = defaults["wavedrom_hscale"]
+    return out
+
+
 def _parse_config_defaults(lookup: dict[str, Any]) -> dict[str, Any]:
     return {
         "module_name": _cell_str(_config_value(lookup, "module_name")) or "PWRSEQ_TOP",
@@ -572,8 +580,7 @@ def load_wavedrom_scenario_from_excel(path: str) -> WaveDromScenario:
             raise ValueError("No Input Conditions found in workbook")
         return WaveDromScenario.from_dict(
             {
-                "steps": defaults["wavedrom_steps"],
-                "hscale": defaults["wavedrom_hscale"],
+                **_wavedrom_scenario_from_config_defaults(defaults),
                 "inputs": inputs,
             }
         )
@@ -605,7 +612,7 @@ def load_powerseq_from_excel(path: str) -> PowerSeqConfig:
             pass
 
         input_names = [r.name for r in rails if r.seq_type == "input"]
-        wavedrom_scenario: dict | None = None
+        wavedrom_scenario = _wavedrom_scenario_from_config_defaults(defaults)
         try:
             ws_in = _find_sheet(wb, "input_name")
             in_rows = _data_sheet_rows(ws_in, max_col=INPUT_COND_MAX_COL)
@@ -617,9 +624,6 @@ def load_powerseq_from_excel(path: str) -> PowerSeqConfig:
                     rail = rails_by_name.get(name)
                     if rail is not None and rail.seq_type == "input":
                         apply_input_wave_dict(rail, spec)
-                wavedrom_scenario = {"steps": defaults["wavedrom_steps"]}
-                if defaults["wavedrom_hscale"] != 1:
-                    wavedrom_scenario["hscale"] = defaults["wavedrom_hscale"]
         except ValueError:
             pass
 
