@@ -36,6 +36,7 @@ from excel_import import (
     MAX_DATA_ROW_CAP,
     OUTPUT_USE_SUFFIXES,
     _find_sheet,
+    build_signal_dropdown_entries,
     data_area_end_row,
     last_used_row,
 )
@@ -414,23 +415,8 @@ def _write_input_conditions(ws, config: PowerSeqConfig, scenario: WaveDromScenar
 
 
 def _collect_signal_list(config: PowerSeqConfig, cond_signals: set[str]) -> list[str]:
-    entries = ["High", "Low"]
-    seen = set(entries)
-    for rail in config.rails:
-        if rail.name not in seen:
-            entries.append(rail.name)
-            seen.add(rail.name)
-        if rail.seq_type == "output":
-            for suffix in OUTPUT_USE_SUFFIXES:
-                item = f"{rail.name}{suffix}"
-                if item not in seen:
-                    entries.append(item)
-                    seen.add(item)
-    for sig in sorted(cond_signals):
-        if sig and sig not in seen:
-            entries.append(sig)
-            seen.add(sig)
-    return entries
+    nodes = [(rail.name, rail.seq_type) for rail in config.rails]
+    return build_signal_dropdown_entries(nodes, extra=sorted(cond_signals))
 
 
 def _gather_cond_signal_names(config: PowerSeqConfig) -> set[str]:
