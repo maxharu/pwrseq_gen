@@ -1,275 +1,167 @@
 ---
 name: drawio-routing
 description: >-
-  pwrseq_gen Draw.io edge routing: (1) Input/input NOT → orthogonal auto;
-  (2) Gate output → next-level input (incl. Deb) frozen waypoints, three shapes;
-  (3) Feedback (FB) → five-segment frozen waypoints from Q/~Q/gate
-  (same-source same-layer shares one X channel). Covers
-  feedback_auto_edge_ids, _apply_feedback_routing,
-  _build_feedback_source_layer_slots, freeze_edge_routing, _GateExitLanes,
-  use=hi/lo passthrough exitX (AND right vs Deb placeholder).
-  Use when modifying drawio_export.py wire logic or doc/DRAWIO_RULES.md wire sections.
+  pwrseq_gen Draw.io edge routing for cell-centric export: all edges use
+  orthogonal auto (no frozen waypoints). Covers label→gate→Deb paths, Hi/Lo
+  stroke colors, use=hi/lo cond labels, export net names, O→output name.
+  Legacy layer-column FB routing removed. Use when modifying drawio_cell_export.py
+  wire logic.
 ---
 
 # Draw.io Edge Routing (pwrseq_gen)
 
-**三種走線制度**。座標與欄寬見 [drawio-placement](../drawio-placement/SKILL.md)。
-完整規格：`doc/DRAWIO_RULES.md` §五、§八。
+**Single routing mode:** Draw.io **`orthogonalEdgeStyle`** on every edge. No `edgeStyle=none`, no frozen waypoints, no feedback (FB) pass.
 
-實作：`src/drawio_cell_export.py`（cell-centric grid；**orthogonal auto** 邊）。
+| Source | Role |
+|--------|------|
+| `src/drawio_cell_export.py` | Emit all edges via `_Builder.edge` / `_STYLE_O_OUT` |
+| `src/drawio_geometry.py` | Stroke colors, gate entry defaults |
 
-> **注意：** 舊版三階欄位式佈局（Input→AND→OR→Cell 全圖列）與 FB 五段凍結走線已自程式庫移除。以下 Rule 2／Rule 3 章節僅作歷史參考。
+Placement (block grid, gate columns, export wire reserve): [drawio-placement](../drawio-placement/SKILL.md).
 
-程式對照：[reference.md](reference.md)。
+Program map: [reference.md](reference.md).
 
-**參考 XML（僅走法形狀，距離以程式常數為準）：**
-
-| 檔案 | 內容 |
-|------|------|
-| `src/reference/PSEQCELL.xml` | Cell 錨點：**O**（cell-centric）；legacy FB 仍參考 Q／~Q |
+> **Removed (archived):** Old Input→AND→OR→Cell **layer-column** layout with Rule 1/2/3 (input auto / gate frozen stub / FB five-segment). That pipeline and `tests/test_gate_exit_lanes.py` are gone. Do not reintroduce FB constants or `_apply_feedback_routing` unless restoring the legacy exporter.
 
 ---
 
-## Rule 3 — Feedback（FB）五段凍結走線 ★
+## Orthogonal auto only ★
 
-回授邊**不走** Rule 1 自動正交；走 **Rule 2**（`edgeStyle=none` + 鎖定 waypoints）。Pass 3 後 `_apply_feedback_routing` 統一寫五段折點。
+Every edge:
 
-### 共通形狀（5 段）
-
-```
-來源錨點 → ①右 → ②上 → ③左（目標層 FB X 通道）→ ④上/下（到目標 Y）→ ⑤右（進目標）
-```
-
-| 段 | 說明 |
-|----|------|
-| ① | 自 exit 錨點水平向右（距離見 profile） |
-| ② | **一律向上**（目標在下方亦然）；`p2y = ey − up_delta` |
-| ③ | 水平向左至該**目標層** FB 垂直幹線 `p3x`（`p3y = p2y`） |
-| ④ | 垂直至目標 entry Y（`p4y = ty`） |
-| ⑤ | 水平向右至 entry X（AND／OR 左緣或 Deb entry） |
-
-- 錨點 Y（`ey`）與第 ① 點 Y：**不做** `_align40`（避免 exit→首段斜線）
-- 第 ②③ 點 Y、第 ③④ 點 X：做 `_align40`
-
-### Cell FB：Q 與 ~Q
-
-| 腳 | PSEQCELL 位置 | 何時為 FB 來源 |
-|----|--------------|----------------|
-| **Q** | inner 右側、H_Deb 列 | `use=self`、**非 inv**（例：RSMRST → 下游 hi AND） |
-| **~Q** | inner 右側、L_Deb 列 | **inv** 跨列回授（Pass 2：`not_gate_id` 直接綁 ~Q，不畫實體 output NOT） |
-
-| Profile | ① 右移 | ② 上移 | 常數 | 條件 |
-|---------|--------|--------|------|------|
-| **Q** | 40pt | 60pt（40+20） | `FB_Q_RIGHT`, `FB_Q_UP` | — |
-| **~Q（同 Cell 有 Q 回授）** | 80pt（2×40） | **140pt**（3×40+20） | `FB_NQ_RIGHT`, `FB_NQ_UP` | 同 rail 的 Q 腳也在 `feedback_auto_edge_ids` 內 |
-| **~Q（同 Cell 無 Q 回授）** | 40pt | **100pt** | `FB_Q_RIGHT`, `FB_NQ_UP_NO_Q` | 例：demo **PCH_PWROK** ~Q→`PVCCDD2` L_Deb |
-
-判定：`_apply_feedback_routing` 預掃 `q_ids_with_feedback`，再依 `(rail, nq_rev)` 對應同 Cell 的 Q 是否回授。
-
-示意（Q `ey=420`）：
-
-- ② 走廊 `y=360`（`ey−60`）；~Q **有 Q FB** `ey=460` → ② `y=320`（`ey−140`）
-- ~Q **無 Q FB** → ② `y=ey−100`（較淺，避免切上一列 Cell 下緣）
-- 同 source、同目標層（例：Ln-1 兩個 Dest）：共用 `(500,360)→(320,360)`，④ 再分到不同 `ty`
-
-### gate profile（AND／NAND／OR／NOR output）
-
-| ① | ② |
-|---|---|
-| 右至 **stub X**（與閘→下一級同一 `(1+n)×40` 通道） | 名義向上 60pt（`FB_Q_UP`）；**AND→AND**／**OR→OR** 另用 `_first_clear_up_y` 動態避讓相鄰閘 |
-
-其後 ③④⑤ 同 Cell FB。
-
-#### gate profile ② 上移：誰動態、誰固定 ★
-
-| 來源 → 目標 | ② `p2y` | 快取 |
-|-------------|---------|------|
-| **AND → AND** | `_first_clear_up_y`（自 `ey−60` 向上逐格） | `source_and_row[src_id]` |
-| **OR → OR** | 同上 | `source_or_row[src_id]` |
-| OR→AND、AND→OR、gate→Cell | 固定 `ey − FB_Q_UP`（60pt） | — |
-
-條件：`profile=="gate"` **且** `src_id ∈ and_rev`（AND→AND）或 `src_id ∈ or_rev`（OR→OR）。僅看目標層 `and`／`or` 不夠——跨層 gate→AND（例：OR→AND）仍 60pt。
-
-> ★ **`_first_clear_up_y`**：在 `[p1x, p3x]` 水平區間內避開閘體 box，並避開 `used_fb_rows` 中 x 區間重疊的既有回授橫列；同 source 多目標共用 `source_and_row`／`source_or_row`。
-
-> ★ **OR→OR 不可用短 stub**：① 一律走該閘 catalog `stub_x(src)`（`(1+n)×40`，每顆閘各自一條），**不要**用 `src_right+40` 之類的共用短 stub——否則多條 OR 回授會擠在同一 OR 層 X 通道。placement 已為每顆閘預留此通道。`_apply_feedback_routing` 的 `profile == "gate"` 分支對所有目標層（含 or）統一用 `stub_x`。
-
-### FB X 通道與同層水平共用 ★
-
-**規則：同一 `source_id` 在每個目標層（and／or／cell）只佔 1 條 X 通道。**
-
-實作：`_build_feedback_source_layer_slots` → `(src_id, layer) → slot`（**非**依 `tgt_row` 分 slot）。
-
-| 情境 | 行為 |
-|------|------|
-| 同 source 扇出至多目標（同層） | 共用 `p2y` 與 ③ 水平段；④ 各走至不同 `ty` |
-| 不同 source（同層） | `slot` 遞增（+40pt／格） |
-
-| 目標層 | `p3x` 基準 | 佈局容量（placement） |
-|--------|------------|------------------------|
-| **and** | `channel_x_left + slot×40` | `feedback_n` |
-| **or** | `_or_fb_channel_base_x + slot×40` | `fb_or` |
-| **cell**（H/L_Deb） | `_cell_fb_channel_base_x + slot×40` | `fb_cell` |
-
-佈局預留寬度（gap 公式）見 [drawio-placement](../drawio-placement/SKILL.md) §8；走線 slot 與預留 `fb_*` 計數模型不同（左幹線 vs AND→Cell 通道）。
-
-#### cell 幹線避讓被佔用車道 ★
-
-cell `p3x` 基準算出後可能落在 OR→Cell gap 內**已被佔用**的垂直車道（尤其 OR 閘 gate-exit stub），造成 `~Q`／cell 回授與 OR 回授路線重疊。`_apply_feedback_routing` 預掃描兩類佔用車道，cell 幹線往左（朝 OR 欄）逐格挪到空車道：
-
-| 佔用來源 | 取得方式 |
-|---------|---------|
-| 既有正向邊垂直段 | 掃 XML 各 edge waypoints 的垂直段 x |
-| gate-profile 回授 ① stub | 一律 `stub_x(src)`（catalog `(1+n)×40`，每顆閘各自一條，含 OR→OR） |
-
-- 下限 `and_col_x + AND_GATE_W + GAP`；**同一 source 同層仍共用一條** `p3x`（`source_cell_x` 快取，勿因避讓拆成多條）。
-
-### 顏色
-
-`_apply_feedback_edge_color`：預設 **藍** `#2563eb`；已是 Hi 綠／Lo 紅者**保留**。
-
-### 測試
-
-| 測試 | 驗證 |
-|------|------|
-| `test_cell_q_feedback_second_segment_always_up` | Q ② 向上 60pt |
-| `test_cell_nq_feedback_second_segment_up_140pt` | ~Q（同 Cell 有 Q FB，demo RSMRST_N）② 140pt |
-| `test_cell_nq_feedback_no_q_uses_shorter_profile` | ~Q（無 Q FB，demo PCH_PWROK）①40 ②100 |
-| `TestPchPwrokNqFeedbackRouting` | demo PCH_PWROK ~Q 短路徑 |
-| `test_same_source_fb_shares_one_channel_x_per_layer` | 同 source 同層僅 1 個 `p3x` |
-| `test_hi_use_upstream_and_exits_from_gate_right` | `use=hi` 且上游 AND 已存在 → `exitX=1` |
-| `test_or_to_or_feedback_uses_five_segment_routing_left_of_or_column` | OR→OR 五段、② 動態、`p3x` 在 OR 左緣左側 |
-| `test_and_to_and_feedback_uses_clear_row_for_segment_two` | AND→AND 五段、② 向上、③ 不壓閘體 |
-
-跨列 gate FB 範例：`RAIL_AND` lo 雙輸入 `[FB_HUB, RAIL_NAND]`（`RAIL_NAND` `use=hi`）→ **RAIL_NAND hi AND → RAIL_AND lo AND**。
-
----
-
-## 回授邊集合（`feedback_auto_edge_ids`）
-
-僅集合內的邊會跑 `_apply_feedback_routing`。
-
-### 累加時機
-
-| 階段 | 函式 |
-|------|------|
-| emit | `_mark_layout_feedback_edge`、`_mark_traced_layout_feedback_edge`、`_wire_and_dep_non_input` |
-| Pass 1 | `_pass1_is_layout_feedback`（佔位換 logic pin 後仍回授 → 清 waypoints） |
-| 匯出末段 | `_supplement_traced_feedback_edges`（RSMRST Q／~Q、departing AND 跨列補標） |
-
-### `layout_feedback_dep_keys`（跨列）
-
-- `d == "RSMRST_N"`（`src_row != tgt_row`，不分上下）
-- `d == "PCH_PWROK"` 且單一 Deb、`inv=True`（僅向上 `_is_cross_row_feedback`）
-- 多輸入 AND 且 `_departing_and_index` 非空（**AND Output → AND 輸入**，不含 RSMRST_N）
-
-> ★ **AND→AND 不分上下**：「AND 層輸出 → AND 層輸入」屬同層回授（見 `pwrseq-terminology`），凡 `src_row != tgt_row` 即算（向下亦然），**不可**用 `_is_cross_row_feedback`（只認向上）擋掉。幾何上 AND 輸出在右、目標 AND 輸入在左，向下的 AND→AND 走正向(往右)根本到不了左側輸入。`_count_feedback_trunks`（placement 幹線預留）本就不分方向計入，故 routing 放寬與其對齊、容量不變。`_is_cross_row_feedback` 現僅用於 PCH_PWROK 單 Deb。
-
-列舉：`scripts/enumerate_feedback.py`、`scripts/list_feedback_paths.py`。
-
-### 佈局回授四類（X／Y 留空用）
-
-| 類別 | 摘要 |
-|------|------|
-| **RSMRST_N** | 跨列 `RSMRST_N`；左幹線 1 桶 |
-| **RSMRST_N NOT** | lo inv → 上游 L_Deb（source=~Q） |
-| **PCH_PWROK** | lo inv → 上游 L_Deb |
-| **AND Output** | departing AND → 下游 AND |
-
-`feedback_n = len(trunk_and) + (1 if has_rsmrst else 0)`。
-
----
-
-## Rule 1 — Input（含 input NOT）
-
-| Item | Value |
-|------|--------|
+| Property | Value |
+|----------|--------|
 | **edgeStyle** | `orthogonalEdgeStyle` |
-| **Waypoints** | 清除 |
-| **適用** | input label、`input_not_src_ids` |
+| **Waypoints** | None (`mxGeometry relative=1` only) |
+| **Routing** | Draw.io editor auto-routes at open time |
 
 ```python
-restore_orthogonal_auto_routing(root, input_auto_src_ids)  # 不含 feedback
+_STYLE_EDGE = (
+    "edgeStyle=orthogonalEdgeStyle;..."
+    "exitX=1;exitY=0.5;entryX=0;entryY=0.5;..."
+    "strokeColor=%s;..."
+)
 ```
+
+Output port edge (`O` → output name) uses `_STYLE_O_OUT` (`exitX=1;exitY=0.5`, default stroke).
+
+**Test:** `test_edges_use_orthogonal_auto_only` — no `edgeStyle=none` in any edge.
 
 ---
 
-## Rule 2 — 閘 Output → 下一級（非回授）
+## Edge types within one block
 
-| Item | Value |
-|------|--------|
-| **edgeStyle** | `edgeStyle=none` |
-| **Stub** | `(1+n)×40pt`（n＝該閘在所屬層 stub lane gap 的**本地序**）|
+### 1. Input / cond label → gate
 
-| # | 型態 | 條件 |
-|---|------|------|
-| 1 | 右 | 同 Y（≤2pt） |
-| 2 | 右→上/下 | 閘→閘 |
-| 3 | 右→上/下→右 | 閘→Deb |
+- **Source:** text label vertex (`_STYLE_LABEL`)
+- **Target:** intra-group merge gate or OR-tree child gate
+- **Stroke:** `STROKE_DEFAULT` (`#000000`)
+- **Anchor:** label right (`exitX=1`) → gate left (`entryX=0`)
 
-跨列非回授正向：`wire_via_channel`（emit 凍結）。
+Single-input group with no gate: label connects **directly to H_Deb or L_Deb** (see §4).
 
-#### stub lane 序 n 每層各自從 0 數 ★
+### 2. Intra-group gate → gate (AND tree)
 
-`_build_gate_lane_indices` 對 AND／OR 兩層用**獨立**計數器：AND stub lane 在 **AND→OR gap**、OR stub lane 在 **OR→Cell gap**，是不同物理通道區，OR 迴圈前 `lane` 必須**歸零重數**。若沿用 AND 跑完的全域序，OR 每顆閘的 n 會多算 AND 佔掉的格數 → 出口通道整批右移、最後一顆擠到 Cell 欄邊界（`(1+n)×40` 落在 Cell 入口）；正向被 `max_lx` 夾回一格、回授仍用邊界值，於是同一閘正向與回授分走兩條通道。
+When `len(terms) ≥ AND_TREE_THRESHOLD` (8):
 
-- 同一閘的**正向與回授共用**這條 lane（`stub_x(id)` 對 catalog 閘冪等）。
-- 症狀：某 OR/NOR 閘正向 stub 與其回授 ① stub 差 40pt（正向在 `cell_col−40`、回授在 `cell_col`）。
-- placement 的 OR→Cell gap 寬度（`_gate_gap_width`）本就用 OR 層**本地**閘數預留，本地編號才與之對齊。
+- child gate (left) → merge gate (right)
+- left labels → child; right labels → merge (index offset +1 on merge inputs)
 
-### `use=hi`／`use=lo` 透傳 → 本列 H_Deb／L_Deb ★
+Stroke: `STROKE_DEFAULT`.
 
-單一依賴、`use=hi` 或 `use=lo`（取上游該列 logic 輸出）時，**exit 錨點**依來源種類決定，不可一律 `exitX=0`。
+### 3. Group branch → OR merge → Deb
 
-| 來源（emit 時 `from_id`） | exit | 樣式 | 後續 |
-|-------------------------|------|------|------|
-| 上游 **H/L_Deb 佔位符** | **左** `exitX=0` | `style_*_to_cell_left` | **Pass 1** 換成 `hi/lo_logic_out_id` + `exitX=1` + `_rewire_pass1_logic_edge` |
-| 上游 **logic_out 已存在**（AND／OR／Q／~Q） | **右** `exitX=1` | `style_*_to_cell` | emit 即 `wire_via_channel`／stub waypoints；**不**等 Pass 1 |
+When `len(parsed_groups) ≥ 2`:
 
-判定：`_use_hi_lo_deb_placeholder_exit(from_id, use_mode)`（與 `_style_edge_to_gate_entry` 同一條件）。
+- each AND/XOR group output → OR (or 2-level OR tree)
+- OR output → **H_Deb** (Hi path) or **L_Deb** (Lo path)
 
-典型：`PVNNAON_EN`／`PVCCIO_EN`／`PVCC1V8_EN` 的 Hi（`use=hi` → 上游 PCH_* AND 右側）必須 `exitX=1`。
+| Path | Stroke | Deb target |
+|------|--------|------------|
+| Hi | `STROKE_HI` (`#ff0000`) | `h_deb_id` |
+| Lo | `STROKE_LO` (`#008000`) | `l_deb_id` |
 
-Pass 1 僅處理 **source 為本列 H/L_Deb 佔位符** 的邊（`exitX=0` in style）；已為 AND/OR 的邊不在此列。
+Single group: branch output → Deb directly (same colors).
 
-#### `_rewire_pass1_logic_edge` 進 OR／AND 要用真正入口錨點 Y ★
+### 4. Label direct → Deb (no gate)
 
-改接後 `wire_via_channel` 收尾的 entry Y **必須用該邊 `entryY` 算出的入口錨點**（`numInputs=1` 時 `entryY=0.5`，與閘中心重合）。實作：caller 解析 `entry_ay=_style_float(sty,"entryY",0.5)`；`_entry_y = round(_ty + (entry_ay-0.5)*GATE_H)`（AND／OR 皆同）。
+One term in group → `_wire_and_branch` places label with `label_right = attach_right` (only `GATE_CELL_GAP` before Cell).
 
-- 入邊 emit：`_gate_entry_y` 一律回傳 `0.5`（多扇入共用單一輸入點，見 `AND1.xml` 等）。
+Edge: label → Deb, Hi/Lo stroke.
 
----
+### 5. O → output name
 
-## Export finale
-
-```
-generate_drawio() 主圖 + NOT Pass 1–3
-  → _supplement_traced_feedback_edges
-  → _apply_feedback_routing              # Rule 3
-  → freeze_edge_routing(skip_source_ids=input)
-  → restore_orthogonal_auto_routing(input only)  # Rule 1
-  → _apply_feedback_edge_color
-  → _apply_edge_wire_style
-```
+- **Source:** PSEQCELL **O** port inside group
+- **Target:** output name text label (right of Cell)
+- **Style:** `_STYLE_O_OUT`, orthogonal auto
+- **Geometry check:** output label at `cell_x + CELL_O_X + CELL_O_W + GAP`, vertically centered on O
 
 ---
 
-## 修改檢查
+## Term resolution (`_resolve_term`)
 
-- [ ] 新 FB 邊已加入 `feedback_auto_edge_ids`？
-- [ ] Q／~Q／gate：①② 距離、② **一律向上**？
-- [ ] ~Q：**同 Cell 有 Q FB** → 80／140；**無 Q FB** → 40／100（`FB_NQ_UP_NO_Q`）？
-- [ ] 動態 ② 僅 **AND→AND**（`src∈and_rev`）／**OR→OR**（`src∈or_rev`）；OR→AND 等跨層仍 60pt？
-- [ ] 同 source 同層共用 1 條 `p3x`（`_build_feedback_source_layer_slots`）？
-- [ ] 佈局 `feedback_n`／`fb_cell`／`fb_or` 與走線 slot 容量一致？
-- [ ] input 在 `input_auto_src_ids`；非 FB 閘邊仍 Rule 2 三型態？
-- [ ] `use=hi/lo` 透傳：僅 Deb **佔位符** `exitX=0`；logic_out 已存在則 `exitX=1`？
-- [ ] Pass 1 改接進 OR／AND：收尾 entry Y 用 `entryY` 錨點（非閘中心），避免 freeze 補折角變多段？
-- [ ] `_build_gate_lane_indices`：OR 迴圈前 `lane` 歸零（每層 stub lane 各自從 0 數），OR 出口不被推到 Cell 欄邊界、正向與回授共用同一通道？
-- [ ] `pytest tests/test_gate_exit_lanes.py tests/test_integration.py`
+| Config | Label text | Wired? |
+|--------|------------|--------|
+| Input GPIO, `use=self` | `NAME` or `~NAME` if inv | Yes, inside block |
+| Output GPIO, `use=self` | `NAME` or `~NAME` | Yes |
+| `use=hi` / `use=lo` | **`{internal_sig}_{hi\|lo}`** (purple cond HTML) | Yes, but text only — **not** a cross-page wire |
+| `use=force` | — | **Skipped** (not drawn) |
+| `__HIGH__` / `__LOW__` | — | Skipped |
+
+Purple cond styling: `_cond_html` / `COND_COLOR`.
+
+Consumers reference upstream Hi/Lo **by name on the label**; the upstream cell’s Deb edge may carry the matching purple **export label** (see below).
+
+---
+
+## Export net name (Deb edge label)
+
+When rail `(R, hl)` is in `_exported_hilo_keys` (some other output uses `R` with `use=hl`):
+
+1. Placement reserves `extra` width before Cell (`_export_wire_extra_for_name`)
+2. Last edge into Deb gets `value=_export_edge_label("{internal_sig}_{hl}")`
+
+This documents the Verilog-style net name on the wire segment; routing is still orthogonal auto.
+
+---
+
+## What is NOT routed
+
+| Feature | Cell-centric behavior |
+|---------|----------------------|
+| Q / ~Q feedback | No Q/~Q ports emitted |
+| Cross-cell wires | No edges between blocks |
+| Force conditions | Terms omitted |
+| Frozen stub lanes | Not used |
+| FB X channels / slot allocation | Not used |
+| Pass 1–3 (NOT rewrite) | Not used |
+
+---
+
+## Emit flow (routing-relevant)
+
+```
+_build_cell_block
+  → _add_pseqcell_group (H_Deb, L_Deb, O)
+  → O → output name edge
+  → _wire_path_v2 (hi)  # labels → gates → H_Deb
+  → _wire_path_v2 (lo)  # labels → gates → L_Deb
+```
+
+No post-pass routing rewrite — XML is final.
+
+---
+
+## Modification checklist
+
+- [ ] New edge uses `_Builder.edge` or `_STYLE_O_OUT` (orthogonal only)?
+- [ ] Hi/Lo paths use `STROKE_HI` / `STROKE_LO` on Deb-bound edges?
+- [ ] Single-term path: direct label→Deb without extra `GAP`?
+- [ ] `use=hi/lo` stays label text (`is_cond=True`), not a cross-block wire?
+- [ ] Export label only when key in `_exported_hilo_keys`?
+- [ ] `pytest tests/test_drawio_cell.py tests/test_integration.py -q`
 
 ## See also
 
-- [reference.md](reference.md)
-- [drawio-placement](../drawio-placement/SKILL.md)
-- `doc/DRAWIO_RULES.md` §五、§八
+- [reference.md](reference.md) — function index, stroke table
+- [drawio-placement](../drawio-placement/SKILL.md) — gate columns, export `extra`, block sizing
