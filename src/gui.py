@@ -32,11 +32,14 @@ v1.2（相對 v1.1）：
 """
 import json
 import os
+import threading
 import tkinter as tk
+from io import BytesIO
 from tkinter import filedialog, messagebox
 from typing import Callable, Optional
 
 import customtkinter as ctk
+from PIL import Image, ImageTk
 
 # 關閉自動 DPI 縮放，避免縮放時 dropdown 出現 TclError。
 ctk.deactivate_automatic_dpi_awareness()
@@ -70,6 +73,11 @@ from wavedrom_sim import (
     InputWaveSpec,
     WaveDromScenario,
     _norm_hscale,
+)
+from schemdraw_export import (
+    export_schemdraw_from_options,
+    generate_schemdraw_doc,
+    render_schemdraw_png_bytes,
 )
 
 ctk.set_appearance_mode("dark")
@@ -136,6 +144,20 @@ def _resolve_ctk_color(fg_color, appearance: str | None = None) -> str:
         mode = appearance or ctk.get_appearance_mode()
         return fg_color[1] if mode == "Dark" else fg_color[0]
     return str(fg_color)
+
+
+def _resolve_canvas_bg(widget: tk.Misc) -> str:
+    """沿 widget 樹向上找非 transparent 的 fg_color，供 tk.Canvas bg 使用。"""
+    w: tk.Misc | None = widget
+    while w is not None:
+        try:
+            color = _resolve_ctk_color(w.cget("fg_color"))
+        except Exception:
+            color = ""
+        if color:
+            return color
+        w = w.master
+    return "#2b2b2b" if ctk.get_appearance_mode() == "Dark" else "#f0f0f0"
 
 
 def _make_hscroll_row(parent, *, bg_color: str = "", row_height: int = 34) -> ctk.CTkFrame:
@@ -2238,10 +2260,14 @@ class ValidationPanel(ctk.CTkFrame):
 # PreviewPanel — 右側 Verilog / C 即時預覽（C1）
 # ============================================================
 
-PREVIEW_LANGS = ("Verilog", "C")
+PREVIEW_LANGS = ("Verilog", "C", "Schemdraw")
 PREVIEW_FONT_FAMILY = FONT_MONO[0]
 PREVIEW_FONT_SIZE_DEFAULT = FONT_MONO[1]
 PREVIEW_FONT_SIZES = (8, 10, 12, 14, 16, 18, 20, 24)
+SCHEMDRAW_ZOOM_MIN = 0.1
+SCHEMDRAW_ZOOM_MAX = 5.0
+SCHEMDRAW_ZOOM_STEP = 1.2
+SCHEMDRAW_ZOOM_DEBOUNCE_MS = 40
 
 
 def _preview_font(size: int) -> tuple:
@@ -2249,23 +2275,34 @@ def _preview_font(size: int) -> tuple:
 
 
 class PreviewPanel(ctk.CTkFrame):
-    """右側預覽面板：Verilog 或 C read-only text，內建主題化捲軸。"""
+    """右側預覽：Verilog / C 文字，或 Schemdraw 時序圖（PNG）。"""
 
     def __init__(
         self,
         master,
         on_lang_change: Optional[Callable[[], None]] = None,
         on_font_size_change: Optional[Callable[[int], None]] = None,
+        on_schemdraw_refresh: Optional[Callable[[], None]] = None,
+        on_schemdraw_select_nodes: Optional[Callable[[], None]] = None,
         initial_font_size: Optional[int] = None,
         **kwargs,
     ):
         super().__init__(master, **kwargs)
         self.on_lang_change = on_lang_change
         self.on_font_size_change = on_font_size_change
+        self.on_schemdraw_refresh = on_schemdraw_refresh
+        self.on_schemdraw_select_nodes = on_schemdraw_select_nodes
         if initial_font_size in PREVIEW_FONT_SIZES:
             self._font_size = initial_font_size
         else:
             self._font_size = PREVIEW_FONT_SIZE_DEFAULT
+        self._schemdraw_source: Optional[Image.Image] = None
+        self._schemdraw_zoom: float | None = None
+        self._schemdraw_configure_after: Optional[str] = None
+        self._schemdraw_display_after: Optional[str] = None
+        self._schemdraw_display_gen = 0
+        self._canvas_tk_image: Optional[ImageTk.PhotoImage] = None
+        self._canvas_image_id: int | None = None
         self._build_ui()
 
     def _build_ui(self):
@@ -2275,16 +2312,22 @@ class PreviewPanel(ctk.CTkFrame):
         self._title.pack(side="left")
         self._lang_var = tk.StringVar(value="Verilog")
         self._lang_menu = ctk.CTkOptionMenu(
-            header, values=list(PREVIEW_LANGS), variable=self._lang_var, width=88,
+            header, values=list(PREVIEW_LANGS), variable=self._lang_var, width=100,
             command=self._on_lang_selected,
         )
         self._lang_menu.pack(side="left", padx=(S_SM, 0))
-        size_frame = ctk.CTkFrame(header, fg_color="transparent")
-        size_frame.pack(side="left", padx=(S_SM, 0))
-        ctk.CTkLabel(size_frame, text="Font", font=FONT_HINT).pack(side="left", padx=(0, S_XS))
+        self._refresh_btn = ctk.CTkButton(
+            header, text="Refresh", width=72, command=self._on_schemdraw_refresh,
+        )
+        self._nodes_btn = ctk.CTkButton(
+            header, text="Nodes…", width=72, command=self._on_schemdraw_nodes,
+        )
+        self._size_frame = ctk.CTkFrame(header, fg_color="transparent")
+        self._size_frame.pack(side="left", padx=(S_SM, 0))
+        ctk.CTkLabel(self._size_frame, text="Font", font=FONT_HINT).pack(side="left", padx=(0, S_XS))
         self._font_size_var = tk.StringVar(value=str(self._font_size))
         self._font_menu = ctk.CTkOptionMenu(
-            size_frame,
+            self._size_frame,
             values=[str(s) for s in PREVIEW_FONT_SIZES],
             variable=self._font_size_var,
             width=60,
@@ -2293,15 +2336,287 @@ class PreviewPanel(ctk.CTkFrame):
         self._font_menu.pack(side="left")
         self._status = ctk.CTkLabel(header, text="", font=FONT_HINT, text_color="gray")
         self._status.pack(side="right")
+        self._zoom_bar = ctk.CTkFrame(self, fg_color="transparent")
+        ctk.CTkLabel(self._zoom_bar, text="Zoom", font=FONT_HINT).pack(side="left", padx=(0, S_XS))
+        ctk.CTkButton(
+            self._zoom_bar, text="−", width=28, command=self._schemdraw_zoom_out,
+        ).pack(side="left", padx=(0, S_XS))
+        self._zoom_label = ctk.CTkLabel(self._zoom_bar, text="Fit", width=52, font=FONT_HINT)
+        self._zoom_label.pack(side="left", padx=(0, S_XS))
+        ctk.CTkButton(
+            self._zoom_bar, text="+", width=28, command=self._schemdraw_zoom_in,
+        ).pack(side="left", padx=(0, S_XS))
+        ctk.CTkButton(
+            self._zoom_bar, text="Fit", width=40, command=self._schemdraw_zoom_fit,
+        ).pack(side="left", padx=(0, S_SM))
+        ctk.CTkLabel(
+            self._zoom_bar,
+            text="拖曳平移 · 滾輪縮放 · Shift+滾輪捲動",
+            font=FONT_HINT,
+            text_color=("gray40", "gray60"),
+        ).pack(side="left")
         self._text = ctk.CTkTextbox(self, font=_preview_font(self._font_size), wrap="none",
                                     activate_scrollbars=True)
         self._text.pack(fill="both", expand=True, padx=S_SM, pady=(S_XS, S_SM))
         self._text.configure(state="disabled")
+        self._img_viewport = ctk.CTkFrame(self, fg_color="transparent")
+        self._img_viewport.grid_columnconfigure(0, weight=1)
+        self._img_viewport.grid_rowconfigure(0, weight=1)
+        canvas_bg = _resolve_canvas_bg(self)
+        self._img_canvas = tk.Canvas(
+            self._img_viewport,
+            highlightthickness=0,
+            borderwidth=0,
+            bg=canvas_bg,
+            cursor="fleur",
+        )
+        self._img_canvas.grid(row=0, column=0, sticky="nsew")
+        self._img_vbar = ctk.CTkScrollbar(
+            self._img_viewport, orientation="vertical", command=self._img_canvas.yview,
+        )
+        self._img_vbar.grid(row=0, column=1, sticky="ns")
+        self._img_hbar = ctk.CTkScrollbar(
+            self._img_viewport, orientation="horizontal", command=self._img_canvas.xview,
+        )
+        self._img_hbar.grid(row=1, column=0, sticky="ew")
+        self._img_canvas.configure(
+            xscrollcommand=self._img_hbar.set,
+            yscrollcommand=self._img_vbar.set,
+        )
+        self._schemdraw_show_canvas_hint("Nodes… to choose lanes, then Refresh.")
+        self._bind_schemdraw_viewport_events()
+        self._img_viewport.bind("<Configure>", self._on_schemdraw_area_configure)
         self._last_code = ""
+        self._update_view_mode()
+
+    def _schemdraw_show_canvas_hint(self, text: str) -> None:
+        self._canvas_tk_image = None
+        self._canvas_image_id = None
+        self._img_canvas.delete("all")
+        self._img_canvas.configure(scrollregion=(0, 0, 1, 1))
+        self._img_canvas.create_text(
+            12, 12,
+            anchor="nw",
+            text=text,
+            fill="#888888",
+            width=max(self._img_canvas.winfo_width() - 24, 200),
+            tags=("hint",),
+        )
+
+    def _bind_schemdraw_viewport_events(self) -> None:
+        self._img_canvas.bind("<MouseWheel>", self._on_schemdraw_wheel, add="+")
+        self._img_canvas.bind("<Shift-MouseWheel>", self._on_schemdraw_wheel_shift, add="+")
+        self._img_canvas.bind("<Button-4>", self._on_schemdraw_wheel_linux, add="+")
+        self._img_canvas.bind("<Button-5>", self._on_schemdraw_wheel_linux, add="+")
+        self._img_canvas.bind("<ButtonPress-1>", self._on_schemdraw_pan_start, add="+")
+        self._img_canvas.bind("<B1-Motion>", self._on_schemdraw_pan_move, add="+")
+
+    def _on_schemdraw_pan_start(self, event) -> None:
+        if self._schemdraw_source is None:
+            return
+        self._img_canvas.scan_mark(event.x, event.y)
+
+    def _on_schemdraw_pan_move(self, event) -> None:
+        if self._schemdraw_source is None:
+            return
+        self._img_canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def _save_canvas_view(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        try:
+            return self._img_canvas.xview(), self._img_canvas.yview()
+        except Exception:
+            return (0.0, 1.0), (0.0, 1.0)
+
+    def _restore_canvas_view(self, views: tuple[tuple[float, float], tuple[float, float]]) -> None:
+        try:
+            xview, yview = views
+            self._img_canvas.xview_moveto(xview[0])
+            self._img_canvas.yview_moveto(yview[0])
+        except Exception:
+            pass
+
+    def _on_schemdraw_wheel(self, event) -> str | None:
+        if self.get_lang() != "Schemdraw" or self._schemdraw_source is None:
+            return None
+        if event.delta > 0:
+            self._schemdraw_zoom_step(1)
+        elif event.delta < 0:
+            self._schemdraw_zoom_step(-1)
+        return "break"
+
+    def _on_schemdraw_wheel_shift(self, event) -> str | None:
+        if self.get_lang() != "Schemdraw" or self._schemdraw_source is None:
+            return None
+        try:
+            self._img_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        except Exception:
+            pass
+        return "break"
+
+    def _on_schemdraw_wheel_linux(self, event) -> str | None:
+        if self.get_lang() != "Schemdraw" or self._schemdraw_source is None:
+            return None
+        if event.state & 0x0001:
+            try:
+                if event.num == 4:
+                    self._img_canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    self._img_canvas.yview_scroll(1, "units")
+            except Exception:
+                pass
+            return "break"
+        if event.num == 4:
+            self._schemdraw_zoom_step(1)
+        elif event.num == 5:
+            self._schemdraw_zoom_step(-1)
+        return "break"
+
+    def _on_schemdraw_area_configure(self, _event=None) -> None:
+        if self._schemdraw_source is None or self._schemdraw_zoom is not None:
+            return
+        if self._schemdraw_configure_after is not None:
+            try:
+                self.after_cancel(self._schemdraw_configure_after)
+            except Exception:
+                pass
+        self._schemdraw_configure_after = self.after(120, self._schemdraw_configure_refresh)
+
+    def _schemdraw_configure_refresh(self) -> None:
+        self._schemdraw_configure_after = None
+        if self._schemdraw_source is not None and self._schemdraw_zoom is None:
+            self._refresh_schemdraw_display()
+
+    def _schemdraw_viewport_width(self) -> int:
+        return max(self._img_canvas.winfo_width() - 8, 280)
+
+    def _schemdraw_effective_zoom(self) -> float:
+        if self._schemdraw_source is None:
+            return 1.0
+        src_w, _ = self._schemdraw_source.size
+        if self._schemdraw_zoom is None:
+            max_w = self._schemdraw_viewport_width()
+            return min(1.0, max_w / src_w) if src_w > max_w else 1.0
+        return self._schemdraw_zoom
+
+    def _schemdraw_display_size(self) -> tuple[int, int]:
+        if self._schemdraw_source is None:
+            return 0, 0
+        src_w, src_h = self._schemdraw_source.size
+        zoom = self._schemdraw_effective_zoom()
+        return max(1, int(src_w * zoom)), max(1, int(src_h * zoom))
+
+    def _schemdraw_zoom_label_text(self) -> str:
+        if self._schemdraw_source is None:
+            return "—"
+        if self._schemdraw_zoom is None:
+            return "Fit"
+        return f"{int(round(self._schemdraw_effective_zoom() * 100))}%"
+
+    def _schemdraw_zoom_step(self, direction: int) -> None:
+        if self._schemdraw_source is None:
+            return
+        current = self._schemdraw_effective_zoom()
+        factor = SCHEMDRAW_ZOOM_STEP if direction > 0 else 1.0 / SCHEMDRAW_ZOOM_STEP
+        self._schemdraw_zoom = max(
+            SCHEMDRAW_ZOOM_MIN,
+            min(SCHEMDRAW_ZOOM_MAX, current * factor),
+        )
+        self._schedule_schemdraw_display_refresh()
+
+    def _schemdraw_zoom_in(self) -> None:
+        self._schemdraw_zoom_step(1)
+
+    def _schemdraw_zoom_out(self) -> None:
+        self._schemdraw_zoom_step(-1)
+
+    def _schemdraw_zoom_fit(self) -> None:
+        self._schemdraw_zoom = None
+        self._refresh_schemdraw_display(immediate=True)
+
+    def _schedule_schemdraw_display_refresh(self) -> None:
+        if self._schemdraw_display_after is not None:
+            try:
+                self.after_cancel(self._schemdraw_display_after)
+            except Exception:
+                pass
+        self._schemdraw_display_after = self.after(
+            SCHEMDRAW_ZOOM_DEBOUNCE_MS,
+            self._run_schemdraw_display_refresh,
+        )
+
+    def _run_schemdraw_display_refresh(self) -> None:
+        self._schemdraw_display_after = None
+        self._refresh_schemdraw_display(immediate=False)
+
+    def _refresh_schemdraw_display(self, *, immediate: bool = False) -> None:
+        if self._schemdraw_source is None:
+            return
+        dw, dh = self._schemdraw_display_size()
+        src = self._schemdraw_source
+        if immediate:
+            self._apply_schemdraw_scaled(
+                src.resize((dw, dh), Image.Resampling.BILINEAR),
+            )
+            return
+        self._schemdraw_display_gen += 1
+        gen = self._schemdraw_display_gen
+
+        def worker() -> None:
+            scaled = src.resize((dw, dh), Image.Resampling.BILINEAR)
+            self.after(0, lambda: self._apply_schemdraw_scaled(scaled, gen=gen))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_schemdraw_scaled(
+        self,
+        scaled: Image.Image,
+        *,
+        gen: int | None = None,
+    ) -> None:
+        if gen is not None and gen != self._schemdraw_display_gen:
+            return
+        if self._schemdraw_source is None:
+            return
+        views = self._save_canvas_view()
+        dw, dh = scaled.size
+        self._canvas_tk_image = ImageTk.PhotoImage(scaled)
+        self._img_canvas.delete("all")
+        self._canvas_image_id = self._img_canvas.create_image(
+            0, 0, anchor="nw", image=self._canvas_tk_image,
+        )
+        self._img_canvas.configure(scrollregion=(0, 0, dw, dh))
+        self._restore_canvas_view(views)
+        self._zoom_label.configure(text=self._schemdraw_zoom_label_text())
+
+    def _on_schemdraw_nodes(self):
+        if self.on_schemdraw_select_nodes:
+            self.on_schemdraw_select_nodes()
+
+    def _on_schemdraw_refresh(self):
+        if self.on_schemdraw_refresh:
+            self.on_schemdraw_refresh()
+
+    def _update_view_mode(self):
+        is_sd = self.get_lang() == "Schemdraw"
+        if is_sd:
+            self._text.pack_forget()
+            self._zoom_bar.pack(fill="x", padx=S_SM, pady=(0, S_XS))
+            self._img_viewport.pack(fill="both", expand=True, padx=S_SM, pady=(0, S_SM))
+            self._size_frame.pack_forget()
+            self._nodes_btn.pack(side="left", padx=(S_SM, 0))
+            self._refresh_btn.pack(side="left", padx=(S_XS, 0))
+        else:
+            self._img_viewport.pack_forget()
+            self._zoom_bar.pack_forget()
+            self._refresh_btn.pack_forget()
+            self._nodes_btn.pack_forget()
+            self._size_frame.pack(side="left", padx=(S_SM, 0))
+            self._text.pack(fill="both", expand=True, padx=S_SM, pady=(S_XS, S_SM))
 
     def _on_lang_selected(self, _value: str):
         self._last_code = ""
         self._update_title()
+        self._update_view_mode()
         if self.on_lang_change:
             self.on_lang_change()
 
@@ -2362,8 +2677,27 @@ class PreviewPanel(ctk.CTkFrame):
     def set_error(self, msg: str):
         self._update_title()
         self._last_code = ""
+        if self.get_lang() == "Schemdraw":
+            self.set_schemdraw_error(msg)
+            return
         self._set_text(f"// 無法預覽：\n// {msg}")
         self._status.configure(text="error", text_color=("#cf222e", "#ff7b72"))
+
+    def set_schemdraw_status(self, msg: str) -> None:
+        self._status.configure(text=msg, text_color=("gray40", "gray60"))
+
+    def set_schemdraw_error(self, msg: str) -> None:
+        self._schemdraw_source = None
+        self._schemdraw_zoom = None
+        self._schemdraw_show_canvas_hint(f"無法預覽：\n{msg}")
+        self._zoom_label.configure(text="—")
+        self._status.configure(text="error", text_color=("#cf222e", "#ff7b72"))
+
+    def set_schemdraw_image(self, image: Image.Image, status: str = "") -> None:
+        self._update_title()
+        self._schemdraw_source = image.copy()
+        self._refresh_schemdraw_display(immediate=True)
+        self._status.configure(text=status, text_color="gray")
 
 
 # ============================================================
@@ -2666,11 +3000,23 @@ class AboutDialog(ctk.CTkToplevel):
 
 
 class WaveDromNodeSelectDialog(ctk.CTkToplevel):
-    """匯出 WaveDrom 前選擇要包含的節點（模擬仍用全案）。"""
+    """選擇要包含在 WaveDrom / Schemdraw 圖中的節點（模擬仍用全案）。"""
 
-    def __init__(self, master, rails: list[PowerRail]):
+    def __init__(
+        self,
+        master,
+        rails: list[PowerRail],
+        export_callback: Callable[[WaveDromExportOptions], None],
+        *,
+        title: str = "Export WaveDrom — Select Nodes",
+        select_hint: str = "Select nodes to include in the WaveDrom export.",
+        action_label: str = "Export…",
+        initial_options: WaveDromExportOptions | None = None,
+    ):
         super().__init__(master)
-        self.title("Export WaveDrom — Select Nodes")
+        self._export_callback = export_callback
+        self._action_label = action_label
+        self.title(title)
         self.geometry("560x700")
         self.minsize(420, 480)
         self.transient(master)
@@ -2679,19 +3025,30 @@ class WaveDromNodeSelectDialog(ctk.CTkToplevel):
         except tk.TclError:
             pass
 
-        self.result: WaveDromExportOptions | None = None
         self._rails = list(rails)
         self._vars: dict[str, ctk.BooleanVar] = {}
         self._row_frames: list[ctk.CTkFrame] = []
         self._anchor_idx: int | None = None
         self._shift_click = False
-        self._edge_var = ctk.StringVar(value="both")
+        if initial_options is not None:
+            if initial_options.edge_kinds == WAVEDROM_EDGE_HI_ONLY:
+                edge_default = "hi"
+            elif initial_options.edge_kinds == WAVEDROM_EDGE_LO_ONLY:
+                edge_default = "lo"
+            else:
+                edge_default = "both"
+        else:
+            edge_default = "both"
+        self._edge_var = ctk.StringVar(value=edge_default)
+        self._initial_include = (
+            frozenset(initial_options.include_rails) if initial_options else None
+        )
 
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=S_MD, pady=(S_MD, S_SM))
         ctk.CTkLabel(
             top,
-            text="Select nodes to include in the WaveDrom export.",
+            text=select_hint,
             font=FONT_BODY,
             anchor="w",
         ).pack(fill="x")
@@ -2750,7 +3107,11 @@ class WaveDromNodeSelectDialog(ctk.CTkToplevel):
         self.scroll.pack(fill="both", expand=True, padx=S_MD, pady=(0, S_SM))
 
         for idx, rail in enumerate(self._rails):
-            var = ctk.BooleanVar(value=True)
+            if self._initial_include is None:
+                selected = True
+            else:
+                selected = rail.name in self._initial_include
+            var = ctk.BooleanVar(value=selected)
             self._vars[rail.name] = var
             row = ctk.CTkFrame(self.scroll, fg_color="transparent")
             row.pack(fill="x", pady=1)
@@ -2767,11 +3128,11 @@ class WaveDromNodeSelectDialog(ctk.CTkToplevel):
 
         btns = ctk.CTkFrame(self, fg_color="transparent")
         btns.pack(fill="x", padx=S_MD, pady=(0, S_MD))
-        ctk.CTkButton(btns, text="Cancel", width=90, command=self._cancel).pack(side="right", padx=(S_SM, 0))
-        ctk.CTkButton(btns, text="Export…", width=90, command=self._confirm).pack(side="right")
+        ctk.CTkButton(btns, text="Close", width=90, command=self._close).pack(side="right", padx=(S_SM, 0))
+        ctk.CTkButton(btns, text=self._action_label, width=90, command=self._export).pack(side="right")
 
-        self.bind("<Escape>", lambda _e: self._cancel())
-        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.bind("<Escape>", lambda _e: self._close())
+        self.protocol("WM_DELETE_WINDOW", self._close)
         self._update_count()
         search.focus_set()
 
@@ -2817,23 +3178,26 @@ class WaveDromNodeSelectDialog(ctk.CTkToplevel):
         n = sum(1 for v in self._vars.values() if v.get())
         self._count_label.configure(text=f"{n} / {len(self._rails)} nodes selected")
 
-    def _confirm(self) -> None:
+    def _export_options(self) -> WaveDromExportOptions | None:
         selected = {name for name, var in self._vars.items() if var.get()}
         if not selected:
             messagebox.showwarning(
                 "No Nodes Selected",
-                "Select at least one node to export.",
+                "Select at least one node.",
                 parent=self,
             )
-            return
-        self.result = WaveDromExportOptions(
+            return None
+        return WaveDromExportOptions(
             include_rails=frozenset(selected),
             edge_kinds=wavedrom_edge_kinds_from_choice(self._edge_var.get()),
         )
-        self.destroy()
 
-    def _cancel(self) -> None:
-        self.result = None
+    def _export(self) -> None:
+        opts = self._export_options()
+        if opts is not None:
+            self._export_callback(opts)
+
+    def _close(self) -> None:
         self.destroy()
 
 
@@ -2884,6 +3248,9 @@ class PowerSeqGUI(ctk.CTk):
         self._undo_stack: list[str] = []
         self._redo_stack: list[str] = []
         self._preview_after_id: Optional[str] = None
+        self._schemdraw_preview_after_id: Optional[str] = None
+        self._schemdraw_render_gen = 0
+        self._schemdraw_preview_opts: WaveDromExportOptions | None = None
         self._current_path: Optional[str] = None
         self._gui_settings = GuiSettings()
         self._recent = RecentFiles()
@@ -2918,7 +3285,7 @@ class PowerSeqGUI(ctk.CTk):
     _GEN_MENU_LABEL = "Generate"
     _GEN_MENU_ITEMS = ("Verilog", "C")
     _EXPORT_MENU_LABEL = "Export"
-    _EXPORT_MENU_ITEMS = ("Draw.io", "WaveDrom")
+    _EXPORT_MENU_ITEMS = ("Draw.io", "WaveDrom", "Schemdraw")
 
     def _build_ui(self):
         # ----- Toolbar -----
@@ -2961,7 +3328,7 @@ class PowerSeqGUI(ctk.CTk):
         cb_pv = ctk.CTkCheckBox(toolbar, text="Preview", variable=self._preview_var,
                                  width=80, command=self._toggle_preview)
         cb_pv.pack(side="left", padx=(0, S_SM))
-        self._tt(cb_pv, "Toggle right-side live code preview (Verilog or C)")
+        self._tt(cb_pv, "Toggle right-side preview (Verilog, C, or Schemdraw timing)")
 
         self._sep(toolbar)
         wd_opts = ctk.CTkFrame(toolbar, fg_color="transparent")
@@ -3019,7 +3386,7 @@ class PowerSeqGUI(ctk.CTk):
         export_menu.set(self._EXPORT_MENU_LABEL)
         export_menu.pack(side="right", padx=(0, S_SM))
         self._export_menu = export_menu
-        self._tt(export_menu, "Export Draw.io (Ctrl+E) or WaveDrom (Ctrl+Shift+E)")
+        self._tt(export_menu, "Export Draw.io (Ctrl+E), WaveDrom (Ctrl+Shift+E), or Schemdraw")
         gen_menu = ctk.CTkOptionMenu(
             toolbar, values=list(self._GEN_MENU_ITEMS), width=110,
             command=self._on_generate_menu,
@@ -3119,6 +3486,8 @@ class PowerSeqGUI(ctk.CTk):
             self.preview_wrap, fg_color="transparent",
             on_lang_change=self._schedule_preview,
             on_font_size_change=self._gui_settings.set_preview_font_size,
+            on_schemdraw_refresh=self._schedule_schemdraw_preview,
+            on_schemdraw_select_nodes=self._open_schemdraw_preview_nodes,
             initial_font_size=self._gui_settings.get_preview_font_size(),
         )
         self.preview.pack(fill="both", expand=True)
@@ -3351,6 +3720,9 @@ class PowerSeqGUI(ctk.CTk):
             if cf._expanded:
                 prev_expanded.add(cf.rail.name)
 
+        # validation / preview 會 _collect_config()，須先讓 toolbar 與 config 一致
+        self._sync_wavedrom_toolbar_from_config()
+
         for w in self.editor_scroll.winfo_children():
             w.destroy()
         self.collapsible_frames = []
@@ -3375,7 +3747,6 @@ class PowerSeqGUI(ctk.CTk):
         self._schedule_preview()
         self._update_undo_btns()
         self._update_stats()
-        self._sync_wavedrom_toolbar_from_config()
 
     def _apply_inspect_mode(self):
         # 先全部 pack_forget 再依序重新 pack，避免 toggle 後順序錯亂
@@ -3644,12 +4015,147 @@ class PowerSeqGUI(ctk.CTk):
     def _schedule_preview(self):
         if not self._show_preview:
             return
+        if self.preview.get_lang() == "Schemdraw":
+            self._schedule_schemdraw_preview()
+            return
         if self._preview_after_id is not None:
             try:
                 self.after_cancel(self._preview_after_id)
             except Exception:
                 pass
         self._preview_after_id = self.after(300, self._render_preview)
+
+    def _exportable_rail_names(self, cfg: PowerSeqConfig) -> frozenset[str]:
+        return frozenset(
+            r.name for r in cfg.rails
+            if r.seq_type == "input" or r.has_pseqcell
+        )
+
+    def _schemdraw_edge_label(self, edge_kinds: frozenset[str]) -> str:
+        if edge_kinds == WAVEDROM_EDGE_HI_ONLY:
+            return "Hi arrows"
+        if edge_kinds == WAVEDROM_EDGE_LO_ONLY:
+            return "Lo arrows"
+        return "Hi+Lo arrows"
+
+    def _schemdraw_preview_options(self, cfg: PowerSeqConfig) -> WaveDromExportOptions:
+        exportable = self._exportable_rail_names(cfg)
+        if self._schemdraw_preview_opts is None:
+            return WaveDromExportOptions(
+                include_rails=exportable,
+                edge_kinds=WAVEDROM_EDGE_BOTH,
+            )
+        kept = frozenset(
+            n for n in self._schemdraw_preview_opts.include_rails if n in exportable
+        )
+        if not kept:
+            kept = exportable
+        return WaveDromExportOptions(
+            include_rails=kept,
+            edge_kinds=self._schemdraw_preview_opts.edge_kinds,
+        )
+
+    def _open_schemdraw_preview_nodes(self):
+        cfg = self._collect_config()
+        if not cfg.rails:
+            self._status_msg("No nodes. Add rails first.", level="warn")
+            return
+        existing = getattr(self, "_schemdraw_preview_nodes_dlg", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
+        initial = self._schemdraw_preview_options(cfg)
+        dlg = WaveDromNodeSelectDialog(
+            self,
+            cfg.rails,
+            self._on_schemdraw_preview_nodes_selected,
+            title="Schemdraw Preview — Select Nodes",
+            select_hint="Select nodes to include in the Schemdraw preview.",
+            action_label="Apply",
+            initial_options=initial,
+        )
+        self._schemdraw_preview_nodes_dlg = dlg
+
+    def _on_schemdraw_preview_nodes_selected(self, opts: WaveDromExportOptions) -> None:
+        self._schemdraw_preview_opts = opts
+        self._schedule_schemdraw_preview()
+
+    def _schedule_schemdraw_preview(self):
+        if not self._show_preview:
+            return
+        if self.preview.get_lang() != "Schemdraw":
+            return
+        if self._schemdraw_preview_after_id is not None:
+            try:
+                self.after_cancel(self._schemdraw_preview_after_id)
+            except Exception:
+                pass
+        self._schemdraw_preview_after_id = self.after(600, self._start_schemdraw_preview)
+
+    def _start_schemdraw_preview(self):
+        self._schemdraw_preview_after_id = None
+        if not self._show_preview or self.preview.get_lang() != "Schemdraw":
+            return
+        try:
+            cfg = self._collect_config()
+            ok, errs = validate(cfg)
+            status = "live" if ok else f"{len(errs)} error{'s' if len(errs) != 1 else ''}"
+            scenario = self._wavedrom_scenario_for_export(cfg)
+            opts = self._schemdraw_preview_options(cfg)
+        except Exception as e:
+            self.preview.set_schemdraw_error(str(e))
+            return
+        if not opts.include_rails:
+            self.preview.set_schemdraw_error("No nodes selected. Press Nodes… to choose lanes.")
+            return
+
+        self._schemdraw_render_gen += 1
+        gen = self._schemdraw_render_gen
+        edge_label = self._schemdraw_edge_label(opts.edge_kinds)
+        n_nodes = len(opts.include_rails)
+        exportable = len(self._exportable_rail_names(cfg))
+        self.preview.set_schemdraw_status(
+            f"rendering… ({n_nodes}/{exportable} nodes, {edge_label})",
+        )
+
+        def worker() -> None:
+            try:
+                doc = generate_schemdraw_doc(
+                    cfg,
+                    scenario,
+                    output_filename="preview",
+                    include_rails=opts.include_rails,
+                    edge_kinds=opts.edge_kinds,
+                )
+                png = render_schemdraw_png_bytes(doc)
+                image = Image.open(BytesIO(png))
+                edges = len(doc.get("edge", []))
+                detail = f"{n_nodes}/{exportable} nodes, {edge_label}, {edges} arrows"
+                self.after(
+                    0,
+                    lambda: self._apply_schemdraw_preview(
+                        gen, image, f"{status} · {detail}",
+                    ),
+                )
+            except Exception as e:
+                self.after(0, lambda: self._apply_schemdraw_preview_error(gen, str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_schemdraw_preview(self, gen: int, image: Image.Image, status: str) -> None:
+        if gen != self._schemdraw_render_gen:
+            return
+        if not self._show_preview or self.preview.get_lang() != "Schemdraw":
+            return
+        self.preview.set_schemdraw_image(image, status=status)
+
+    def _apply_schemdraw_preview_error(self, gen: int, msg: str) -> None:
+        if gen != self._schemdraw_render_gen:
+            return
+        if not self._show_preview or self.preview.get_lang() != "Schemdraw":
+            return
+        self.preview.set_schemdraw_error(msg)
 
     def _preview_c_filename(self) -> str:
         """預覽 C 時決定 output_filename（影響 guard / 函式前綴）。"""
@@ -3660,6 +4166,8 @@ class PowerSeqGUI(ctk.CTk):
     def _render_preview(self):
         self._preview_after_id = None
         if not self._show_preview:
+            return
+        if self.preview.get_lang() == "Schemdraw":
             return
         try:
             cfg = self._collect_config()
@@ -3874,6 +4382,8 @@ class PowerSeqGUI(ctk.CTk):
             self._export_drawio()
         elif choice == "WaveDrom":
             self._export_wavedrom()
+        elif choice == "Schemdraw":
+            self._export_schemdraw()
         self._export_menu.set(self._EXPORT_MENU_LABEL)
 
     def _generate_verilog(self):
@@ -3905,21 +4415,7 @@ class PowerSeqGUI(ctk.CTk):
             messagebox.showerror("Error", str(e))
             self._status_msg(f"Generate {label} failed: {e}", level="error")
 
-    def _export_wavedrom(self):
-        cfg = self._collect_config()
-        ok, errs = validate(cfg)
-        if not ok:
-            messagebox.showerror("Validation Failed", "\n".join(errs))
-            self._status_msg(f"{len(errs)} validation error(s); cannot export", level="error")
-            return
-        if not cfg.rails:
-            self._status_msg("No nodes. Add rails first.", level="warn")
-            return
-        dlg = WaveDromNodeSelectDialog(self, cfg.rails)
-        self.wait_window(dlg)
-        if dlg.result is None:
-            return
-        export_opts = dlg.result
+    def _run_wavedrom_export(self, export_opts: WaveDromExportOptions) -> None:
         path = filedialog.asksaveasfilename(
             defaultextension=".json",
             filetypes=[("WaveDrom JSON", "*.json"), ("All", "*")],
@@ -3952,6 +4448,87 @@ class PowerSeqGUI(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Error", str(e))
             self._status_msg(f"WaveDrom export failed: {e}", level="error")
+
+    def _export_wavedrom(self):
+        cfg = self._collect_config()
+        ok, errs = validate(cfg)
+        if not ok:
+            messagebox.showerror("Validation Failed", "\n".join(errs))
+            self._status_msg(f"{len(errs)} validation error(s); cannot export", level="error")
+            return
+        if not cfg.rails:
+            self._status_msg("No nodes. Add rails first.", level="warn")
+            return
+        existing = getattr(self, "_timing_export_dlg", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
+        dlg = WaveDromNodeSelectDialog(
+            self, cfg.rails, self._run_wavedrom_export,
+            title="Export WaveDrom — Select Nodes",
+            select_hint="Select nodes to include in the WaveDrom export.",
+        )
+        self._timing_export_dlg = dlg
+        self.wait_window(dlg)
+        self._timing_export_dlg = None
+
+    def _run_schemdraw_export(self, export_opts: WaveDromExportOptions) -> None:
+        path = filedialog.asksaveasfilename(
+            defaultextension=".svg",
+            filetypes=[
+                ("SVG", "*.svg"),
+                ("PNG", "*.png"),
+                ("All", "*"),
+            ],
+        )
+        if not path:
+            return
+        try:
+            cfg2 = self._collect_config()
+            scenario = self._wavedrom_scenario_for_export(cfg2)
+            export_schemdraw_from_options(cfg2, scenario, export_opts, path)
+            n = len(export_opts.include_rails)
+            if export_opts.edge_kinds == WAVEDROM_EDGE_HI_ONLY:
+                edge_label = "Hi arrows"
+            elif export_opts.edge_kinds == WAVEDROM_EDGE_LO_ONLY:
+                edge_label = "Lo arrows"
+            else:
+                edge_label = "Hi+Lo arrows"
+            self._status_msg(
+                f"Exported Schemdraw ({n} lanes, {edge_label}): {os.path.basename(path)}",
+                level="success",
+            )
+        except ImportError as e:
+            messagebox.showerror("Schemdraw Missing", str(e))
+            self._status_msg("Schemdraw export failed: package not installed", level="error")
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+            self._status_msg(f"Schemdraw export failed: {e}", level="error")
+
+    def _export_schemdraw(self):
+        cfg = self._collect_config()
+        ok, errs = validate(cfg)
+        if not ok:
+            messagebox.showerror("Validation Failed", "\n".join(errs))
+            self._status_msg(f"{len(errs)} validation error(s); cannot export", level="error")
+            return
+        if not cfg.rails:
+            self._status_msg("No nodes. Add rails first.", level="warn")
+            return
+        existing = getattr(self, "_timing_export_dlg", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
+        dlg = WaveDromNodeSelectDialog(
+            self, cfg.rails, self._run_schemdraw_export,
+            title="Export Schemdraw — Select Nodes",
+            select_hint="Select nodes to include in the Schemdraw diagram.",
+        )
+        self._timing_export_dlg = dlg
+        self.wait_window(dlg)
+        self._timing_export_dlg = None
 
     def _export_drawio(self):
         cfg = self._collect_config()
