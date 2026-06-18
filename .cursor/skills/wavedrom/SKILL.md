@@ -133,8 +133,17 @@ Per-lane timing stretch (DDR-style diagrams):
 - Hi∧Lo 同時成立：不給對向 permit（低無法升、高無法降）
 - 無 cycle/pulse；`cond_step_delay` 欄位僅 JSON 相容（hscale 別名），不參與模擬
 - Input scenario does **not** change rail `depends_on_*` in project JSON
-- Export adds **edge** arrows on output rails (Hi/Lo condition labels; first dep in group)
-- **Node 大小寫慣例**：WaveDrom 對 node 字元——小寫=多畫一顆字母標記（看得見），大寫=隱形錨點（箭頭照接、不畫字母）。`_NodeAllocator` 依 edge 種類分池：**L→H（hi）優先小寫、H→L（lo）優先大寫**，各池（各 26 個）用盡才互相溢出、再退回 `0-9@#$%&?`。端點需全域唯一且為**單一字元**（edge 只吃首/尾 1 字元）。
+- Export adds **edge** arrows: dep GPIO transition → output GPIO transition (Hi/Lo condition leaves)
+- **Condition arrows**（GUI Export WaveDrom 對話框、API `edge_kinds`）：
+  - `Hi and Lo`（預設）：Hi 與 Lo 條件各畫箭頭
+  - `Hi only` / `Lo only`：只畫對應方向的箭頭
+  - 常數：`WAVEDROM_EDGE_BOTH` / `WAVEDROM_EDGE_HI_ONLY` / `WAVEDROM_EDGE_LO_ONLY`；`wavedrom_edge_kinds_from_choice("hi"|"lo"|"both")`
+- **Node 大小寫慣例**（WaveDrom 渲染）：小寫 node 多畫一顆字母標記（看得見），大寫為隱形錨點（箭頭照接、不畫字母）。`_NodeAllocator` 依 **lane 角色**分池（與 Hi/Lo 無關；三種 arrow 模式相同）：
+  - **Output lane**（`o*`）：依時序優先小寫 `a–z` → 溢出大寫 → `0-9@#$%&?`
+  - **Input lane**（`i*`）：依時序優先大寫 `A–Z` → 溢出符號 → 小寫
+  - 分配流程：收集所有 edge 端點 → 依 `(sim step, lane name)` 排序 → 再取字；同一 `(lane, wave index)` 共用同一 node
+  - Edge 格式：`{dep}-~>{out}`（例：`A-~>a`）；端點需全域唯一且為**單一字元**
+  - 大型圖（如 x15dot-f）端點數 > 52 時各池會溢出，屬預期
 - Multi-bit / clock lanes are not generated; add manually in Editor if needed
 
 **Workflow for agents:**

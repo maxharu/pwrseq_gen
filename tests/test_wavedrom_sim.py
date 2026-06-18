@@ -1,5 +1,6 @@
 """Tests for wavedrom_sim / wavedrom_export"""
 import os
+import string
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
@@ -9,11 +10,18 @@ from config_models import PowerSeqConfig, PowerRail
 from wavedrom_sim import (
     InputWaveSpec,
     WaveDromScenario,
+    _internal_sig,
     expand_wave_pattern,
     simulate,
     values_to_wave,
 )
-from wavedrom_export import format_rail_condition, generate_wavedrom, validate_wavedrom_doc
+from wavedrom_export import (
+    WAVEDROM_EDGE_HI_ONLY,
+    WAVEDROM_EDGE_LO_ONLY,
+    format_rail_condition,
+    generate_wavedrom,
+    validate_wavedrom_doc,
+)
 from wavedrom_sim import expand_binary_wave
 
 
@@ -305,6 +313,104 @@ class TestSimulate:
         assert all("_deb" not in lane["name"] for lane in doc["signal"])
         assert len(expand_binary_wave(doc["signal"][0]["wave"], 200)) == 200
 
+    def test_generate_wavedrom_include_rails_subset(self):
+        cfg = PowerSeqConfig(
+            rails=[
+                PowerRail("A", seq_type="input"),
+                PowerRail("B", depends_on_hi=["__HIGH__"], cycle_hi=1),
+                PowerRail("C", seq_type="input"),
+            ],
+        )
+        doc = generate_wavedrom(cfg, include_rails=frozenset({"B"}))
+        names = [lane["name"] for lane in doc["signal"]]
+        assert names == ["oB"]
+        assert "1/3 lanes" in doc["head"]["text"]
+
+    def test_edge_kinds_hi_only_omits_lo_arrows(self, monkeypatch):
+        seen: list[frozenset[str] | None] = []
+
+        def _capture(*args, **kwargs):
+            seen.append(kwargs.get("edge_kinds"))
+            return []
+
+        monkeypatch.setattr("wavedrom_export._build_condition_edges", _capture)
+
+        cfg = PowerSeqConfig(
+            rails=[PowerRail("B", depends_on_hi=["__HIGH__"], cycle_hi=1)],
+        )
+        generate_wavedrom(cfg, edge_kinds=WAVEDROM_EDGE_HI_ONLY)
+        generate_wavedrom(cfg, edge_kinds=WAVEDROM_EDGE_LO_ONLY)
+        generate_wavedrom(cfg)
+
+        assert seen == [WAVEDROM_EDGE_HI_ONLY, WAVEDROM_EDGE_LO_ONLY, None]
+
+        doc_hi = generate_wavedrom(cfg, edge_kinds=WAVEDROM_EDGE_HI_ONLY)
+        doc_lo = generate_wavedrom(cfg, edge_kinds=WAVEDROM_EDGE_LO_ONLY)
+        doc_both = generate_wavedrom(cfg)
+        assert "arrows=Hi" in doc_hi["head"]["text"]
+        assert "arrows=Lo" in doc_lo["head"]["text"]
+        assert "arrows=Hi" not in doc_both["head"]["text"]
+        assert "arrows=Lo" not in doc_both["head"]["text"]
+
+    def test_edge_nodes_by_lane_role_in_time_order(self):
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "templates",
+            "x15dot-f.xlsm",
+        )
+        if not os.path.isfile(path):
+            pytest.skip("templates/x15dot-f.xlsm missing")
+        from config_models import build_wavedrom_scenario
+        from excel_import import load_powerseq_from_excel
+
+        cfg = load_powerseq_from_excel(path)
+        scenario = build_wavedrom_scenario(cfg)
+        symbol_pool = set(string.digits + "@#$%&?")
+        for edge_kinds in (WAVEDROM_EDGE_LO_ONLY, WAVEDROM_EDGE_HI_ONLY, None):
+            doc = generate_wavedrom(cfg, scenario, edge_kinds=edge_kinds)
+            dep_ch = doc["edge"][0][0]
+            out_ch = doc["edge"][0].split("-~>")[1][0]
+            assert dep_ch.isupper() or dep_ch in symbol_pool
+            assert out_ch.islower() or out_ch in symbol_pool
+
+    def test_edge_nodes_input_upper_output_lower(self):
+        cfg = PowerSeqConfig(
+            pulses=["iPulse_1us"],
+            rails=[
+                PowerRail("A", seq_type="input"),
+                PowerRail("C", seq_type="input"),
+                PowerRail(
+                    "B",
+                    depends_on_hi=["A", "C"],
+                    depends_on_hi_groups=[["A", "C"]],
+                    depends_on_lo=["__LOW__"],
+                    cycle_hi=1,
+                    init=0,
+                ),
+            ],
+        )
+        scenario = WaveDromScenario(
+            steps=20,
+            inputs={
+                "A": InputWaveSpec(hi_mode="custom", hi_wave="0.1."),
+                "C": InputWaveSpec(hi_mode="custom", hi_wave="0..1"),
+            },
+        )
+        doc = generate_wavedrom(cfg, scenario)
+        by_name = {lane["name"]: lane for lane in doc["signal"]}
+        input_nodes = {
+            ch for ch in str(by_name["iA"].get("node", "")) if ch != "."
+        } | {
+            ch for ch in str(by_name["iC"].get("node", "")) if ch != "."
+        }
+        output_nodes = {
+            ch for ch in str(by_name["oB"].get("node", "")) if ch != "."
+        }
+        assert input_nodes
+        assert output_nodes
+        assert input_nodes <= set(string.ascii_uppercase)
+        assert output_nodes <= set(string.ascii_lowercase)
+
     def test_edges_per_hi_dep_to_output_rise(self):
         cfg = PowerSeqConfig(
             pulses=["iPulse_1us"],
@@ -372,6 +478,32 @@ class TestSimulate:
         doc = generate_wavedrom(cfg, scenario)
         assert doc.get("edge")
         assert not any("PCH_EN" in e for e in doc["edge"])
+
+    @pytest.mark.skipif(
+        not os.path.isfile(
+            os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "templates",
+                "x15dot-f.xlsm",
+            )
+        ),
+        reason="templates/x15dot-f.xlsm missing",
+    )
+    def test_pwrgd_drops_when_lo_references_reset_lo_cond(self):
+        from config_models import build_wavedrom_scenario
+        from excel_import import load_powerseq_from_excel
+
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "templates",
+            "x15dot-f.xlsm",
+        )
+        cfg = load_powerseq_from_excel(path)
+        result = simulate(cfg, build_wavedrom_scenario(cfg))
+        for name in ("PWRGD_CPU1_OD", "PWRGD_CPU2_OD"):
+            sig = _internal_sig(name)
+            assert result.output_lo_cond[sig][44] == 1
+            assert result.output_values[sig][45] == 0
 
 
 class TestValuesToWave:

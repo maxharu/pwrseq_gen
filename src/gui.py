@@ -56,7 +56,14 @@ from group_logic import INTRA_OP_LABELS, intra_op_label, normalize_intra_op
 from validator import validate
 from verilog_generator import generate_verilog
 from c_generator import generate_c
-from wavedrom_export import generate_wavedrom_json
+from wavedrom_export import (
+    WAVEDROM_EDGE_BOTH,
+    WAVEDROM_EDGE_HI_ONLY,
+    WAVEDROM_EDGE_LO_ONLY,
+    WaveDromExportOptions,
+    generate_wavedrom_json,
+    wavedrom_edge_kinds_from_choice,
+)
 from wavedrom_sim import (
     DEP_HIGH,
     DEP_LOW,
@@ -2658,6 +2665,178 @@ class AboutDialog(ctk.CTkToplevel):
         self.bind("<Escape>", lambda _e: self.destroy())
 
 
+class WaveDromNodeSelectDialog(ctk.CTkToplevel):
+    """匯出 WaveDrom 前選擇要包含的節點（模擬仍用全案）。"""
+
+    def __init__(self, master, rails: list[PowerRail]):
+        super().__init__(master)
+        self.title("Export WaveDrom — Select Nodes")
+        self.geometry("560x700")
+        self.minsize(420, 480)
+        self.transient(master)
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+
+        self.result: WaveDromExportOptions | None = None
+        self._rails = list(rails)
+        self._vars: dict[str, ctk.BooleanVar] = {}
+        self._row_frames: list[ctk.CTkFrame] = []
+        self._anchor_idx: int | None = None
+        self._shift_click = False
+        self._edge_var = ctk.StringVar(value="both")
+
+        top = ctk.CTkFrame(self, fg_color="transparent")
+        top.pack(fill="x", padx=S_MD, pady=(S_MD, S_SM))
+        ctk.CTkLabel(
+            top,
+            text="Select nodes to include in the WaveDrom export.",
+            font=FONT_BODY,
+            anchor="w",
+        ).pack(fill="x")
+        ctk.CTkLabel(
+            top,
+            text="Simulation uses all nodes; only the diagram lanes are filtered.",
+            font=FONT_HINT,
+            text_color=("gray40", "gray60"),
+            anchor="w",
+        ).pack(fill="x", pady=(S_XS, 0))
+        ctk.CTkLabel(
+            top,
+            text="Shift+Click a checkbox to select a contiguous range (Nodes order).",
+            font=FONT_HINT,
+            text_color=("gray40", "gray60"),
+            anchor="w",
+        ).pack(fill="x", pady=(S_XS, 0))
+
+        tool = ctk.CTkFrame(self, fg_color="transparent")
+        tool.pack(fill="x", padx=S_MD, pady=(0, S_SM))
+        self.search_var = ctk.StringVar()
+        search = ctk.CTkEntry(tool, placeholder_text="Search node", textvariable=self.search_var)
+        search.pack(side="left", fill="x", expand=True, padx=(0, S_SM))
+        search.bind("<KeyRelease>", lambda _e: self._apply_filter())
+        ctk.CTkButton(tool, text="All", width=52, command=self._select_all).pack(side="left", padx=(0, S_XS))
+        ctk.CTkButton(tool, text="None", width=52, command=self._select_none).pack(side="left")
+
+        self._count_label = ctk.CTkLabel(
+            self, text="", font=FONT_HINT, text_color=("gray40", "gray60"), anchor="w",
+        )
+        self._count_label.pack(fill="x", padx=S_MD, pady=(0, S_XS))
+
+        edge_box = ctk.CTkFrame(self, fg_color="transparent")
+        edge_box.pack(fill="x", padx=S_MD, pady=(0, S_SM))
+        edge_row = ctk.CTkFrame(edge_box, fg_color="transparent")
+        edge_row.pack(fill="x")
+        ctk.CTkLabel(
+            edge_row,
+            text="Condition arrows:",
+            font=FONT_SECTION,
+            anchor="w",
+        ).pack(side="left", padx=(0, S_MD))
+        for value, label in (
+            ("both", "Hi and Lo"),
+            ("hi", "Hi only"),
+            ("lo", "Lo only"),
+        ):
+            ctk.CTkRadioButton(
+                edge_row,
+                text=label,
+                variable=self._edge_var,
+                value=value,
+            ).pack(side="left", padx=(0, S_MD))
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll.pack(fill="both", expand=True, padx=S_MD, pady=(0, S_SM))
+
+        for idx, rail in enumerate(self._rails):
+            var = ctk.BooleanVar(value=True)
+            self._vars[rail.name] = var
+            row = ctk.CTkFrame(self.scroll, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            tag = SEQ_TYPE_LABELS.get(rail.seq_type, rail.seq_type)
+            cb = ctk.CTkCheckBox(
+                row,
+                text=f"[{tag}] {rail.name}",
+                variable=var,
+                command=lambda i=idx: self._on_checkbox_changed(i),
+            )
+            cb.pack(anchor="w")
+            cb.bind("<Button-1>", lambda e, i=idx: self._on_checkbox_button(i, e), add="+")
+            self._row_frames.append(row)
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", padx=S_MD, pady=(0, S_MD))
+        ctk.CTkButton(btns, text="Cancel", width=90, command=self._cancel).pack(side="right", padx=(S_SM, 0))
+        ctk.CTkButton(btns, text="Export…", width=90, command=self._confirm).pack(side="right")
+
+        self.bind("<Escape>", lambda _e: self._cancel())
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self._update_count()
+        search.focus_set()
+
+    def _on_checkbox_button(self, idx: int, event) -> None:
+        self._shift_click = bool(event.state & 0x0001)
+
+    def _on_checkbox_changed(self, idx: int) -> None:
+        name = self._rails[idx].name
+        state = self._vars[name].get()
+        if self._shift_click and self._anchor_idx is not None:
+            lo, hi = sorted((self._anchor_idx, idx))
+            for i in range(lo, hi + 1):
+                self._vars[self._rails[i].name].set(state)
+        elif not self._shift_click:
+            self._anchor_idx = idx
+        self._shift_click = False
+        self._update_count()
+
+    def _apply_filter(self) -> None:
+        ft = self.search_var.get().strip().lower()
+        for rail, row in zip(self._rails, self._row_frames):
+            show = not ft or ft in rail.name.lower() or ft in rail.seq_type.lower()
+            if show:
+                row.pack(fill="x", pady=1)
+            else:
+                row.pack_forget()
+
+    def _select_all(self) -> None:
+        ft = self.search_var.get().strip().lower()
+        for rail in self._rails:
+            if not ft or ft in rail.name.lower() or ft in rail.seq_type.lower():
+                self._vars[rail.name].set(True)
+        self._update_count()
+
+    def _select_none(self) -> None:
+        ft = self.search_var.get().strip().lower()
+        for rail in self._rails:
+            if not ft or ft in rail.name.lower() or ft in rail.seq_type.lower():
+                self._vars[rail.name].set(False)
+        self._update_count()
+
+    def _update_count(self) -> None:
+        n = sum(1 for v in self._vars.values() if v.get())
+        self._count_label.configure(text=f"{n} / {len(self._rails)} nodes selected")
+
+    def _confirm(self) -> None:
+        selected = {name for name, var in self._vars.items() if var.get()}
+        if not selected:
+            messagebox.showwarning(
+                "No Nodes Selected",
+                "Select at least one node to export.",
+                parent=self,
+            )
+            return
+        self.result = WaveDromExportOptions(
+            include_rails=frozenset(selected),
+            edge_kinds=wavedrom_edge_kinds_from_choice(self._edge_var.get()),
+        )
+        self.destroy()
+
+    def _cancel(self) -> None:
+        self.result = None
+        self.destroy()
+
+
 class HelpDialog(ctk.CTkToplevel):
     """快捷鍵清單對話框（F1 開啟）。"""
 
@@ -3736,6 +3915,11 @@ class PowerSeqGUI(ctk.CTk):
         if not cfg.rails:
             self._status_msg("No nodes. Add rails first.", level="warn")
             return
+        dlg = WaveDromNodeSelectDialog(self, cfg.rails)
+        self.wait_window(dlg)
+        if dlg.result is None:
+            return
+        export_opts = dlg.result
         path = filedialog.asksaveasfilename(
             defaultextension=".json",
             filetypes=[("WaveDrom JSON", "*.json"), ("All", "*")],
@@ -3745,10 +3929,26 @@ class PowerSeqGUI(ctk.CTk):
         try:
             cfg2 = self._collect_config()
             scenario = self._wavedrom_scenario_for_export(cfg2)
-            text = generate_wavedrom_json(cfg2, scenario, output_filename=path)
+            text = generate_wavedrom_json(
+                cfg2,
+                scenario,
+                output_filename=path,
+                include_rails=export_opts.include_rails,
+                edge_kinds=export_opts.edge_kinds,
+            )
             with open(path, "w", encoding="utf-8") as f:
                 f.write(text)
-            self._status_msg(f"Exported WaveDrom: {os.path.basename(path)}", level="success")
+            n = len(export_opts.include_rails)
+            if export_opts.edge_kinds == WAVEDROM_EDGE_HI_ONLY:
+                edge_label = "Hi arrows"
+            elif export_opts.edge_kinds == WAVEDROM_EDGE_LO_ONLY:
+                edge_label = "Lo arrows"
+            else:
+                edge_label = "Hi+Lo arrows"
+            self._status_msg(
+                f"Exported WaveDrom ({n} nodes, {edge_label}): {os.path.basename(path)}",
+                level="success",
+            )
         except Exception as e:
             messagebox.showerror("Error", str(e))
             self._status_msg(f"WaveDrom export failed: {e}", level="error")

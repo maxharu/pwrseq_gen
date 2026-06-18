@@ -628,28 +628,48 @@ class _OutputFsm:
         return self._fsm.gpio
 
 
+def _output_cond_predecessors(
+    rail: PowerRail,
+    name_to_rail: dict[str, PowerRail],
+    input_specs: dict[str, InputWaveSpec],
+) -> set[str]:
+    """Output deps whose hi/lo/force condition must be evaluated before *rail*.
+
+    use=self on an output reads GPIO (cur_val) and does not create an edge.
+    Input deps expand to outputs referenced in that input's condition groups.
+    """
+    preds: set[str] = set()
+    for kind in ("hi", "lo", "force"):
+        groups = getattr(rail, f"get_{kind}_groups")()
+        get_use = getattr(rail, f"get_{kind}_use")
+        for gi, group in enumerate(groups or []):
+            for ii, dep in enumerate(group):
+                dr = name_to_rail.get(dep)
+                if not dr:
+                    continue
+                use = get_use(gi, ii, dep)
+                if dr.seq_type == "output":
+                    if use in ("hi", "lo", "force"):
+                        preds.add(dep)
+                elif dr.seq_type == "input":
+                    spec = input_specs.get(dep)
+                    if spec:
+                        for ig in (spec.hi_groups, spec.lo_groups):
+                            for grp in ig or []:
+                                for d2 in grp:
+                                    r2 = name_to_rail.get(d2)
+                                    if r2 and r2.seq_type == "output":
+                                        preds.add(d2)
+    return preds
+
+
 def _output_hi_predecessors(
     rail: PowerRail,
     name_to_rail: dict[str, PowerRail],
     input_specs: dict[str, InputWaveSpec],
 ) -> set[str]:
-    """Hi-path output deps only (Lo edges create cycles; not used for step order)."""
-    preds: set[str] = set()
-    for group in rail.get_hi_groups() or []:
-        for dep in group:
-            dr = name_to_rail.get(dep)
-            if dr and dr.seq_type == "output":
-                preds.add(dep)
-            elif dr and dr.seq_type == "input":
-                spec = input_specs.get(dep)
-                if spec:
-                    for ig in (spec.hi_groups, spec.lo_groups):
-                        for grp in ig or []:
-                            for d2 in grp:
-                                r2 = name_to_rail.get(d2)
-                                if r2 and r2.seq_type == "output":
-                                    preds.add(d2)
-    return preds
+    """Hi-path output deps only (legacy alias; prefer _output_cond_predecessors)."""
+    return _output_cond_predecessors(rail, name_to_rail, input_specs)
 
 
 def _outputs_topo_order(
@@ -657,10 +677,11 @@ def _outputs_topo_order(
     name_to_rail: dict[str, PowerRail],
     input_specs: dict[str, InputWaveSpec],
 ) -> list[PowerRail]:
+    """Topological order for output condition evaluation (hi/lo/force use edges)."""
     by_name = {r.name: r for r in outputs}
     rail_index = {r.name: i for i, r in enumerate(outputs)}
     preds = {
-        r.name: _output_hi_predecessors(r, name_to_rail, input_specs) for r in outputs
+        r.name: _output_cond_predecessors(r, name_to_rail, input_specs) for r in outputs
     }
     remaining = set(by_name)
     ordered: list[PowerRail] = []
@@ -751,28 +772,47 @@ def simulate(config: PowerSeqConfig, scenario: WaveDromScenario) -> SimResult:
         # Pass A：先套用所有 output 上一拍 arm 的邊，得到當拍準位 cur_val（與條件無關 → 順序無關）。
         #         如此一來，即使是互為迴路的 self 依賴，Pass B 也讀得到來源的「當拍」準位，
         #         不會慢 1 步（消除拓樸序造成的回授 eval lag）。
+        # Pass B1：依條件拓撲序評估所有 hi/lo/force（含 output.lo 等跨節點引用）。
+        # Pass B2：再 commit FSM（順序與 B1 相同，僅寫入結果）。
         output_order = _outputs_topo_order(outputs, name_to_rail, input_specs)
         cur_val: dict[str, int] = dict(out_val_prev)
         for rail in outputs:
             sig = _internal_sig(rail.name)
             cur_val[sig] = fsms[sig].apply_step()
 
-        # Pass B：依拓樸序評估條件（self 讀 cur_val 當拍準位、hi/lo 條件鏈讀 hi_t/lo_t），再 commit。
         force_t: dict[str, int] = {}
+        # 條件圖可能有環（例：PWRGD.lo → RESET，RESET.hi ← PLTRST ← PWRGD）。
+        # 迭代直到 hi/lo/force 收斂（通常 2 拍內；最多 len(outputs)+1）。
+        for _ in range(len(outputs) + 1):
+            changed = False
+            for rail in output_order:
+                sig = _internal_sig(rail.name)
+                new_hi = _eval_groups(
+                    rail.get_hi_groups(), rail, "hi", name_to_rail,
+                    raw_t, hi_t, lo_t, cur_val,
+                )
+                new_lo = _eval_groups(
+                    rail.get_lo_groups(), rail, "lo", name_to_rail,
+                    raw_t, hi_t, lo_t, cur_val,
+                )
+                new_force = _eval_groups(
+                    rail.get_force_groups(), rail, "force", name_to_rail,
+                    raw_t, hi_t, lo_t, cur_val,
+                )
+                if (
+                    hi_t.get(sig) != new_hi
+                    or lo_t.get(sig) != new_lo
+                    or force_t.get(sig) != new_force
+                ):
+                    changed = True
+                hi_t[sig] = new_hi
+                lo_t[sig] = new_lo
+                force_t[sig] = new_force
+            if not changed:
+                break
+
         for rail in output_order:
             sig = _internal_sig(rail.name)
-            hi_t[sig] = _eval_groups(
-                rail.get_hi_groups(), rail, "hi", name_to_rail,
-                raw_t, hi_t, lo_t, cur_val,
-            )
-            lo_t[sig] = _eval_groups(
-                rail.get_lo_groups(), rail, "lo", name_to_rail,
-                raw_t, hi_t, lo_t, cur_val,
-            )
-            force_t[sig] = _eval_groups(
-                rail.get_force_groups(), rail, "force", name_to_rail,
-                raw_t, hi_t, lo_t, cur_val,
-            )
             out_hi[sig].append(hi_t[sig])
             out_lo[sig].append(lo_t[sig])
             v = fsms[sig].commit(hi_t[sig], lo_t[sig], force_t[sig])
