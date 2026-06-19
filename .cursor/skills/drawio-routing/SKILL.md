@@ -2,10 +2,10 @@
 name: drawio-routing
 description: >-
   pwrseq_gen Draw.io edge routing for cell-centric export: all edges use
-  orthogonal auto (no frozen waypoints). Covers label→gate→Deb paths, Hi/Lo
-  stroke colors, use=hi/lo cond labels, export net names, O→output name.
-  Legacy layer-column FB routing removed. Use when modifying drawio_cell_export.py
-  wire logic.
+  orthogonal auto (no frozen waypoints). Covers label→gate→Deb paths, multi-group
+  vertical stack to OR, AND tree child→merge lane, Hi/Lo stroke colors, use=hi/lo
+  cond labels, export net names, O→output name. Legacy layer-column FB routing
+  removed. Use when modifying drawio_cell_export.py wire logic.
 ---
 
 # Draw.io Edge Routing (pwrseq_gen)
@@ -64,24 +64,32 @@ Single-input group with no gate: label connects **directly to H_Deb or L_Deb** (
 
 When `len(terms) ≥ AND_TREE_THRESHOLD` (8):
 
-- child gate (left) → merge gate (right)
-- left labels → child; right labels → merge (index offset +1 on merge inputs)
+- **child gate** (left) → **merge gate** (right); stroke `STROKE_DEFAULT`
+- left labels → child (`left_label_x = child_gx − GAP − LABEL_W`)
+- **right labels → merge** in lane between gates; width `merge_lane_w = _merge_lane_label_w(right_terms)`
+- child right → merge left gap = **`_child_merge_channel(right_terms)`** (≥ `GAP + LABEL_W + GAP`, 40pt grid)
+- merge input index 0 reserved for child output; right-side label stack uses index **`ii+1`**
 
-Stroke: `STROKE_DEFAULT`.
+Inter-group **OR tree** (≥8 branches): child OR → merge OR at fixed **`2×GAP`** (no label lane).
 
-### 3. Group branch → OR merge → Deb
+### 3. Multi-group branch → OR merge → Deb
 
 When `len(parsed_groups) ≥ 2`:
 
-- each AND/XOR group output → OR (or 2-level OR tree)
-- OR output → **H_Deb** (Hi path) or **L_Deb** (Lo path)
+- each group placed at **shared `branch_attach` X**, **stacked vertically** (Hi up / Lo down from group 0 Deb anchor)
+- single-input group: label at `branch_attach − LABEL_W` → OR (or via branch gate output)
+- multi-input group: branch output (merge AND or single gate) → OR
+- OR right edge at `gate_right`; **OR left − branch merge right = `GAP` (40pt)**
+- OR output → **H_Deb** / **L_Deb** at group 0 `deb_anchor_y`
 
 | Path | Stroke | Deb target |
 |------|--------|------------|
 | Hi | `STROKE_HI` (`#ff0000`) | `h_deb_id` |
 | Lo | `STROKE_LO` (`#008000`) | `l_deb_id` |
 
-Single group: branch output → Deb directly (same colors).
+Single-input group in multi-group path: label → OR directly (still at shared branch column X).
+
+Single group total: branch output → Deb directly (same colors).
 
 ### 4. Label direct → Deb (no gate)
 
@@ -144,11 +152,14 @@ This documents the Verilog-style net name on the wire segment; routing is still 
 _build_cell_block
   → _add_pseqcell_group (H_Deb, L_Deb, O)
   → O → output name edge
-  → _wire_path_v2 (hi)  # labels → gates → H_Deb
-  → _wire_path_v2 (lo)  # labels → gates → L_Deb
+  → _wire_path_v2 (hi)
+       → _parse_path_group_terms
+       → foreach group: anchor_y (vertical stack) + _wire_and_branch(branch_attach)
+       → _wire_or_fanin (if multi-group) → H_Deb
+  → _wire_path_v2 (lo)  # same pattern → L_Deb
 ```
 
-No post-pass routing rewrite — XML is final.
+No post-pass routing rewrite — XML is final. Placement details: [drawio-placement](../drawio-placement/SKILL.md) § multi-group, § child↔merge channel.
 
 ---
 
@@ -159,6 +170,8 @@ No post-pass routing rewrite — XML is final.
 - [ ] Single-term path: direct label→Deb without extra `GAP`?
 - [ ] `use=hi/lo` stays label text (`is_cond=True`), not a cross-block wire?
 - [ ] Export label only when key in `_exported_hilo_keys`?
+- [ ] AND tree: right labels use dynamic `w=merge_lane_w`; channel via `_child_merge_channel`?
+- [ ] Multi-group: branches wire to OR at `deb_anchor_y`, not per-group Y?
 - [ ] `pytest tests/test_drawio_cell.py tests/test_integration.py -q`
 
 ## See also

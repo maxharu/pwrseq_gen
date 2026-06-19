@@ -1,11 +1,11 @@
 """
-Build WaveJSON from PowerSeqConfig + WaveDromScenario (WaveDrom skill aligned).
+Shared timing-diagram export helpers (lanes, condition edges, WaveJSON checks).
+
+Used by Schemdraw export. Simulation lives in wavedrom_sim.py.
 """
 from __future__ import annotations
 
-import json
 import os
-import string
 from dataclasses import dataclass
 
 from config_models import PowerRail, PowerSeqConfig
@@ -13,34 +13,42 @@ from wavedrom_sim import (
     DEP_HIGH,
     DEP_LOW,
     SimResult,
-    WaveDromScenario,
     _internal_sig,
-    _norm_hscale,
-    default_scenario_for_config,
     expand_binary_wave,
-    simulate,
     values_to_wave,
 )
 
-WAVEDROM_AUTHOR = "Haru"
-WAVEDROM_EDGE_BOTH = frozenset({"hi", "lo"})
-WAVEDROM_EDGE_HI_ONLY = frozenset({"hi"})
-WAVEDROM_EDGE_LO_ONLY = frozenset({"lo"})
+TIMING_AUTHOR = "Haru"
+TIMING_EDGE_BOTH = frozenset({"hi", "lo"})
+TIMING_EDGE_HI_ONLY = frozenset({"hi"})
+TIMING_EDGE_LO_ONLY = frozenset({"lo"})
+
+# Back-compat aliases (internal)
+WAVEDROM_AUTHOR = TIMING_AUTHOR
+WAVEDROM_EDGE_BOTH = TIMING_EDGE_BOTH
+WAVEDROM_EDGE_HI_ONLY = TIMING_EDGE_HI_ONLY
+WAVEDROM_EDGE_LO_ONLY = TIMING_EDGE_LO_ONLY
 
 
-def wavedrom_edge_kinds_from_choice(choice: str) -> frozenset[str]:
+def timing_edge_kinds_from_choice(choice: str) -> frozenset[str]:
     """Map GUI/API choice to edge kind set."""
     if choice == "hi":
-        return WAVEDROM_EDGE_HI_ONLY
+        return TIMING_EDGE_HI_ONLY
     if choice == "lo":
-        return WAVEDROM_EDGE_LO_ONLY
-    return WAVEDROM_EDGE_BOTH
+        return TIMING_EDGE_LO_ONLY
+    return TIMING_EDGE_BOTH
+
+
+wavedrom_edge_kinds_from_choice = timing_edge_kinds_from_choice
 
 
 @dataclass(frozen=True)
-class WaveDromExportOptions:
+class TimingExportOptions:
     include_rails: frozenset[str]
-    edge_kinds: frozenset[str] = WAVEDROM_EDGE_BOTH
+    edge_kinds: frozenset[str] = TIMING_EDGE_BOTH
+
+
+WaveDromExportOptions = TimingExportOptions
 
 
 def _port_name(name: str, prefix: str) -> str:
@@ -54,7 +62,7 @@ def _port_for_rail(rail: PowerRail) -> str:
 
 
 def _head_title_from_filename(output_filename: str | None, fallback: str) -> str:
-    """WaveDrom head 第一行標題：有輸出檔名時用檔名（不含副檔名）。"""
+    """Head title: output basename without extension, else module name."""
     if not output_filename:
         return fallback
     name = os.path.splitext(os.path.basename(output_filename))[0]
@@ -115,68 +123,6 @@ def _dep_label(dep: str, inv: bool, use: str) -> str:
     return f"{prefix}{dep}{suffix}"
 
 
-class _NodeAllocator:
-    """配置 WaveDrom node 字元（全域唯一）。
-
-    WaveDrom 規則：小寫 node 會多畫一顆字母標記（看得見），大寫是隱形錨點。
-    output lane 依時序優先小寫 a–z；input lane 依時序優先大寫 A–Z 與符號。
-    """
-
-    def __init__(self) -> None:
-        self._lower = list(string.ascii_lowercase)
-        self._upper = list(string.ascii_uppercase)
-        self._fallback = list(string.digits + "@#$%&?")
-        self._used: set[str] = set()
-
-    def take(self, *, lane_pool: str) -> str:
-        if lane_pool == "output":
-            pools = (self._lower, self._upper, self._fallback)
-        else:
-            pools = (self._upper, self._fallback, self._lower)
-        for pool in pools:
-            while pool:
-                ch = pool.pop(0)
-                if ch not in self._used:
-                    self._used.add(ch)
-                    return ch
-        return "z"
-
-
-def _lane_pool(lane: dict) -> str:
-    return "input" if str(lane["name"]).startswith("i") else "output"
-
-
-def _step_index_in_wave(wave: str, step: int, steps: int) -> int:
-    """Map simulation step index to index in wave string (same period count)."""
-    if step <= 0:
-        return 0
-    if step >= steps - 1:
-        return max(0, len(wave) - 1)
-    period = 0
-    for i, ch in enumerate(wave):
-        if period == step:
-            return i
-        if ch in "01.":
-            period += 1
-        elif ch.isdigit():
-            period += 1
-    return max(0, len(wave) - 1)
-
-
-def _apply_node(lane: dict, steps: int, step: int, letter: str) -> None:
-    wave = str(lane["wave"])
-    n = len(wave)
-    if n == 0:
-        return
-    node = list(lane.get("node") or ("." * n))
-    if len(node) < n:
-        node.extend("." * (n - len(node)))
-    node = node[:n]
-    idx = _step_index_in_wave(wave, step, steps)
-    node[idx] = letter
-    lane["node"] = "".join(node)
-
-
 def _first_transition_step(bits: list[int], rising: bool) -> int | None:
     for t in range(1, len(bits)):
         if rising and bits[t - 1] == 0 and bits[t] == 1:
@@ -208,13 +154,6 @@ def _leaf_deps_for_edge(
     name_to_rail: dict[str, PowerRail],
     chain: frozenset[str] | None = None,
 ) -> list[str]:
-    """
-    Arrow sources for one Hi/Lo term on owner.
-
-    Input GPIO stays as-is. Output with use hi/lo expands to that rail's
-    Hi/Lo condition leaves (e.g. PVNNAON Hi PCH_P0V85A_EN.hi -> EKEY, PRIM_VR_EN).
-    Output with use self stays on that rail's GPIO.
-    """
     dep_rail = name_to_rail.get(dep_name)
     if not dep_rail or dep_name in (DEP_HIGH, DEP_LOW):
         return []
@@ -262,7 +201,6 @@ def _dep_bits_series(
     name_to_rail: dict[str, PowerRail],
     result: SimResult,
 ) -> list[int] | None:
-    """Edge anchors: input GPIO; output GPIO (wave-visible), not hi/lo cond."""
     dep_rail = name_to_rail.get(dep_name)
     if not dep_rail or dep_name in (DEP_HIGH, DEP_LOW):
         return None
@@ -277,30 +215,10 @@ def _dep_trigger_step(
     *,
     kind: str,
 ) -> int | None:
-    """First GPIO 0→1 (Hi edge) or 1→0 (Lo edge) on the dependency lane."""
     if not dep_bits:
         return None
     rising = kind == "hi"
     return _first_transition_step(dep_bits, rising=rising)
-
-
-def _place_edge_node(
-    lane: dict,
-    steps: int,
-    step: int,
-    alloc: _NodeAllocator,
-    at_index: dict[tuple[str, int], str],
-) -> str:
-    """One node letter per (lane, wave index); reuse if already placed."""
-    name = str(lane["name"])
-    idx = _step_index_in_wave(str(lane["wave"]), step, steps)
-    key = (name, idx)
-    if key in at_index:
-        return at_index[key]
-    letter = alloc.take(lane_pool=_lane_pool(lane))
-    at_index[key] = letter
-    _apply_node(lane, steps, step, letter)
-    return letter
 
 
 def _build_export_lanes(
@@ -347,8 +265,8 @@ def _collect_condition_edge_pending(
     *,
     edge_kinds: frozenset[str] | None = None,
 ) -> list[ConditionEdgePending]:
-    """Dep/out lane pairs with simulation step indices (before node letters)."""
-    kinds = edge_kinds if edge_kinds is not None else WAVEDROM_EDGE_BOTH
+    """Dep/out lane pairs with simulation step indices."""
+    kinds = edge_kinds if edge_kinds is not None else TIMING_EDGE_BOTH
     pending: list[ConditionEdgePending] = []
     name_to_rail = {r.name: r for r in config.rails}
 
@@ -395,49 +313,8 @@ def _collect_condition_edge_pending(
     return pending
 
 
-def _node_edges_from_pending(
-    steps: int,
-    pending: list[ConditionEdgePending],
-) -> list[str]:
-    alloc = _NodeAllocator()
-    at_index: dict[tuple[str, int], str] = {}
-    placement_order: list[tuple[int, str, dict, int]] = []
-    for dep_step, out_step, dep_lane, out_lane, _kind in pending:
-        placement_order.append((dep_step, str(dep_lane["name"]), dep_lane, dep_step))
-        placement_order.append((out_step, str(out_lane["name"]), out_lane, out_step))
-    for step, _name, lane, step_for_idx in sorted(
-        placement_order, key=lambda item: (item[0], item[1])
-    ):
-        _place_edge_node(lane, steps, step_for_idx, alloc, at_index)
-
-    edges: list[str] = []
-    for dep_step, out_step, dep_lane, out_lane, _kind in pending:
-        dep_name = str(dep_lane["name"])
-        out_name = str(out_lane["name"])
-        dep_idx = _step_index_in_wave(str(dep_lane["wave"]), dep_step, steps)
-        out_idx = _step_index_in_wave(str(out_lane["wave"]), out_step, steps)
-        dep_node = at_index[(dep_name, dep_idx)]
-        out_node = at_index[(out_name, out_idx)]
-        edges.append(f"{dep_node}-~>{out_node}")
-    return edges
-
-
-def _build_condition_edges(
-    config: PowerSeqConfig,
-    result: SimResult,
-    lanes_by_port: dict[str, dict],
-    *,
-    edge_kinds: frozenset[str] | None = None,
-) -> list[str]:
-    """One arrow per Hi/Lo dependency: dep transition → output transition."""
-    pending = _collect_condition_edge_pending(
-        config, result, lanes_by_port, edge_kinds=edge_kinds,
-    )
-    return _node_edges_from_pending(result.steps, pending)
-
-
 def validate_wavedrom_doc(doc: dict, steps: int | None = None) -> list[str]:
-    """Quick WaveJSON checks (see .cursor/skills/wavedrom/SKILL.md)."""
+    """Quick WaveJSON checks for timing diagram docs."""
     errs: list[str] = []
     signal = doc.get("signal")
     if not isinstance(signal, list) or not signal:
@@ -476,93 +353,3 @@ def validate_wavedrom_doc(doc: dict, steps: int | None = None) -> list[str]:
     for i, entry in enumerate(signal):
         walk(entry, f"signal[{i}]")
     return errs
-
-
-def generate_wavedrom(
-    config: PowerSeqConfig,
-    scenario: WaveDromScenario | None = None,
-    *,
-    output_filename: str | None = None,
-    include_rails: frozenset[str] | None = None,
-    edge_kinds: frozenset[str] | None = None,
-) -> dict:
-    """Produce WaveJSON: flat lanes, skin narrow (minimal vertical gap).
-
-    Simulation always uses the full *config*; *include_rails* only filters
-    exported lanes (and edges between kept lanes).
-    """
-    scenario = scenario or default_scenario_for_config(config)
-    result = simulate(config, scenario)
-    steps = result.steps
-
-    signals, lanes_by_port = _build_export_lanes(config, result, include_rails)
-
-    edges = _build_condition_edges(
-        config, result, lanes_by_port, edge_kinds=edge_kinds,
-    )
-    head_title = _head_title_from_filename(output_filename, config.module_name)
-    kinds = edge_kinds if edge_kinds is not None else WAVEDROM_EDGE_BOTH
-    edge_note = ""
-    if kinds == WAVEDROM_EDGE_HI_ONLY:
-        edge_note = ", arrows=Hi"
-    elif kinds == WAVEDROM_EDGE_LO_ONLY:
-        edge_note = ", arrows=Lo"
-    lane_note = ""
-    if include_rails is not None:
-        exportable = sum(
-            1 for r in config.rails
-            if r.seq_type == "input" or r.has_pseqcell
-        )
-        lane_note = f", {len(signals)}/{exportable} lanes"
-
-    doc: dict = {
-        "head": {
-            "text": (
-                f"{head_title} ({steps} steps, hscale="
-                f"{_norm_hscale(scenario.hscale)}, i*=in o*=out{lane_note}{edge_note})\n"
-                f"Author: {WAVEDROM_AUTHOR}"
-            ),
-            "tick": 0,
-            "every": _head_every(steps),
-        },
-        "foot": {
-            "text": (
-                "Arrows: deps to output GPIO; .hi/.lo on outputs trace to cond inputs. "
-                "Logic sim, not RTL."
-            ),
-        },
-        "signal": signals,
-        "config": {
-            "skin": "narrow",
-            "hscale": _norm_hscale(scenario.hscale),
-        },
-    }
-    if edges:
-        doc["edge"] = edges
-
-    errs = validate_wavedrom_doc(doc, steps)
-    if errs:
-        doc["foot"]["text"] += " Validation: " + "; ".join(errs[:3])
-    return doc
-
-
-def generate_wavedrom_json(
-    config: PowerSeqConfig,
-    scenario: WaveDromScenario | None = None,
-    *,
-    output_filename: str | None = None,
-    include_rails: frozenset[str] | None = None,
-    edge_kinds: frozenset[str] | None = None,
-    indent: int = 2,
-) -> str:
-    return json.dumps(
-        generate_wavedrom(
-            config,
-            scenario,
-            output_filename=output_filename,
-            include_rails=include_rails,
-            edge_kinds=edge_kinds,
-        ),
-        indent=indent,
-        ensure_ascii=False,
-    )

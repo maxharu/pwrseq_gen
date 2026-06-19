@@ -26,8 +26,8 @@ sys.path.insert(0, str(SRC))
 from config_models import PowerSeqConfig  # noqa: E402
 from c_generator import generate_c  # noqa: E402
 from drawio_export import generate_drawio  # noqa: E402
+from schemdraw_export import export_schemdraw  # noqa: E402
 from verilog_generator import generate_verilog  # noqa: E402
-from wavedrom_export import generate_wavedrom_json  # noqa: E402
 from wavedrom_sim import default_scenario_for_config  # noqa: E402
 
 # Theme (matches deck)
@@ -237,7 +237,7 @@ def pipeline_diagram(out_path: Path) -> Path:
             ("Verilog\n.v", ACCENT),
             ("C\n.c", ACCENT2),
             ("Draw.io\n.xml", "#A78BFA"),
-            ("WaveDrom\n.json", "#FBBF24"),
+            ("Schemdraw\n.svg/.png", "#FBBF24"),
         ]
     ):
         x = 5.3 + i * 1.55
@@ -392,7 +392,7 @@ def _npx_executable() -> str:
     npx = shutil.which("npx") or shutil.which("npx.cmd")
     if npx:
         return npx
-    raise FileNotFoundError("npx not found — install Node.js to render WaveDrom PNGs")
+    raise FileNotFoundError("npx not found — install Node.js to render WaveDrom PNGs (legacy doc assets only)")
 
 
 def render_wavedrom_png(wavejson_path: Path, out_path: Path) -> Path:
@@ -423,22 +423,18 @@ def _write_artifacts(stem: str, cfg: PowerSeqConfig, assets: Path) -> dict[str, 
     c_path.write_text(generate_c(cfg, output_filename=str(c_path)), encoding="utf-8")
 
     scenario = default_scenario_for_config(cfg)
-    wj_path = assets / f"{stem}_wavedrom.json"
-    wj_path.write_text(generate_wavedrom_json(cfg, scenario), encoding="utf-8")
+    timing_png = assets / f"{stem}_timing.png"
+    export_schemdraw(cfg, scenario, output_filename=str(timing_png))
 
     drawio_png = assets / f"{stem}_drawio.png"
     drawio_to_png(xml_path, drawio_png)
-
-    wavedrom_png = assets / f"{stem}_wavedrom.png"
-    render_wavedrom_png(wj_path, wavedrom_png)
 
     return {
         "xml": xml_path,
         "verilog": v_path,
         "c": c_path,
-        "wavedrom_json": wj_path,
+        "timing_png": timing_png,
         "drawio_png": drawio_png,
-        "wavedrom_png": wavedrom_png,
     }
 
 

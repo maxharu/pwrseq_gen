@@ -2,10 +2,11 @@
 name: drawio-placement
 description: >-
   Documents pwrseq_gen Draw.io placement in drawio_cell_export.py (default
-  generate_drawio) — per-output blocks, Cell 40pt snap, ROW/COL gap, label
-  stack, intra-group AND/OR/XOR trees, PSEQCELL O port, export net-name wire
-  reserve. Shared geometry in drawio_geometry.py. Use when modifying cell block
-  spacing, BLOCK_PAD, grid columns, or gate placement.
+  generate_drawio) — per-output blocks, Cell 40pt snap, multi-group vertical
+  stack, child↔merge dynamic channel, label stack, intra-group AND/OR/XOR trees,
+  PSEQCELL O port, export net-name wire reserve. Shared geometry in
+  drawio_geometry.py. Use when modifying cell block spacing, BLOCK_PAD, grid
+  columns, or gate placement.
 ---
 
 # Draw.io Placement (pwrseq_gen)
@@ -72,9 +73,59 @@ Emit: **inner + H_Deb + L_Deb + O** only.
 **Cell position inside block:**
 
 - `cell_x = snap(ox + bw − BLOCK_PAD − OUT_LABEL_W − GAP − CELL_GROUP_W)` — right-aligned
-- `cell_y = snap(_cell_y_in_block(oy, hi_count))` — first Hi label aligns with Hi_Deb; `hi_count=0` → `oy + BLOCK_PAD`
+- `cell_y = snap(_cell_y_in_block(oy, hi_count, hi_group_sizes))` — group 0 Hi anchor aligns with Hi_Deb; extra top space when multi-group stacked (`_stacked_groups_extent`)
 
 **Cell top-left** must land on **40pt grid** (`_snap_grid`, step `GRID`).
+
+### Multi-group placement (≥2 groups on same Hi/Lo path) ★
+
+Groups **share the same gate column X** and **stack vertically** (not chained leftward).
+
+| Rule | Definition |
+|------|------------|
+| OR position | Right edge at `gate_right` (= Cell left − `GATE_CELL_GAP` [− export extra]) |
+| Branch column | All groups: merge / single-gate **right edge** at `branch_attach = gate_right − OR_GATE_W − GAP` |
+| OR ↔ branch gap | **`GAP` (40pt)** between branch merge right and OR left |
+| Group 0 anchor | `deb_anchor_y` (H_Deb / L_Deb center) |
+| Group i+1 anchor | Hi: stack **up** from group i top (`stack_edge − below`); Lo: stack **down** from group i bottom (`stack_edge + above`) |
+| Group bbox touch | Adjacent group bboxes touch (`GROUP_STACK_GAP = 0`) |
+
+```
+[labels] [child?] [merge-lane labels] [merge AND] ←40pt→ [OR] ←40pt→ [Cell Deb]
+           ↑____________ same X column for every group ____________↑
+           group 2 (smaller Y)
+           group 1
+           group 0 (Deb anchor Y)
+```
+
+Functions: `_group_branch_attach_right`, `_group_vertical_extents`, `_stacked_groups_extent`, `_parse_path_group_terms`.
+
+### Intra-group AND tree — child ↔ merge channel (n ≥ 8)
+
+Between **child** (left) and **merge** (right) gate:
+
+```
+merge_lane_w = snap_up_40pt(max(LABEL_W, len(longest_right_term)×EXPORT_CHAR_PT))
+channel      = snap_up_40pt(GAP + merge_lane_w + GAP)   ← child right → merge left
+child right  = merge_gx − channel
+right labels at merge_gx − GAP − merge_lane_w (width = merge_lane_w)
+left labels  at child_gx − GAP − LABEL_W
+```
+
+Minimum channel = **`GAP + LABEL_W + GAP` = 180pt** (when all names fit in 100pt).
+
+Inter-group **OR tree** (≥8 branches) still uses fixed **`2×GAP`** between child OR and merge OR (no label lane).
+
+Block width uses `_path_horizontal_gate_width` (not per-group column sum):
+
+```
+intra_w = max over groups of _intra_group_gate_width(terms)
+        = AND_W + channel + AND_W   (tree)  or  AND_W  (single gate)
+gate_w  = intra_w + GAP + OR_W     (multi-group)
+        = intra_w                    (single group)
+```
+
+Functions: `_merge_lane_label_w`, `_child_merge_channel`, `_intra_group_gate_width`, `_path_horizontal_gate_width`.
 
 ### Cell–Cell spacing
 
@@ -111,7 +162,14 @@ With `ROW_GAP=COL_GAP=BLOCK_MIN_H=0`, floor is still:
 | **Label direct → Deb** (single input, no gate) | **`GATE_CELL_GAP` only** (40pt) |
 | Above + **export net name** | `GATE_CELL_GAP + extra` (extra on 40pt grid) |
 
-Block width (`_estimate_block_size`): `LABEL_W + (GAP + gate_w if depth>0 else 0) + GATE_CELL_GAP + wire_extra + …`
+Block width (`_estimate_block_size`):
+
+```
+w = BLOCK_PAD + LABEL_W + (GAP + gate_w if gate_w>0 else 0) + GATE_CELL_GAP + wire_extra + CELL + GAP + OUT_LABEL_W + BLOCK_PAD
+gate_w = max(_path_horizontal_gate_width(hi), _path_horizontal_gate_width(lo))
+```
+
+Block height adds `_stacked_groups_extent(hi|lo, group_sizes)` for groups 1..n−1 above/below group 0.
 
 ### Export net name (purple cond on Hi/Lo → Deb edge)
 
@@ -143,9 +201,9 @@ Styles from `AND1.xml` / `NAND1.xml` / `OR1.xml` / `NOR1.xml` / `XOR1.xml` / `XN
 
 ### AND/OR trees (n ≥ 8)
 
-Per `example (1).xml` / `example (2).xml`: **child gate** (left) → **merge gate** (right). Right label column uses index `ii+1` so index 0 stays free for child output wire.
+**Intra-group AND** (`_wire_and_branch`): child (left) → merge (right). Left labels → child; **right labels → merge** in a **dynamic-width lane** between gates (`_merge_lane_label_w` / `_child_merge_channel`). Merge input 0 reserved for child output (label stack index `ii+1` on merge side).
 
-Applies to intra-group AND (`_wire_and_branch`) and inter-group OR (`_wire_or_fanin`).
+**Inter-group OR** (`_wire_or_fanin`): child OR → merge OR/NOR at **`deb_anchor_y`** (group 0 level only); fixed `2×GAP` between OR gates.
 
 Stack height uses `_effective_stack_inputs` (not raw input count) for block sizing.
 
@@ -158,7 +216,8 @@ Stack height uses `_effective_stack_inputs` (not raw input count) for block sizi
 | `COL_GAP` | 0 | Extra space between block columns |
 | `BLOCK_MIN_H` | 0 | Minimum block height floor |
 | `LABEL_STACK_STEP` | 20 | Vertical spacing per extra input label |
-| `LABEL_W` / `OUT_LABEL_W` | 100 | Horizontal block width |
+| `GROUP_STACK_GAP` | 0 | Extra gap between stacked multi-group bboxes (0 = touch) |
+| `LABEL_W` / `OUT_LABEL_W` | 100 | Default input / output label width |
 | `GATE_CELL_GAP` | `GAP` (40) | Gate column → Cell |
 | `EXPORT_CHAR_PT` / `EXPORT_WIRE_PAD` / `EXPORT_WIRE_MIN` | 8 / 0 / 0 | Purple export-name wire reserve |
 | `AND_TREE_THRESHOLD` | 8 | ≥8 inputs/branches → 2-level cascade |
@@ -179,9 +238,10 @@ All spacing constants live at the top of `drawio_cell_export.py` — not in `Dra
 ## Modification checklist
 
 - [ ] Spacing: `BLOCK_PAD`, `ROW_GAP`, `COL_GAP`, `LABEL_STACK_STEP`, `BLOCK_MIN_H`
-- [ ] `block_h` / `row_heights`: `_block_vertical_layout` + per-row `max`
-- [ ] `cell_x`/`cell_y`: `_cell_y_in_block`, `_snap_grid` after position calc
-- [ ] Block width: `_estimate_block_size`, `_export_wire_extra_for_name`, gate depth; direct-label path skips extra `GAP`
+- [ ] `block_h` / `row_heights`: `_block_vertical_layout` (+ `_stacked_groups_extent`) + per-row `max`
+- [ ] `cell_x`/`cell_y`: `_cell_y_in_block(oy, hi_count, hi_group_sizes)`, `_snap_grid`
+- [ ] Block width: `_path_horizontal_gate_width`, `_child_merge_channel`, `_export_wire_extra_for_name`
+- [ ] Multi-group: `_group_branch_attach_right`, vertical stack in `_wire_path_v2`
 - [ ] PSEQCELL: `_load_pseqcell_layout` / `CELL_O_*`; output edge from O right
 - [ ] Intra-op / group_inv: `_intra_merge_gate_style`, `_or_gate_style` in `drawio_geometry.py`
 - [ ] Run `pytest tests/test_drawio_cell.py tests/test_integration.py -q`
@@ -191,6 +251,8 @@ All spacing constants live at the top of `drawio_cell_export.py` — not in `Dra
 | Mistake | Correct approach |
 |---------|------------------|
 | Expecting Sugiyama / layer-column layout | Only cell-centric grid in `drawio_cell_export.py` |
+| Multi-group groups chained leftward | Groups share `branch_attach` X; stack on Y via `_group_vertical_extents` |
+| AND tree child↔merge fixed `2×GAP` only | Use `_child_merge_channel(right_terms)` — widens for long merge-side names |
 | Direct label→Deb uses 80pt (GAP+GATE_CELL_GAP) | Single-term branch: `label_right = attach_right` (40pt only) |
 | Wiring Q/~Q feedback between blocks | Not supported; use cond label `{sig}_{hi\|lo}` |
 | Export `extra` not on 40pt grid | `_snap_grid_up` on `_export_wire_extra_for_name` result |

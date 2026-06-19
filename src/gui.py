@@ -64,8 +64,7 @@ from wavedrom_export import (
     WAVEDROM_EDGE_HI_ONLY,
     WAVEDROM_EDGE_LO_ONLY,
     WaveDromExportOptions,
-    generate_wavedrom_json,
-    wavedrom_edge_kinds_from_choice,
+    timing_edge_kinds_from_choice,
 )
 from wavedrom_sim import (
     DEP_HIGH,
@@ -1052,7 +1051,7 @@ class InputWaveSidePanel(ctk.CTkFrame):
 
         hint = ctk.CTkLabel(
             self,
-            text="WaveDrom simulation only (not Verilog depends_on).",
+            text="Timing simulation only (not Verilog depends_on).",
             font=FONT_HINT,
             text_color="gray",
             anchor="w",
@@ -1463,7 +1462,7 @@ class RailEditorFrame(ctk.CTkFrame):
         cmb_deb_pulse.grid(row=2, column=1, sticky="w", padx=(0, S_LG), pady=2)
 
         # --- WaveDrom Hi/Lo (input only) ---
-        self.wavedrom_wrap, wavedrom_body = self._make_section("WaveDrom Hi/Lo")
+        self.wavedrom_wrap, wavedrom_body = self._make_section("Timing Hi/Lo")
         self.input_wave_frame = InputWaveCondFrame(
             wavedrom_body,
             self._initial_input_wave_spec,
@@ -1474,6 +1473,7 @@ class RailEditorFrame(ctk.CTkFrame):
         self.input_wave_frame.pack(fill="x", padx=S_SM, pady=S_SM)
 
         apply_row = ctk.CTkFrame(self, fg_color="transparent")
+        self.apply_row = apply_row
         apply_row.pack(fill="x", padx=S_SM, pady=(0, S_SM))
         ctk.CTkButton(
             apply_row, text="Apply", width=88, command=self._on_apply_clicked,
@@ -1512,6 +1512,11 @@ class RailEditorFrame(ctk.CTkFrame):
             self.var_type.set(new_type)
         self._on_type_toggle()
 
+    def _repack_apply_row(self) -> None:
+        """pack 順序：切換 Type 後 re-pack 的 section 會跑到 Apply 後面，需重排到底。"""
+        self.apply_row.pack_forget()
+        self.apply_row.pack(fill="x", padx=S_SM, pady=(0, S_SM))
+
     def _on_type_toggle(self, initial: bool = False):
         is_input = self.var_type.get() == "input"
         if is_input:
@@ -1525,6 +1530,7 @@ class RailEditorFrame(ctk.CTkFrame):
             self.wavedrom_wrap.pack_forget()
             self.timing_wrap.pack(fill="x", pady=(0, S_SM))
             self.cond_wrap.pack(fill="x", pady=(0, S_SM))
+        self._repack_apply_row()
 
     def _on_deb_toggle(self, initial: bool = False):
         if self.var_deb_enable.get():
@@ -2264,6 +2270,8 @@ PREVIEW_LANGS = ("Verilog", "C", "Schemdraw")
 PREVIEW_FONT_FAMILY = FONT_MONO[0]
 PREVIEW_FONT_SIZE_DEFAULT = FONT_MONO[1]
 PREVIEW_FONT_SIZES = (8, 10, 12, 14, 16, 18, 20, 24)
+PREVIEW_SCROLL_UNITS_Y = 4  # 滾輪垂直：每格 Tk units（約行數）
+PREVIEW_SCROLL_UNITS_X = 4  # Shift+滾輪水平：每格 Tk units（約字元寬）
 SCHEMDRAW_ZOOM_MIN = 0.1
 SCHEMDRAW_ZOOM_MAX = 5.0
 SCHEMDRAW_ZOOM_STEP = 1.2
@@ -2422,7 +2430,9 @@ class PreviewPanel(ctk.CTkFrame):
                 self._preview_font_step(-1)
             return "break"
         try:
-            self._preview_textbox().yview_scroll(int(-1 * (event.delta / 120)), "units")
+            self._preview_textbox().yview_scroll(
+                int(-PREVIEW_SCROLL_UNITS_Y * (event.delta / 120)), "units",
+            )
         except Exception:
             pass
         return "break"
@@ -2431,7 +2441,9 @@ class PreviewPanel(ctk.CTkFrame):
         if self.get_lang() == "Schemdraw":
             return None
         try:
-            self._preview_textbox().xview_scroll(int(-1 * (event.delta / 120)), "units")
+            self._preview_textbox().xview_scroll(
+                int(-PREVIEW_SCROLL_UNITS_X * (event.delta / 120)), "units",
+            )
         except Exception:
             pass
         return "break"
@@ -2449,13 +2461,13 @@ class PreviewPanel(ctk.CTkFrame):
         try:
             if event.state & 0x0001:
                 if event.num == 4:
-                    tb.xview_scroll(-1, "units")
+                    tb.xview_scroll(-PREVIEW_SCROLL_UNITS_X, "units")
                 elif event.num == 5:
-                    tb.xview_scroll(1, "units")
+                    tb.xview_scroll(PREVIEW_SCROLL_UNITS_X, "units")
             elif event.num == 4:
-                tb.yview_scroll(-1, "units")
+                tb.yview_scroll(-PREVIEW_SCROLL_UNITS_Y, "units")
             elif event.num == 5:
-                tb.yview_scroll(1, "units")
+                tb.yview_scroll(PREVIEW_SCROLL_UNITS_Y, "units")
         except Exception:
             pass
         return "break"
@@ -3081,8 +3093,8 @@ class AboutDialog(ctk.CTkToplevel):
         self.bind("<Escape>", lambda _e: self.destroy())
 
 
-class WaveDromNodeSelectDialog(ctk.CTkToplevel):
-    """選擇要包含在 WaveDrom / Schemdraw 圖中的節點（模擬仍用全案）。"""
+class TimingNodeSelectDialog(ctk.CTkToplevel):
+    """選擇要包含在 Schemdraw 時序圖中的節點（模擬仍用全案）。"""
 
     def __init__(
         self,
@@ -3090,8 +3102,8 @@ class WaveDromNodeSelectDialog(ctk.CTkToplevel):
         rails: list[PowerRail],
         export_callback: Callable[[WaveDromExportOptions], None],
         *,
-        title: str = "Export WaveDrom — Select Nodes",
-        select_hint: str = "Select nodes to include in the WaveDrom export.",
+        title: str = "Timing Diagram — Select Nodes",
+        select_hint: str = "Select nodes to include in the timing diagram.",
         action_label: str = "Export…",
         initial_options: WaveDromExportOptions | None = None,
     ):
@@ -3273,7 +3285,7 @@ class WaveDromNodeSelectDialog(ctk.CTkToplevel):
             return None
         return WaveDromExportOptions(
             include_rails=frozenset(selected),
-            edge_kinds=wavedrom_edge_kinds_from_choice(self._edge_var.get()),
+            edge_kinds=timing_edge_kinds_from_choice(self._edge_var.get()),
         )
 
     def _export(self) -> None:
@@ -3369,7 +3381,7 @@ class PowerSeqGUI(ctk.CTk):
     _GEN_MENU_LABEL = "Generate"
     _GEN_MENU_ITEMS = ("Verilog", "C")
     _EXPORT_MENU_LABEL = "Export"
-    _EXPORT_MENU_ITEMS = ("Draw.io", "WaveDrom", "Schemdraw")
+    _EXPORT_MENU_ITEMS = ("Draw.io", "Schemdraw")
 
     def _build_ui(self):
         # ----- Toolbar -----
@@ -3421,12 +3433,12 @@ class PowerSeqGUI(ctk.CTk):
         self._wd_steps_var = tk.StringVar(value="50")
         wd_steps = ctk.CTkEntry(wd_opts, textvariable=self._wd_steps_var, width=56, height=28)
         wd_steps.pack(side="left", padx=(0, S_SM))
-        self._tt(wd_steps, "WaveDrom simulation length (saved with project)")
+        self._tt(wd_steps, "Timing simulation length (saved with project)")
         ctk.CTkLabel(wd_opts, text="hscale:", font=FONT_BODY).pack(side="left", padx=(0, S_XS))
         self._wd_hscale_var = tk.StringVar(value="1")
         wd_hscale = ctk.CTkEntry(wd_opts, textvariable=self._wd_hscale_var, width=40, height=28)
         wd_hscale.pack(side="left")
-        self._tt(wd_hscale, "WaveDrom horizontal pixels per step (default 1)")
+        self._tt(wd_hscale, "Timing diagram horizontal scale per step (default 1)")
         for w in (wd_steps, wd_hscale):
             w.bind("<FocusOut>", self._on_wavedrom_globals_changed, add="+")
             w.bind("<Return>", self._on_wavedrom_globals_changed, add="+")
@@ -3470,7 +3482,7 @@ class PowerSeqGUI(ctk.CTk):
         export_menu.set(self._EXPORT_MENU_LABEL)
         export_menu.pack(side="right", padx=(0, S_SM))
         self._export_menu = export_menu
-        self._tt(export_menu, "Export Draw.io (Ctrl+E), WaveDrom (Ctrl+Shift+E), or Schemdraw")
+        self._tt(export_menu, "Export Draw.io (Ctrl+E) or Schemdraw timing (Ctrl+Shift+E)")
         gen_menu = ctk.CTkOptionMenu(
             toolbar, values=list(self._GEN_MENU_ITEMS), width=110,
             command=self._on_generate_menu,
@@ -3599,8 +3611,8 @@ class PowerSeqGUI(ctk.CTk):
         self.bind_all("<Control-Shift-G>", lambda _e: self._generate_c())
         self.bind_all("<Control-e>", lambda _e: self._export_drawio())
         self.bind_all("<Control-E>", lambda _e: self._export_drawio())
-        self.bind_all("<Control-Shift-e>", lambda _e: self._export_wavedrom())
-        self.bind_all("<Control-Shift-E>", lambda _e: self._export_wavedrom())
+        self.bind_all("<Control-Shift-e>", lambda _e: self._export_schemdraw())
+        self.bind_all("<Control-Shift-E>", lambda _e: self._export_schemdraw())
         self.bind_all("<Control-f>", lambda _e: self.node_list.focus_search())
         self.bind_all("<Control-F>", lambda _e: self.node_list.focus_search())
         self.bind_all("<Control-z>", lambda _e: self._undo())
@@ -4150,7 +4162,7 @@ class PowerSeqGUI(ctk.CTk):
             existing.focus_force()
             return
         initial = self._schemdraw_preview_options(cfg)
-        dlg = WaveDromNodeSelectDialog(
+        dlg = TimingNodeSelectDialog(
             self,
             cfg.rails,
             self._on_schemdraw_preview_nodes_selected,
@@ -4330,7 +4342,7 @@ class PowerSeqGUI(ctk.CTk):
             ("Ctrl+Shift+S",  "Save As..."),
             ("Ctrl+G",        "Generate Verilog"),
             ("Ctrl+Shift+G",  "Generate C"),
-            ("Ctrl+Shift+E",  "Export WaveDrom JSON"),
+            ("Ctrl+Shift+E",  "Export Schemdraw timing"),
             ("Ctrl+E",        "Export Draw.io"),
             ("Ctrl+F",        "Focus node search"),
             ("Ctrl+Z",        "Undo"),
@@ -4464,8 +4476,6 @@ class PowerSeqGUI(ctk.CTk):
     def _on_export_menu(self, choice: str):
         if choice == "Draw.io":
             self._export_drawio()
-        elif choice == "WaveDrom":
-            self._export_wavedrom()
         elif choice == "Schemdraw":
             self._export_schemdraw()
         self._export_menu.set(self._EXPORT_MENU_LABEL)
@@ -4498,64 +4508,6 @@ class PowerSeqGUI(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Error", str(e))
             self._status_msg(f"Generate {label} failed: {e}", level="error")
-
-    def _run_wavedrom_export(self, export_opts: WaveDromExportOptions) -> None:
-        path = filedialog.asksaveasfilename(
-            defaultextension=".json",
-            filetypes=[("WaveDrom JSON", "*.json"), ("All", "*")],
-        )
-        if not path:
-            return
-        try:
-            cfg2 = self._collect_config()
-            scenario = self._wavedrom_scenario_for_export(cfg2)
-            text = generate_wavedrom_json(
-                cfg2,
-                scenario,
-                output_filename=path,
-                include_rails=export_opts.include_rails,
-                edge_kinds=export_opts.edge_kinds,
-            )
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(text)
-            n = len(export_opts.include_rails)
-            if export_opts.edge_kinds == WAVEDROM_EDGE_HI_ONLY:
-                edge_label = "Hi arrows"
-            elif export_opts.edge_kinds == WAVEDROM_EDGE_LO_ONLY:
-                edge_label = "Lo arrows"
-            else:
-                edge_label = "Hi+Lo arrows"
-            self._status_msg(
-                f"Exported WaveDrom ({n} nodes, {edge_label}): {os.path.basename(path)}",
-                level="success",
-            )
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
-            self._status_msg(f"WaveDrom export failed: {e}", level="error")
-
-    def _export_wavedrom(self):
-        cfg = self._collect_config()
-        ok, errs = validate(cfg)
-        if not ok:
-            messagebox.showerror("Validation Failed", "\n".join(errs))
-            self._status_msg(f"{len(errs)} validation error(s); cannot export", level="error")
-            return
-        if not cfg.rails:
-            self._status_msg("No nodes. Add rails first.", level="warn")
-            return
-        existing = getattr(self, "_timing_export_dlg", None)
-        if existing is not None and existing.winfo_exists():
-            existing.lift()
-            existing.focus_force()
-            return
-        dlg = WaveDromNodeSelectDialog(
-            self, cfg.rails, self._run_wavedrom_export,
-            title="Export WaveDrom — Select Nodes",
-            select_hint="Select nodes to include in the WaveDrom export.",
-        )
-        self._timing_export_dlg = dlg
-        self.wait_window(dlg)
-        self._timing_export_dlg = None
 
     def _run_schemdraw_export(self, export_opts: WaveDromExportOptions) -> None:
         path = filedialog.asksaveasfilename(

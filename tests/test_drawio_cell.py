@@ -13,7 +13,10 @@ from drawio_cell_export import (
     AND_TREE_THRESHOLD,
     EXPORT_WIRE_MIN,
     LABEL_STACK_STEP,
+    _Term,
+    _child_merge_channel,
     _export_wire_extra_for_name,
+    _merge_lane_label_w,
 )
 from drawio_export import (
     AND_GATE_H,
@@ -352,6 +355,56 @@ class TestCellCentricDrawio:
         assert abs(left_ys[-1] + 10 - gate_cy) < 1.5
         assert abs(right_ys[-1] + 10 - gate_cy) > LABEL_STACK_STEP - 1
 
+    def test_child_merge_channel_on_40pt_grid(self):
+        long_name = "PLD_CPU1_MEM_IK_PWRGD_OD"
+        right = [_Term(f"IN_{i}") for i in range(4)] + [_Term(long_name)]
+        ch = _child_merge_channel(right)
+        assert ch % GRID == 0
+        assert ch >= GAP + _merge_lane_label_w(right) + GAP - 1
+
+    def test_and_tree_child_merge_gap_fits_long_merge_labels(self):
+        long_name = "PLD_CPU1_MEM_IK_PWRGD_OD"
+        deps = [f"IN_{i}" for i in range(AND_TREE_THRESHOLD - 1)] + [long_name]
+        cfg = PowerSeqConfig(
+            rails=[
+                *[PowerRail(n, seq_type="input", deb_cycle_hi=1, deb_cycle_lo=1) for n in deps],
+                PowerRail(
+                    "OUT",
+                    seq_type="output",
+                    depends_on_hi_groups=[deps],
+                    cycle_hi=1,
+                    cycle_lo=1,
+                ),
+            ]
+        )
+        root = ET.fromstring(generate_drawio(cfg))
+        and_gates = [
+            c for c in root.iter("mxCell")
+            if "logic_gate" in (c.get("style") or "") and "operation=and" in (c.get("style") or "")
+        ]
+        merge = max(and_gates, key=lambda c: float(c.find("mxGeometry").get("x")))
+        child = min(and_gates, key=lambda c: float(c.find("mxGeometry").get("x")))
+        merge_x = float(merge.find("mxGeometry").get("x"))
+        child_x = float(child.find("mxGeometry").get("x"))
+        channel = merge_x - (child_x + AND_GATE_W)
+        assert channel % GRID == 0
+        assert channel >= GAP + _merge_lane_label_w([_Term(long_name)]) + GAP - 1
+        merge_labels = [
+            _cell_by_id(root, e.get("source"))
+            for e in root.iter("mxCell")
+            if e.get("edge") == "1"
+            and e.get("target") == merge.get("id")
+            and "logic_gate"
+            not in (_cell_by_id(root, e.get("source")).get("style") or "")
+        ]
+        long_label = next(
+            c for c in merge_labels if long_name in (c.get("value") or "")
+        )
+        lw = float(long_label.find("mxGeometry").get("width"))
+        assert lw >= len(long_name) * 7
+        assert lw % GRID == 0
+        assert child_x + AND_GATE_W + GAP <= float(long_label.find("mxGeometry").get("x")) + 1.5
+
     def test_group_inv_and_tree_child_and_merge_nand(self):
         """group_inv + ≥8 inputs: child AND, merge NAND (~(child & rights))."""
         deps = [f"IN_{i}" for i in range(AND_TREE_THRESHOLD)]
@@ -448,6 +501,54 @@ class TestCellCentricDrawio:
         child = min(or_gates, key=lambda c: float(c.find("mxGeometry").get("x")))
         assert "negating=1" not in (child.get("style") or "")
         assert "negating=1" in (merge.get("style") or "")
+
+    def test_multi_group_vertical_stack_same_gate_x(self):
+        """Multi-group: OR is GAP right of branch column; groups share X, stack on Y."""
+        deps = [f"IN_{i}" for i in range(AND_TREE_THRESHOLD)]
+        cfg = PowerSeqConfig(
+            rails=[
+                *[PowerRail(n, seq_type="input", deb_cycle_hi=1, deb_cycle_lo=1) for n in deps],
+                PowerRail("G2", seq_type="input", deb_cycle_hi=1, deb_cycle_lo=1),
+                PowerRail("G3A", seq_type="input", deb_cycle_hi=1, deb_cycle_lo=1),
+                PowerRail("G3B", seq_type="input", deb_cycle_hi=1, deb_cycle_lo=1),
+                PowerRail(
+                    "OUT",
+                    seq_type="output",
+                    depends_on_hi_groups=[deps, ["G2"], ["G3A", "G3B"]],
+                    cycle_hi=1,
+                    cycle_lo=1,
+                ),
+            ]
+        )
+        root = ET.fromstring(generate_drawio(cfg))
+        or_gate = next(
+            c
+            for c in root.iter("mxCell")
+            if "logic_gate" in (c.get("style") or "")
+            and "operation=or" in (c.get("style") or "")
+        )
+        and_gates = [
+            c
+            for c in root.iter("mxCell")
+            if "logic_gate" in (c.get("style") or "")
+            and "operation=and" in (c.get("style") or "")
+            and "negating=1" not in (c.get("style") or "")
+        ]
+        og = or_gate.find("mxGeometry")
+        or_x = float(og.get("x"))
+        or_y = float(og.get("y"))
+        merge_right = or_x - GAP
+        merge_gates = [
+            g
+            for g in and_gates
+            if abs(float(g.find("mxGeometry").get("x")) + AND_GATE_W - merge_right) < 1.5
+        ]
+        assert len(merge_gates) >= 2
+        merge_xs = {float(g.find("mxGeometry").get("x")) for g in merge_gates}
+        assert len(merge_xs) == 1
+        merge_y = [float(g.find("mxGeometry").get("y")) for g in merge_gates]
+        assert len({round(y) for y in merge_y}) >= 2
+        assert min(merge_y) < or_y - 1
 
     def test_outputs_follow_declaration_order(self):
         cfg = PowerSeqConfig(
