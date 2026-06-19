@@ -15,64 +15,19 @@ from schemdraw_export import (
     render_schemdraw_png_bytes,
     schemdraw_edges_forward_in_time,
 )
+from wavedrom_export import WAVEDROM_EDGE_HI_ONLY, WAVEDROM_EDGE_LO_ONLY
 
-_TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "x15dot-f-wavedrom-ddr_hi.json"
-_FULL_JSON = Path(__file__).resolve().parents[1] / "templates" / "x15dot-f-wavedrom.json"
+_DEMO_JSON = Path(__file__).resolve().parents[1] / "templates" / "demo_json.json"
 
 
 def test_build_schemdraw_extended_edges_uses_sim_steps():
-  signals = [
-      {"name": "iDEP", "wave": "01"},
-      {"name": "oOUT", "wave": "01"},
-  ]
-  pending = [(0, 1, signals[0], signals[1], "hi")]
-  edges = build_schemdraw_extended_edges(signals, pending)
-  assert edges == ["[0:0]-~>[1:1]"]
-
-
-@pytest.mark.skipif(not _FULL_JSON.is_file(), reason="template json missing")
-def test_node_collision_json_has_backward_edges_via_old_mapping():
-    """x15dot-f-wavedrom.json exhausts node letters (duplicate z)."""
-    doc = json.loads(_FULL_JSON.read_text(encoding="utf-8"))
-    from collections import Counter
-
-    chars = [
-        ch
-        for s in doc["signal"]
-        for ch in s.get("node", "")
-        if ch not in ".=|"
+    signals = [
+        {"name": "iDEP", "wave": "01"},
+        {"name": "oOUT", "wave": "01"},
     ]
-    dups = [ch for ch, n in Counter(chars).items() if n > 1]
-    assert "z" in dups
-
-    # Old node-letter remap would point SLPS4@44 -> RESET@42 (backward).
-    loc: dict[str, tuple[int, int]] = {}
-    for si, lane in enumerate(doc["signal"]):
-        for wi, ch in enumerate(lane.get("node", "")):
-            if ch not in ".=|":
-                loc[ch] = (si, wi)
-
-    def period(wave: str, wi: int) -> int:
-        p = 0
-        for i, ch in enumerate(wave):
-            if i == wi:
-                return p
-            if ch in "01." or ch.isdigit():
-                p += 1
-        return p
-
-    backward = []
-    for raw in doc.get("edge", []):
-        dep, out = raw.split("-~>")
-        if dep not in loc or out not in loc:
-            continue
-        dsi, dwi = loc[dep]
-        osi, owi = loc[out]
-        dp = period(doc["signal"][dsi]["wave"], dwi)
-        op = period(doc["signal"][osi]["wave"], owi)
-        if dp > op:
-            backward.append((doc["signal"][dsi]["name"], dp, doc["signal"][osi]["name"], op))
-    assert any("SLPS4" in b[0] and "RESET" in b[2] for b in backward)
+    pending = [(0, 1, signals[0], signals[1], "hi")]
+    edges = build_schemdraw_extended_edges(signals, pending)
+    assert edges == ["[0:0]-~>[1:1]"]
 
 
 def test_dual_labels_add_right_side_signal_names():
@@ -104,17 +59,14 @@ def test_dual_labels_add_right_side_signal_names():
     assert {seg.text for seg in right} == {"iTEST", "oOUT"}
 
 
-@pytest.mark.skipif(not _TEMPLATE.is_file(), reason="template json missing")
+@pytest.mark.skipif(not _DEMO_JSON.is_file(), reason="demo_json.json missing")
 def test_render_schemdraw_pdf(tmp_path):
     pytest.importorskip("schemdraw")
     pytest.importorskip("matplotlib")
 
-    demo = Path(__file__).resolve().parents[1] / "templates" / "demo_json.json"
-    if not demo.is_file():
-        pytest.skip("demo_json.json missing")
     from config_models import PowerSeqConfig
 
-    cfg = PowerSeqConfig.from_dict(json.loads(demo.read_text(encoding="utf-8")))
+    cfg = PowerSeqConfig.from_dict(json.loads(_DEMO_JSON.read_text(encoding="utf-8")))
     doc = generate_schemdraw_doc(cfg)
     out = tmp_path / "timing.pdf"
     render_schemdraw(doc, str(out))
@@ -123,32 +75,51 @@ def test_render_schemdraw_pdf(tmp_path):
     assert out.read_bytes()[:4] == b"%PDF"
 
 
-@pytest.mark.skipif(not _TEMPLATE.is_file(), reason="template json missing")
+@pytest.mark.skipif(not _DEMO_JSON.is_file(), reason="demo_json.json missing")
 def test_render_schemdraw_png_bytes(tmp_path):
     schemdraw = pytest.importorskip("schemdraw")
     del schemdraw
     pytest.importorskip("PIL")
 
-    demo = Path(__file__).resolve().parents[1] / "templates" / "demo_json.json"
-    if not demo.is_file():
-        pytest.skip("demo_json.json missing")
     from config_models import PowerSeqConfig
 
-    cfg = PowerSeqConfig.from_dict(json.loads(demo.read_text(encoding="utf-8")))
+    cfg = PowerSeqConfig.from_dict(json.loads(_DEMO_JSON.read_text(encoding="utf-8")))
     doc = generate_schemdraw_doc(cfg)
     png = render_schemdraw_png_bytes(doc)
     assert len(png) > 500
 
 
+@pytest.mark.skipif(not _DEMO_JSON.is_file(), reason="demo_json.json missing")
 def test_generate_schemdraw_doc_edges_never_go_backward_in_time():
-    demo = Path(__file__).resolve().parents[1] / "templates" / "demo_json.json"
-    if not demo.is_file():
-        pytest.skip("demo_json.json missing")
     from config_models import PowerSeqConfig
 
-    cfg = PowerSeqConfig.from_dict(json.loads(demo.read_text(encoding="utf-8")))
+    cfg = PowerSeqConfig.from_dict(json.loads(_DEMO_JSON.read_text(encoding="utf-8")))
     doc = generate_schemdraw_doc(cfg)
     assert schemdraw_edges_forward_in_time(doc) == []
     assert doc.get("edge")
     assert all(re.match(r"^\[\d+:\d+\]-~>\[\d+:\d+\]$", e) for e in doc["edge"])
     assert not any("node" in s for s in doc["signal"])
+
+
+@pytest.mark.skipif(not _DEMO_JSON.is_file(), reason="demo_json.json missing")
+def test_generate_schemdraw_include_rails_subset():
+    from config_models import PowerRail, PowerSeqConfig
+
+    cfg = PowerSeqConfig.from_dict(json.loads(_DEMO_JSON.read_text(encoding="utf-8")))
+    first_out = next(r.name for r in cfg.rails if r.has_pseqcell)
+    doc = generate_schemdraw_doc(cfg, include_rails=frozenset({first_out}))
+    names = [s["name"] for s in doc["signal"]]
+    assert len(names) == 1
+    assert names[0].startswith("o")
+
+
+@pytest.mark.skipif(not _DEMO_JSON.is_file(), reason="demo_json.json missing")
+def test_generate_schemdraw_edge_kinds():
+    from config_models import PowerSeqConfig
+
+    cfg = PowerSeqConfig.from_dict(json.loads(_DEMO_JSON.read_text(encoding="utf-8")))
+    doc_hi = generate_schemdraw_doc(cfg, edge_kinds=WAVEDROM_EDGE_HI_ONLY)
+    doc_lo = generate_schemdraw_doc(cfg, edge_kinds=WAVEDROM_EDGE_LO_ONLY)
+    doc_both = generate_schemdraw_doc(cfg)
+    assert len(doc_hi.get("edge", [])) <= len(doc_both.get("edge", []))
+    assert len(doc_lo.get("edge", [])) <= len(doc_both.get("edge", []))

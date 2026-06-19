@@ -15,7 +15,7 @@ Stroke colors (`drawio_geometry.py`):
 
 | Constant | Value | Use |
 |----------|-------|-----|
-| `STROKE_DEFAULT` | `#000000` | Label→gate, intra-gate |
+| `STROKE_DEFAULT` | `#000000` | Label→gate, intra-gate, branch→OR |
 | `STROKE_HI` | `#ff0000` | Path to H_Deb |
 | `STROKE_LO` | `#008000` | Path to L_Deb |
 
@@ -30,11 +30,22 @@ Stroke colors (`drawio_geometry.py`):
 
 | Function | Topology |
 |----------|----------|
-| `_wire_path_v2` | Parse groups → per-group `_wire_and_branch` → optional `_wire_or_fanin` → Deb |
-| `_wire_and_branch` | 1 term: label only; 2–7: one merge gate; ≥8: child→merge tree |
-| `_wire_or_fanin` | 1 branch: direct to Deb; 2–7: one OR; ≥8: child OR→merge OR/NOR |
+| `_wire_path_v2` | Parse terms → vertical multi-group stack → `_wire_and_branch` each → `_wire_or_fanin`? → Deb |
+| `_wire_and_branch` | 1 term: label→Deb/OR; 2–7: one gate; ≥8: child→merge + merge-lane labels |
+| `_wire_or_fanin` | 1 branch: direct Deb; 2–7: one OR; ≥8: child OR→merge OR/NOR |
+| `_parse_path_group_terms` | Config groups → filtered `list[list[_Term]]` |
 | `_resolve_term` | Build label text; `use=hi/lo` → purple cond name |
 | `_export_edge_label` | HTML for Deb edge export net name |
+
+## Placement helpers used by routing (same file)
+
+| Function | Routing impact |
+|----------|----------------|
+| `_group_branch_attach_right` | Shared X for all group branch outputs |
+| `_group_vertical_extents` | Per-group anchor Y when stacking |
+| `_merge_lane_label_w` | Right-label width in AND tree |
+| `_child_merge_channel` | child→merge edge horizontal clearance |
+| `_add_term_label(..., w=merge_lane_w)` | Wider label vertex for long merge-side names |
 
 ## Cross-block / feedback (not implemented)
 
@@ -51,8 +62,17 @@ Scripts `scripts/enumerate_feedback.py` / `scripts/list_feedback_paths.py` (if p
 
 | Test file | Asserts |
 |-----------|---------|
-| `tests/test_drawio_cell.py` | Orthogonal only, O exit, label gaps, export wire reserve, AND tree, declaration order |
-| `tests/test_integration.py` | `test_cell_centric_drawio_from_demo` — one group per output, all edges orthogonal |
+| `tests/test_drawio_cell.py` | Orthogonal only, O exit, label gaps, export wire reserve, AND tree, multi-group stack, child-merge channel, declaration order |
+| `tests/test_integration.py` | `test_cell_centric_drawio_from_demo` — all edges orthogonal |
+
+Notable tests:
+
+| Test | Covers |
+|------|--------|
+| `test_two_level_and_tree_for_many_inputs` | child→merge topology |
+| `test_child_merge_channel_on_40pt_grid` | channel snap + label width |
+| `test_and_tree_child_merge_gap_fits_long_merge_labels` | long merge-side names |
+| `test_multi_group_vertical_stack_same_gate_x` | shared X + OR GAP + vertical stack |
 
 Run:
 
@@ -62,6 +82,6 @@ python -m pytest tests/test_drawio_cell.py tests/test_integration.py -q
 
 ## Related placement (not routing)
 
-Export wire **width reserve** is placement (`_export_wire_extra_for_name`, `_estimate_block_size`); routing only attaches the label `value` on the Deb edge.
+Export wire **width reserve** and gate column layout are placement (`_export_wire_extra_for_name`, `_path_horizontal_gate_width`, `_child_merge_channel`); routing only emits edges with orthogonal auto.
 
 See [drawio-placement/reference.md](../drawio-placement/reference.md).

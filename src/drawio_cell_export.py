@@ -67,6 +67,7 @@ ROW_GAP = 0
 OUT_LABEL_W = 100
 GATE_CELL_GAP = GAP
 LABEL_STACK_STEP = 20
+GROUP_STACK_GAP = 0
 AND_TREE_THRESHOLD = 8
 EXPORT_CHAR_PT = 8.0
 EXPORT_WIRE_PAD = 0
@@ -271,8 +272,131 @@ def _or_columns(n: int) -> int:
 
 
 def _gate_depth(groups: list[list[str]]) -> int:
-    n_and = sum(_and_columns(len(g)) for g in groups)
-    return n_and + _or_columns(len(groups))
+    """Horizontal gate columns: widest intra-group tree + inter-group OR (not summed per group)."""
+    nonempty = [g for g in groups if g]
+    if not nonempty:
+        return 0
+    max_and = max(_and_columns(len(g)) for g in nonempty)
+    return max_and + _or_columns(len(nonempty))
+
+
+def _group_vertical_extents(hl: str, n_terms: int) -> tuple[int, int]:
+    """(extent_above, extent_below) from anchor center — above = −Y, below = +Y."""
+    if n_terms <= 0:
+        return 0, 0
+    label_half = LABEL_H // 2
+    gate_half = AND_GATE_H // 2
+    if n_terms == 1:
+        return label_half, label_half
+    if n_terms < AND_TREE_THRESHOLD:
+        stack = label_half + max(0, n_terms - 1) * LABEL_STACK_STEP
+        gate = max(gate_half, label_half)
+        if hl == "hi":
+            return stack, gate
+        return gate, stack
+    stack = label_half + max(0, _effective_stack_inputs(n_terms) - 1) * LABEL_STACK_STEP
+    if hl == "hi":
+        return stack, gate_half
+    return gate_half, stack
+
+
+def _stacked_groups_extent(hl: str, group_sizes: list[int]) -> int:
+    """Extra vertical span for groups 1..n-1 stacked beyond group 0 (touching bboxes)."""
+    if len(group_sizes) <= 1:
+        return 0
+    extra = 0
+    for n in group_sizes[1:]:
+        above, below = _group_vertical_extents(hl, n)
+        extra += above + below
+    return extra
+
+
+def _group_branch_attach_right(gate_right: float, n_groups: int) -> float:
+    """Right edge of each group's merge / single gate column (OR is GAP further right)."""
+    if n_groups < 2:
+        return gate_right
+    return gate_right - OR_GATE_W - GAP
+
+
+def _merge_lane_label_w(right_terms: list[_Term]) -> int:
+    """Label column width for inputs wired directly into merge (40pt grid)."""
+    if not right_terms:
+        return LABEL_W
+    max_len = max(len(t.text) for t in right_terms)
+    text_w = max_len * EXPORT_CHAR_PT + EXPORT_WIRE_PAD
+    return _snap_grid_up(max(LABEL_W, int(math.ceil(text_w))))
+
+
+def _child_merge_channel(right_terms: list[_Term]) -> int:
+    """Horizontal gap child output → merge input: GAP + label column + GAP (40pt grid)."""
+    label_w = _merge_lane_label_w(right_terms)
+    return _snap_grid_up(GAP + label_w + GAP)
+
+
+def _parse_path_group_terms(
+    rail: PowerRail,
+    hl: str,
+    groups: list[list[str]],
+    name_to_rail: dict[str, PowerRail],
+    valid: set[str],
+) -> list[list[_Term]]:
+    parsed: list[list[_Term]] = []
+    for gi, group in enumerate(groups):
+        terms: list[_Term] = []
+        for ii, d in enumerate(group):
+            if d not in valid or d in CONST_DEPS:
+                continue
+            inv = rail.get_hi_inv(gi, ii, d) if hl == "hi" else rail.get_lo_inv(gi, ii, d)
+            use = rail.get_hi_use(gi, ii, d) if hl == "hi" else rail.get_lo_use(gi, ii, d)
+            t = _resolve_term(d, inv, use, name_to_rail)
+            if t is not None:
+                terms.append(t)
+        if terms:
+            parsed.append(terms)
+    return parsed
+
+
+def _intra_group_gate_width(terms: list[_Term]) -> int:
+    n = len(terms)
+    if n < 2:
+        return 0
+    if n < AND_TREE_THRESHOLD:
+        return AND_GATE_W
+    mid = (n + 1) // 2
+    return AND_GATE_W + _child_merge_channel(terms[mid:]) + AND_GATE_W
+
+
+def _path_horizontal_gate_width(
+    rail: PowerRail,
+    groups: list[list[str]],
+    hl: str,
+    name_to_rail: dict[str, PowerRail],
+    valid: set[str],
+) -> int:
+    parsed = _parse_path_group_terms(rail, hl, groups, name_to_rail, valid)
+    if not parsed:
+        return 0
+    intra = max(_intra_group_gate_width(t) for t in parsed)
+    if len(parsed) < 2:
+        return intra
+    or_cols = _or_columns(len(parsed))
+    or_w = or_cols * OR_GATE_W + max(0, or_cols - 1) * GAP
+    return intra + GAP + or_w
+
+
+def _group_left_x(
+    branch_attach_right: float,
+    n_terms: int,
+    *,
+    child_merge_channel: int = 2 * GAP,
+) -> float:
+    if n_terms <= 1:
+        return branch_attach_right - LABEL_W
+    if n_terms < AND_TREE_THRESHOLD:
+        return branch_attach_right - AND_GATE_W - GAP - LABEL_W
+    merge_gx = branch_attach_right - AND_GATE_W
+    child_gx = merge_gx - AND_GATE_W - child_merge_channel
+    return child_gx - GAP - LABEL_W
 
 
 def _max_group_inputs(groups: list[list[str]]) -> int:
@@ -299,15 +423,24 @@ def _max_export_wire_extra(
     return extra
 
 
-def _block_vertical_layout(hi_count: int, lo_count: int) -> tuple[int, int, int]:
+def _block_vertical_layout(
+    hi_count: int,
+    lo_count: int,
+    *,
+    hi_group_sizes: list[int] | None = None,
+    lo_group_sizes: list[int] | None = None,
+) -> tuple[int, int, int]:
     """Return (top_extent, bottom_extent, block_height). Hi stacks up, Lo stacks down."""
     h_deb_center = CELL_H_DEB_Y + CELL_H_DEB_H // 2
     l_deb_center = CELL_L_DEB_Y + CELL_L_DEB_H // 2
+    hi_sizes = hi_group_sizes or []
+    lo_sizes = lo_group_sizes or []
 
     top_extent = 0
     if hi_count > 0:
         top_extent = (
-            h_deb_center
+            _stacked_groups_extent("hi", hi_sizes)
+            + h_deb_center
             - LABEL_H // 2
             + max(0, hi_count - 1) * LABEL_STACK_STEP
         )
@@ -315,7 +448,8 @@ def _block_vertical_layout(hi_count: int, lo_count: int) -> tuple[int, int, int]
     bottom_extent = 0
     if lo_count > 0:
         bottom_extent = (
-            CELL_GROUP_H
+            _stacked_groups_extent("lo", lo_sizes)
+            + CELL_GROUP_H
             - l_deb_center
             + LABEL_H // 2
             + max(0, lo_count - 1) * LABEL_STACK_STEP
@@ -328,13 +462,18 @@ def _block_vertical_layout(hi_count: int, lo_count: int) -> tuple[int, int, int]
     return top_extent, bottom_extent, block_h
 
 
-def _cell_y_in_block(oy: float, hi_count: int) -> float:
+def _cell_y_in_block(
+    oy: float,
+    hi_count: int,
+    hi_group_sizes: list[int] | None = None,
+) -> float:
     if hi_count <= 0:
         return oy + BLOCK_PAD
     h_deb_center = CELL_H_DEB_Y + CELL_H_DEB_H // 2
     return (
         oy
         + BLOCK_PAD
+        + _stacked_groups_extent("hi", hi_group_sizes or [])
         - h_deb_center
         + LABEL_H // 2
         + max(0, hi_count - 1) * LABEL_STACK_STEP
@@ -348,21 +487,31 @@ def _path_has_gate(groups: list[list[str]]) -> bool:
 def _estimate_block_size(
     rail: PowerRail,
     exported_hilo: set[tuple[str, str]],
+    *,
+    name_to_rail: dict[str, PowerRail],
+    valid: set[str],
 ) -> tuple[int, int]:
     hi_g = rail.get_hi_groups()
     lo_g = rail.get_lo_groups()
+    hi_sizes = [len(g) for g in hi_g]
+    lo_sizes = [len(g) for g in lo_g]
     hi_count = _max_group_inputs(hi_g)
     lo_count = _max_group_inputs(lo_g)
-    depth = max(_gate_depth(hi_g), _gate_depth(lo_g), 0)
-    gate_w = depth * (AND_GATE_W + GAP) if depth else 0
-    if depth == 2:
-        gate_w += GAP
+    gate_w = max(
+        _path_horizontal_gate_width(rail, hi_g, "hi", name_to_rail, valid),
+        _path_horizontal_gate_width(rail, lo_g, "lo", name_to_rail, valid),
+    )
     wire_extra = _max_export_wire_extra(rail, exported_hilo)
-    _, _, block_h = _block_vertical_layout(hi_count, lo_count)
+    _, _, block_h = _block_vertical_layout(
+        hi_count,
+        lo_count,
+        hi_group_sizes=hi_sizes,
+        lo_group_sizes=lo_sizes,
+    )
     w = (
         BLOCK_PAD
         + LABEL_W
-        + (GAP + gate_w if depth > 0 else 0)
+        + (GAP + gate_w if gate_w > 0 else 0)
         + GATE_CELL_GAP
         + wire_extra
         + CELL_GROUP_W
@@ -384,9 +533,16 @@ def _label_y_for_input(hl: str, anchor_y: float, index: int) -> float:
     return base + index * step
 
 
-def _add_term_label(b: _Builder, label_x: float, y: float, term: _Term) -> str:
+def _add_term_label(
+    b: _Builder,
+    label_x: float,
+    y: float,
+    term: _Term,
+    *,
+    w: float = LABEL_W,
+) -> str:
     val = _cond_html(term.text) if term.is_cond else _input_html(term.text)
-    return b.vertex(label_x, y, LABEL_W, LABEL_H, style=_STYLE_LABEL, value=val)
+    return b.vertex(label_x, y, w, LABEL_H, style=_STYLE_LABEL, value=val)
 
 
 def _place_gate(
@@ -438,9 +594,11 @@ def _wire_and_branch(
     left_terms, right_terms = terms[:mid], terms[mid:]
 
     merge_id, merge_gx = _place_gate(b, attach_right, gy, AND_GATE_W, AND_GATE_H, merge_style)
+    merge_lane_w = _merge_lane_label_w(right_terms)
+    merge_channel = _child_merge_channel(right_terms)
     child_id, child_gx = _place_gate(
         b,
-        merge_gx - AND_GATE_W - 2 * GAP,
+        merge_gx - merge_channel,
         gy,
         AND_GATE_W,
         AND_GATE_H,
@@ -454,11 +612,11 @@ def _wire_and_branch(
         b.edge(lid, child_id, stroke=STROKE_DEFAULT)
     b.edge(child_id, merge_id, stroke=STROKE_DEFAULT)
 
-    right_label_x = merge_gx - GAP - LABEL_W
+    right_label_x = merge_gx - GAP - merge_lane_w
     for ii, term in enumerate(right_terms):
         # merge 閘 input 0 保留給 child 輸出（example (2).xml）。
         ly = _label_y_for_input(hl, deb_anchor_y, ii + 1)
-        lid = _add_term_label(b, right_label_x, ly, term)
+        lid = _add_term_label(b, right_label_x, ly, term, w=merge_lane_w)
         b.edge(lid, merge_id, stroke=STROKE_DEFAULT)
 
     return merge_id, left_label_x
@@ -529,19 +687,9 @@ def _wire_path_v2(
     stroke = STROKE_HI if hl == "hi" else STROKE_LO
     gate_right = cell_x - GATE_CELL_GAP
 
-    parsed_groups: list[list[_Term]] = []
-    for gi, group in enumerate(groups):
-        terms: list[_Term] = []
-        for ii, d in enumerate(group):
-            if d not in valid or d in CONST_DEPS:
-                continue
-            inv = rail.get_hi_inv(gi, ii, d) if hl == "hi" else rail.get_lo_inv(gi, ii, d)
-            use = rail.get_hi_use(gi, ii, d) if hl == "hi" else rail.get_lo_use(gi, ii, d)
-            t = _resolve_term(d, inv, use, name_to_rail)
-            if t is not None:
-                terms.append(t)
-        if terms:
-            parsed_groups.append(terms)
+    parsed_groups: list[list[_Term]] = _parse_path_group_terms(
+        rail, hl, groups, name_to_rail, valid
+    )
 
     if not parsed_groups:
         return
@@ -552,24 +700,40 @@ def _wire_path_v2(
             f"{_internal_sig(rail.name)}_{hl}"
         )
 
-    attach_right = gate_right
-    if len(parsed_groups) >= 2:
-        attach_right -= OR_GATE_W
-        if len(parsed_groups) >= AND_TREE_THRESHOLD:
-            attach_right -= OR_GATE_W + 2 * GAP
+    multi_group = len(parsed_groups) >= 2
+    branch_attach = _group_branch_attach_right(gate_right, len(parsed_groups))
 
     branch_ids: list[str] = []
+    stack_edge: float | None = None
     for gi, terms in enumerate(parsed_groups):
-        out_id, attach_right = _wire_and_branch(
-            b, rail, hl, terms, gi, deb_anchor_y, attach_right
+        if gi == 0:
+            anchor_y = deb_anchor_y
+        elif hl == "hi":
+            assert stack_edge is not None
+            _, below = _group_vertical_extents(hl, len(terms))
+            anchor_y = stack_edge - below
+        else:
+            assert stack_edge is not None
+            above, _ = _group_vertical_extents(hl, len(terms))
+            anchor_y = stack_edge + above
+
+        attach = branch_attach if multi_group else gate_right
+        out_id, _ = _wire_and_branch(
+            b, rail, hl, terms, gi, anchor_y, attach
         )
         branch_ids.append(out_id)
+
+        above, below = _group_vertical_extents(hl, len(terms))
+        if hl == "hi":
+            stack_edge = anchor_y - above
+        else:
+            stack_edge = anchor_y + below
 
     edge_val = ""
     if has_export:
         edge_val = _export_edge_label(f"{_internal_sig(rail.name)}_{hl}")
 
-    if len(branch_ids) >= 2:
+    if multi_group:
         _wire_or_fanin(
             b,
             rail,
@@ -665,9 +829,10 @@ def _build_cell_block(
 ) -> None:
     hi_groups = rail.get_hi_groups()
     lo_groups = rail.get_lo_groups()
+    hi_sizes = [len(g) for g in hi_groups]
     hi_count = _max_group_inputs(hi_groups)
     cell_x = _snap_grid(ox + bw - BLOCK_PAD - OUT_LABEL_W - GAP - CELL_GROUP_W)
-    cell_y = _snap_grid(_cell_y_in_block(oy, hi_count))
+    cell_y = _snap_grid(_cell_y_in_block(oy, hi_count, hi_sizes))
     h_deb_y = cell_y + CELL_H_DEB_Y + CELL_H_DEB_H / 2
     l_deb_y = cell_y + CELL_L_DEB_Y + CELL_L_DEB_H / 2
 
@@ -733,7 +898,10 @@ def generate_drawio(
     n_cols = _grid_columns(n, opts) if n else 1
     n_rows = math.ceil(n / n_cols) if n else 1
 
-    sizes = [_estimate_block_size(r, exported_hilo) for r in outputs]
+    sizes = [
+        _estimate_block_size(r, exported_hilo, name_to_rail=name_to_rail, valid=valid)
+        for r in outputs
+    ]
     col_widths: list[int] = [0] * n_cols
     row_heights: list[int] = [0] * n_rows
     for i, (w, h) in enumerate(sizes):
