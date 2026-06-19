@@ -1,5 +1,5 @@
 """
-Render power-sequence timing diagrams with Schemdraw (SVG / PNG).
+Render power-sequence timing diagrams with Schemdraw (SVG / PNG / PDF).
 
 Schemdraw cannot use WaveDrom single-character edge nodes (XML issues with
 ``&`` etc.).  Extended edges ``[lane:step]-~>[lane:step]`` are built directly
@@ -33,6 +33,8 @@ from wavedrom_sim import (
     simulate,
 )
 
+_SCHEMDRAW_OUTPUT_EXTS = frozenset({".svg", ".png", ".pdf"})
+_SCHEMDRAW_MPL_EXTS = frozenset({".png", ".pdf"})
 _SCHEMDRAW_EDGE_RE = re.compile(
     r"^\[(\d+):(\d+)\]-~>\[(\d+):(\d+)\](?:\s+(.*))?$",
 )
@@ -185,7 +187,7 @@ def render_schemdraw_png_bytes(doc: dict, *, dpi: float = 96) -> bytes:
 
 
 def render_schemdraw(doc: dict, output_path: str) -> None:
-    """Write SVG or PNG from a Schemdraw-ready WaveJSON *doc*."""
+    """Write SVG, PNG, or PDF from a Schemdraw-ready WaveJSON *doc*."""
     try:
         from schemdraw import Drawing
     except ImportError as e:
@@ -194,10 +196,21 @@ def render_schemdraw(doc: dict, output_path: str) -> None:
         ) from e
 
     ext = os.path.splitext(output_path)[1].lower()
-    if ext not in (".svg", ".png"):
-        raise ValueError(f"Unsupported Schemdraw output format: {ext!r} (use .svg or .png)")
+    if ext not in _SCHEMDRAW_OUTPUT_EXTS:
+        raise ValueError(
+            f"Unsupported Schemdraw output format: {ext!r} (use .svg, .png, or .pdf)"
+        )
 
-    with Drawing(file=output_path) as _drawing:
+    if ext in _SCHEMDRAW_MPL_EXTS:
+        from schemdraw import use
+        try:
+            use("matplotlib")
+        except ValueError as e:
+            raise ImportError(
+                f"Schemdraw {ext} export requires matplotlib. Run: pip install matplotlib"
+            ) from e
+
+    with Drawing(file=output_path, show=False) as _drawing:
         _TimingDiagramDualLabels.from_json(json.dumps(doc))
 
 

@@ -2351,7 +2351,7 @@ class PreviewPanel(ctk.CTkFrame):
         ).pack(side="left", padx=(0, S_SM))
         ctk.CTkLabel(
             self._zoom_bar,
-            text="拖曳平移 · 滾輪縮放 · Shift+滾輪捲動",
+            text="拖曳平移 · 滾輪垂直 · Shift+滾輪水平 · Ctrl+滾輪縮放",
             font=FONT_HINT,
             text_color=("gray40", "gray60"),
         ).pack(side="left")
@@ -2359,6 +2359,7 @@ class PreviewPanel(ctk.CTkFrame):
                                     activate_scrollbars=True)
         self._text.pack(fill="both", expand=True, padx=S_SM, pady=(S_XS, S_SM))
         self._text.configure(state="disabled")
+        self._bind_preview_text_events()
         self._img_viewport = ctk.CTkFrame(self, fg_color="transparent")
         self._img_viewport.grid_columnconfigure(0, weight=1)
         self._img_viewport.grid_rowconfigure(0, weight=1)
@@ -2388,6 +2389,76 @@ class PreviewPanel(ctk.CTkFrame):
         self._img_viewport.bind("<Configure>", self._on_schemdraw_area_configure)
         self._last_code = ""
         self._update_view_mode()
+
+    def _preview_textbox(self) -> tk.Text:
+        return self._text._textbox
+
+    def _bind_preview_text_events(self) -> None:
+        for widget in (self._text, self._preview_textbox()):
+            widget.bind("<MouseWheel>", self._on_preview_text_wheel, add="+")
+            widget.bind("<Shift-MouseWheel>", self._on_preview_text_wheel_shift, add="+")
+            widget.bind("<Button-4>", self._on_preview_text_wheel_linux, add="+")
+            widget.bind("<Button-5>", self._on_preview_text_wheel_linux, add="+")
+
+    def _preview_font_step(self, direction: int) -> None:
+        if self.get_lang() == "Schemdraw":
+            return
+        sizes = PREVIEW_FONT_SIZES
+        try:
+            idx = sizes.index(self._font_size)
+        except ValueError:
+            idx = sizes.index(PREVIEW_FONT_SIZE_DEFAULT)
+        new_idx = max(0, min(len(sizes) - 1, idx + direction))
+        if new_idx != idx:
+            self.set_font_size(sizes[new_idx])
+
+    def _on_preview_text_wheel(self, event) -> str | None:
+        if self.get_lang() == "Schemdraw":
+            return None
+        if event.state & 0x0004:
+            if event.delta > 0:
+                self._preview_font_step(1)
+            elif event.delta < 0:
+                self._preview_font_step(-1)
+            return "break"
+        try:
+            self._preview_textbox().yview_scroll(int(-1 * (event.delta / 120)), "units")
+        except Exception:
+            pass
+        return "break"
+
+    def _on_preview_text_wheel_shift(self, event) -> str | None:
+        if self.get_lang() == "Schemdraw":
+            return None
+        try:
+            self._preview_textbox().xview_scroll(int(-1 * (event.delta / 120)), "units")
+        except Exception:
+            pass
+        return "break"
+
+    def _on_preview_text_wheel_linux(self, event) -> str | None:
+        if self.get_lang() == "Schemdraw":
+            return None
+        tb = self._preview_textbox()
+        if event.state & 0x0004:
+            if event.num == 4:
+                self._preview_font_step(1)
+            elif event.num == 5:
+                self._preview_font_step(-1)
+            return "break"
+        try:
+            if event.state & 0x0001:
+                if event.num == 4:
+                    tb.xview_scroll(-1, "units")
+                elif event.num == 5:
+                    tb.xview_scroll(1, "units")
+            elif event.num == 4:
+                tb.yview_scroll(-1, "units")
+            elif event.num == 5:
+                tb.yview_scroll(1, "units")
+        except Exception:
+            pass
+        return "break"
 
     def _schemdraw_show_canvas_hint(self, text: str) -> None:
         self._canvas_tk_image = None
@@ -2438,17 +2509,23 @@ class PreviewPanel(ctk.CTkFrame):
     def _on_schemdraw_wheel(self, event) -> str | None:
         if self.get_lang() != "Schemdraw" or self._schemdraw_source is None:
             return None
-        if event.delta > 0:
-            self._schemdraw_zoom_step(1)
-        elif event.delta < 0:
-            self._schemdraw_zoom_step(-1)
+        if event.state & 0x0004:
+            if event.delta > 0:
+                self._schemdraw_zoom_step(1)
+            elif event.delta < 0:
+                self._schemdraw_zoom_step(-1)
+            return "break"
+        try:
+            self._img_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        except Exception:
+            pass
         return "break"
 
     def _on_schemdraw_wheel_shift(self, event) -> str | None:
         if self.get_lang() != "Schemdraw" or self._schemdraw_source is None:
             return None
         try:
-            self._img_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            self._img_canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
         except Exception:
             pass
         return "break"
@@ -2456,19 +2533,24 @@ class PreviewPanel(ctk.CTkFrame):
     def _on_schemdraw_wheel_linux(self, event) -> str | None:
         if self.get_lang() != "Schemdraw" or self._schemdraw_source is None:
             return None
-        if event.state & 0x0001:
-            try:
-                if event.num == 4:
-                    self._img_canvas.yview_scroll(-1, "units")
-                elif event.num == 5:
-                    self._img_canvas.yview_scroll(1, "units")
-            except Exception:
-                pass
+        if event.state & 0x0004:
+            if event.num == 4:
+                self._schemdraw_zoom_step(1)
+            elif event.num == 5:
+                self._schemdraw_zoom_step(-1)
             return "break"
-        if event.num == 4:
-            self._schemdraw_zoom_step(1)
-        elif event.num == 5:
-            self._schemdraw_zoom_step(-1)
+        try:
+            if event.state & 0x0001:
+                if event.num == 4:
+                    self._img_canvas.xview_scroll(-1, "units")
+                elif event.num == 5:
+                    self._img_canvas.xview_scroll(1, "units")
+            elif event.num == 4:
+                self._img_canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                self._img_canvas.yview_scroll(1, "units")
+        except Exception:
+            pass
         return "break"
 
     def _on_schemdraw_area_configure(self, _event=None) -> None:
@@ -3029,7 +3111,6 @@ class WaveDromNodeSelectDialog(ctk.CTkToplevel):
         self._vars: dict[str, ctk.BooleanVar] = {}
         self._row_frames: list[ctk.CTkFrame] = []
         self._anchor_idx: int | None = None
-        self._shift_click = False
         if initial_options is not None:
             if initial_options.edge_kinds == WAVEDROM_EDGE_HI_ONLY:
                 edge_default = "hi"
@@ -3061,7 +3142,10 @@ class WaveDromNodeSelectDialog(ctk.CTkToplevel):
         ).pack(fill="x", pady=(S_XS, 0))
         ctk.CTkLabel(
             top,
-            text="Shift+Click a checkbox to select a contiguous range (Nodes order).",
+            text=(
+                "Shift+Click: range from anchor (first node until you click without Shift). "
+                "Click without Shift sets a new anchor."
+            ),
             font=FONT_HINT,
             text_color=("gray40", "gray60"),
             anchor="w",
@@ -3120,10 +3204,11 @@ class WaveDromNodeSelectDialog(ctk.CTkToplevel):
                 row,
                 text=f"[{tag}] {rail.name}",
                 variable=var,
-                command=lambda i=idx: self._on_checkbox_changed(i),
             )
             cb.pack(anchor="w")
-            cb.bind("<Button-1>", lambda e, i=idx: self._on_checkbox_button(i, e), add="+")
+            click_handler = lambda e, i=idx: self._on_checkbox_click(i, e)
+            cb._canvas.bind("<Button-1>", click_handler)
+            cb._text_label.bind("<Button-1>", click_handler)
             self._row_frames.append(row)
 
         btns = ctk.CTkFrame(self, fg_color="transparent")
@@ -3136,29 +3221,28 @@ class WaveDromNodeSelectDialog(ctk.CTkToplevel):
         self._update_count()
         search.focus_set()
 
-    def _on_checkbox_button(self, idx: int, event) -> None:
-        self._shift_click = bool(event.state & 0x0001)
-
-    def _on_checkbox_changed(self, idx: int) -> None:
+    def _on_checkbox_click(self, idx: int, event) -> None:
+        """Explorer-style anchor + Shift range (replaces CTkCheckBox internal toggle)."""
+        shift = bool(event.state & 0x0001)
         name = self._rails[idx].name
-        state = self._vars[name].get()
-        if self._shift_click and self._anchor_idx is not None:
-            lo, hi = sorted((self._anchor_idx, idx))
+        if shift:
+            anchor = self._anchor_idx if self._anchor_idx is not None else 0
+            new_state = not self._vars[name].get()
+            lo, hi = sorted((anchor, idx))
             for i in range(lo, hi + 1):
-                self._vars[self._rails[i].name].set(state)
-        elif not self._shift_click:
+                self._vars[self._rails[i].name].set(new_state)
+        else:
+            self._vars[name].set(not self._vars[name].get())
             self._anchor_idx = idx
-        self._shift_click = False
         self._update_count()
 
     def _apply_filter(self) -> None:
         ft = self.search_var.get().strip().lower()
+        for row in self._row_frames:
+            row.pack_forget()
         for rail, row in zip(self._rails, self._row_frames):
-            show = not ft or ft in rail.name.lower() or ft in rail.seq_type.lower()
-            if show:
+            if not ft or ft in rail.name.lower() or ft in rail.seq_type.lower():
                 row.pack(fill="x", pady=1)
-            else:
-                row.pack_forget()
 
     def _select_all(self) -> None:
         ft = self.search_var.get().strip().lower()
@@ -4479,6 +4563,7 @@ class PowerSeqGUI(ctk.CTk):
             filetypes=[
                 ("SVG", "*.svg"),
                 ("PNG", "*.png"),
+                ("PDF", "*.pdf"),
                 ("All", "*"),
             ],
         )
@@ -4516,19 +4601,15 @@ class PowerSeqGUI(ctk.CTk):
         if not cfg.rails:
             self._status_msg("No nodes. Add rails first.", level="warn")
             return
-        existing = getattr(self, "_timing_export_dlg", None)
-        if existing is not None and existing.winfo_exists():
-            existing.lift()
-            existing.focus_force()
+        opts = self._schemdraw_preview_options(cfg)
+        if not opts.include_rails:
+            messagebox.showwarning(
+                "Schemdraw Export",
+                "No nodes selected. Open Preview → Schemdraw and press Nodes… to choose lanes.",
+            )
+            self._status_msg("Schemdraw export cancelled: no nodes selected", level="warn")
             return
-        dlg = WaveDromNodeSelectDialog(
-            self, cfg.rails, self._run_schemdraw_export,
-            title="Export Schemdraw — Select Nodes",
-            select_hint="Select nodes to include in the Schemdraw diagram.",
-        )
-        self._timing_export_dlg = dlg
-        self.wait_window(dlg)
-        self._timing_export_dlg = None
+        self._run_schemdraw_export(opts)
 
     def _export_drawio(self):
         cfg = self._collect_config()

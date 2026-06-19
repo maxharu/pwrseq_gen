@@ -105,6 +105,25 @@ def test_dual_labels_add_right_side_signal_names():
 
 
 @pytest.mark.skipif(not _TEMPLATE.is_file(), reason="template json missing")
+def test_render_schemdraw_pdf(tmp_path):
+    pytest.importorskip("schemdraw")
+    pytest.importorskip("matplotlib")
+
+    demo = Path(__file__).resolve().parents[1] / "templates" / "demo_json.json"
+    if not demo.is_file():
+        pytest.skip("demo_json.json missing")
+    from config_models import PowerSeqConfig
+
+    cfg = PowerSeqConfig.from_dict(json.loads(demo.read_text(encoding="utf-8")))
+    doc = generate_schemdraw_doc(cfg)
+    out = tmp_path / "timing.pdf"
+    render_schemdraw(doc, str(out))
+    assert out.is_file()
+    assert out.stat().st_size > 500
+    assert out.read_bytes()[:4] == b"%PDF"
+
+
+@pytest.mark.skipif(not _TEMPLATE.is_file(), reason="template json missing")
 def test_render_schemdraw_png_bytes(tmp_path):
     schemdraw = pytest.importorskip("schemdraw")
     del schemdraw
