@@ -1,5 +1,12 @@
 """
-Power Sequence Config GUI v1.4
+Power Sequence Config GUI v1.5
+
+v1.5（相對 v1.4）：
+- Schemdraw：時序圖匯出／Preview（extended edges、雙行 lane 標籤）
+- Draw.io：多 group 垂直堆疊（共用 gate 欄 X；OR 與 branch 間距 40pt）
+- Draw.io：二級 AND tree 的 child↔merge 通道依 merge 側訊號名稱長度（40pt 格線）
+- 節點列表 Explorer 式多選（anchor + Shift 範圍選取）
+- 模板／匯出資產更新（Schemdraw PNG、WaveDrom 渲染圖）
 
 v1.4（相對 v1.3）：
 - Excel 工作簿 I/O（.xlsx／.xlsm）：Open／Save、Nodes／Conditions／Lists、xlsm Sync 按鈕
@@ -96,7 +103,7 @@ S_XS, S_SM, S_MD, S_LG = 2, 4, 8, 16
 
 APP_NAME = "Power Sequence Config"
 APP_AUTHOR = "Haru"
-APP_VERSION = "v1.4"
+APP_VERSION = "v1.5"
 APP_COPYRIGHT_YEAR = 2026
 
 # About dialog only — change here without affecting the rest of the GUI
