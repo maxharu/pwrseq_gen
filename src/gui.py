@@ -43,7 +43,7 @@ import threading
 import tkinter as tk
 from io import BytesIO
 from tkinter import filedialog, messagebox
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
@@ -2299,6 +2299,8 @@ class PreviewPanel(ctk.CTkFrame):
         on_font_size_change: Optional[Callable[[int], None]] = None,
         on_schemdraw_refresh: Optional[Callable[[], None]] = None,
         on_schemdraw_select_nodes: Optional[Callable[[], None]] = None,
+        on_wavedrom_globals_changed: Optional[Callable[[], None]] = None,
+        tooltip_fn: Optional[Callable[[Any, str], None]] = None,
         initial_font_size: Optional[int] = None,
         **kwargs,
     ):
@@ -2307,6 +2309,8 @@ class PreviewPanel(ctk.CTkFrame):
         self.on_font_size_change = on_font_size_change
         self.on_schemdraw_refresh = on_schemdraw_refresh
         self.on_schemdraw_select_nodes = on_schemdraw_select_nodes
+        self.on_wavedrom_globals_changed = on_wavedrom_globals_changed
+        self.tooltip_fn = tooltip_fn
         if initial_font_size in PREVIEW_FONT_SIZES:
             self._font_size = initial_font_size
         else:
@@ -2331,6 +2335,25 @@ class PreviewPanel(ctk.CTkFrame):
             command=self._on_lang_selected,
         )
         self._lang_menu.pack(side="left", padx=(S_SM, 0))
+        self._timing_opts = ctk.CTkFrame(header, fg_color="transparent")
+        ctk.CTkLabel(self._timing_opts, text="Steps:", font=FONT_HINT).pack(side="left", padx=(0, S_XS))
+        self._wd_steps_var = tk.StringVar(value="50")
+        self._wd_steps_entry = ctk.CTkEntry(
+            self._timing_opts, textvariable=self._wd_steps_var, width=56, height=28,
+        )
+        self._wd_steps_entry.pack(side="left", padx=(0, S_SM))
+        ctk.CTkLabel(self._timing_opts, text="hscale:", font=FONT_HINT).pack(side="left", padx=(0, S_XS))
+        self._wd_hscale_var = tk.StringVar(value="1")
+        self._wd_hscale_entry = ctk.CTkEntry(
+            self._timing_opts, textvariable=self._wd_hscale_var, width=40, height=28,
+        )
+        self._wd_hscale_entry.pack(side="left")
+        for w in (self._wd_steps_entry, self._wd_hscale_entry):
+            w.bind("<FocusOut>", self._on_timing_globals_changed, add="+")
+            w.bind("<Return>", self._on_timing_globals_changed, add="+")
+        if self.tooltip_fn:
+            self.tooltip_fn(self._wd_steps_entry, "Timing simulation length (saved with project)")
+            self.tooltip_fn(self._wd_hscale_entry, "Timing diagram horizontal scale per step (default 1)")
         self._refresh_btn = ctk.CTkButton(
             header, text="Refresh", width=72, command=self._on_schemdraw_refresh,
         )
@@ -2697,6 +2720,27 @@ class PreviewPanel(ctk.CTkFrame):
         if self.on_schemdraw_refresh:
             self.on_schemdraw_refresh()
 
+    def _on_timing_globals_changed(self, _event=None) -> None:
+        steps, hscale = self.get_wavedrom_globals()
+        self.set_wavedrom_globals(steps, hscale)
+        if self.on_wavedrom_globals_changed:
+            self.on_wavedrom_globals_changed()
+
+    def get_wavedrom_globals(self) -> tuple[int, int]:
+        try:
+            steps = max(10, int(self._wd_steps_var.get().strip()))
+        except (ValueError, tk.TclError):
+            steps = 50
+        try:
+            hscale = _norm_hscale(int(self._wd_hscale_var.get().strip()))
+        except (ValueError, tk.TclError):
+            hscale = 1
+        return steps, hscale
+
+    def set_wavedrom_globals(self, steps: int, hscale: int) -> None:
+        self._wd_steps_var.set(str(steps))
+        self._wd_hscale_var.set(str(hscale))
+
     def _update_view_mode(self):
         is_sd = self.get_lang() == "Schemdraw"
         if is_sd:
@@ -2704,6 +2748,7 @@ class PreviewPanel(ctk.CTkFrame):
             self._zoom_bar.pack(fill="x", padx=S_SM, pady=(0, S_XS))
             self._img_viewport.pack(fill="both", expand=True, padx=S_SM, pady=(0, S_SM))
             self._size_frame.pack_forget()
+            self._timing_opts.pack(side="left", padx=(S_SM, 0))
             self._nodes_btn.pack(side="left", padx=(S_SM, 0))
             self._refresh_btn.pack(side="left", padx=(S_XS, 0))
         else:
@@ -2711,6 +2756,7 @@ class PreviewPanel(ctk.CTkFrame):
             self._zoom_bar.pack_forget()
             self._refresh_btn.pack_forget()
             self._nodes_btn.pack_forget()
+            self._timing_opts.pack_forget()
             self._size_frame.pack(side="left", padx=(S_SM, 0))
             self._text.pack(fill="both", expand=True, padx=S_SM, pady=(S_XS, S_SM))
 
@@ -3433,23 +3479,6 @@ class PowerSeqGUI(ctk.CTk):
         cb_pv.pack(side="left", padx=(0, S_SM))
         self._tt(cb_pv, "Toggle right-side preview (Verilog, C, or Schemdraw timing)")
 
-        self._sep(toolbar)
-        wd_opts = ctk.CTkFrame(toolbar, fg_color="transparent")
-        wd_opts.pack(side="left", padx=(0, S_SM))
-        ctk.CTkLabel(wd_opts, text="Steps:", font=FONT_BODY).pack(side="left", padx=(0, S_XS))
-        self._wd_steps_var = tk.StringVar(value="50")
-        wd_steps = ctk.CTkEntry(wd_opts, textvariable=self._wd_steps_var, width=56, height=28)
-        wd_steps.pack(side="left", padx=(0, S_SM))
-        self._tt(wd_steps, "Timing simulation length (saved with project)")
-        ctk.CTkLabel(wd_opts, text="hscale:", font=FONT_BODY).pack(side="left", padx=(0, S_XS))
-        self._wd_hscale_var = tk.StringVar(value="1")
-        wd_hscale = ctk.CTkEntry(wd_opts, textvariable=self._wd_hscale_var, width=40, height=28)
-        wd_hscale.pack(side="left")
-        self._tt(wd_hscale, "Timing diagram horizontal scale per step (default 1)")
-        for w in (wd_steps, wd_hscale):
-            w.bind("<FocusOut>", self._on_wavedrom_globals_changed, add="+")
-            w.bind("<Return>", self._on_wavedrom_globals_changed, add="+")
-
         # right side: pin / theme / help / validation badge / main actions
         self._pin_btn = ctk.CTkButton(toolbar, text="Pin", width=44, command=self._toggle_topmost)
         self._pin_btn.pack(side="right")
@@ -3591,6 +3620,8 @@ class PowerSeqGUI(ctk.CTk):
             on_font_size_change=self._gui_settings.set_preview_font_size,
             on_schemdraw_refresh=self._schedule_schemdraw_preview,
             on_schemdraw_select_nodes=self._open_schemdraw_preview_nodes,
+            on_wavedrom_globals_changed=self._on_wavedrom_globals_changed,
+            tooltip_fn=self._tt,
             initial_font_size=self._gui_settings.get_preview_font_size(),
         )
         self.preview.pack(fill="both", expand=True)
@@ -3756,27 +3787,17 @@ class PowerSeqGUI(ctk.CTk):
         self._schedule_preview()
 
     def _wavedrom_globals_from_toolbar(self) -> tuple[int, int]:
-        try:
-            steps = max(10, int(self._wd_steps_var.get().strip()))
-        except (ValueError, tk.TclError):
-            steps = 50
-        try:
-            hscale = _norm_hscale(int(self._wd_hscale_var.get().strip()))
-        except (ValueError, tk.TclError):
-            hscale = 1
-        return steps, hscale
+        return self.preview.get_wavedrom_globals()
 
     def _sync_wavedrom_toolbar_from_config(self) -> None:
         wd = self.config_obj.wavedrom_scenario or {}
         steps = int(wd.get("steps", 50))
         hscale = int(wd.get("hscale", wd.get("cond_step_delay", 1)))
-        self._wd_steps_var.set(str(steps))
-        self._wd_hscale_var.set(str(hscale))
+        self.preview.set_wavedrom_globals(steps, hscale)
 
     def _on_wavedrom_globals_changed(self, _event=None):
-        steps, hscale = self._wavedrom_globals_from_toolbar()
-        self._wd_steps_var.set(str(steps))
-        self._wd_hscale_var.set(str(hscale))
+        steps, hscale = self.preview.get_wavedrom_globals()
+        self.preview.set_wavedrom_globals(steps, hscale)
         self._mark_dirty()
 
     def _wavedrom_scenario_for_export(self, cfg: PowerSeqConfig) -> WaveDromScenario:
@@ -3823,7 +3844,7 @@ class PowerSeqGUI(ctk.CTk):
             if cf._expanded:
                 prev_expanded.add(cf.rail.name)
 
-        # validation / preview 會 _collect_config()，須先讓 toolbar 與 config 一致
+        # validation / preview 會 _collect_config()，須先讓 preview timing 與 config 一致
         self._sync_wavedrom_toolbar_from_config()
 
         for w in self.editor_scroll.winfo_children():

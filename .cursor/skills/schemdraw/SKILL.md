@@ -78,6 +78,7 @@ Language selector: **Schemdraw** in `PreviewPanel`.
 
 | Control | Behavior |
 |---------|----------|
+| **Steps / hscale** | Simulation length and horizontal scale; saved in `wavedrom_scenario`; shown only in Schemdraw mode |
 | **Nodes…** | `TimingNodeSelectDialog` → `_schemdraw_preview_opts` (`TimingExportOptions`); Apply does not close |
 | **Refresh** | Debounced render (600 ms); uses preview options |
 | **Zoom −/+ / Fit** | Scale displayed PNG; Fit = fit viewport width |
