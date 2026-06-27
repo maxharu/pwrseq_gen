@@ -28,7 +28,7 @@ from c_generator import generate_c  # noqa: E402
 from drawio_export import generate_drawio  # noqa: E402
 from schemdraw_export import export_schemdraw  # noqa: E402
 from verilog_generator import generate_verilog  # noqa: E402
-from wavedrom_sim import default_scenario_for_config  # noqa: E402
+from timing_sim import default_scenario_for_config  # noqa: E402
 
 # Theme (matches deck)
 BG = "#0F172A"

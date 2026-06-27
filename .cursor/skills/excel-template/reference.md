@@ -5,7 +5,7 @@
 | Path | Purpose |
 |------|---------|
 | `scripts/generate_excel_template.py` | Main builder: sheets, validations, sample rows, orchestration |
-| `src/excel_import.py` | Load `PowerSeqConfig` / `WaveDromScenario`; shared constants & signal parsing |
+| `src/excel_import.py` | Load `PowerSeqConfig` / `TimingScenario`; shared constants & signal parsing |
 | `src/excel_export.py` | Export config back to workbook; preserves VBA via golden xlsm or zip inject |
 | `src/excel_template_layout.py` | Shared Nodes sheet header rows 1–3 |
 | `src/group_logic.py` | AND/OR/XOR labels ↔ internal ops; legacy group_inv detection |
@@ -142,11 +142,11 @@ Per row: signals in cols E+ → one group; col C → `*_intra_op`; col D Y → `
 
 Multiple rows same output + cond_type → OR groups.
 
-### Input Conditions → WaveDrom
+### Input Conditions → Timing
 
 Per input: Hi/Lo rows → `InputWaveSpec` fields on rail (`hi_mode`, `lo_mode`, `hi_wave`, groups, etc.).
 
-Config `wavedrom_steps` / `wavedrom_hscale` → `PowerSeqConfig.wavedrom_scenario` stub on full import.
+Config `timing_steps` / `timing_hscale` → `PowerSeqConfig.timing_scenario` stub on full import.
 
 ### Signal cell parsing (`parse_signal_cell`)
 

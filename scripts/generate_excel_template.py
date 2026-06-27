@@ -8,7 +8,7 @@
   Config       — project defaults
   Nodes        — main sheet: all nodes (row order = system order)
   Output Conditions — one row = one AND group
-  Input Conditions  — WaveDrom Input Hi/Lo (Custom wave or Signal cond.)
+  Input Conditions  — Timing Input Hi/Lo (Custom wave or Signal cond.)
   Lists        — dropdown sources (hidden)
 """
 from __future__ import annotations
@@ -75,8 +75,8 @@ CONFIG_ROWS = [
     ("default_init", "default_init", "When init blank (Output INIT / Input DEB INIT)", "0"),
     ("default_force_val", "default_force_val", "When force_val blank", "0"),
     ("default_pulse", "default_pulse", "When pulse field blank", "Pulse_1us"),
-    ("wavedrom_steps", "wavedrom_steps", "WaveDrom simulation steps", "50"),
-    ("wavedrom_hscale", "wavedrom_hscale", "WaveDrom hscale (pixels per step)", "1"),
+    ("timing_steps", "timing_steps", "Timing simulation steps", "50"),
+    ("timing_hscale", "timing_hscale", "Timing hscale (pixels per step)", "1"),
 ]
 
 # name, type, cycle_hi, cycle_lo, cycle_force, init, force_val, pulse_hi, pulse_lo, pulse_timing
@@ -112,7 +112,7 @@ INSTRUCTIONS = [
     "  2. Nodes: one row per node (top-to-bottom = system order)",
     "  3. Click Sync Conditions (top-right on Nodes sheet)",
     "  4. Output Conditions: each Output gets 1 Hi + 1 Lo + 1 Force row (add rows for OR)",
-    "  5. Input Conditions: each Input gets 1 Hi + 1 Lo row (WaveDrom only, not Verilog)",
+    "  5. Input Conditions: each Input gets 1 Hi + 1 Lo row (Timing only, not Verilog)",
     "",
     "Nodes (10 columns)",
     "  name / type",
@@ -130,13 +130,13 @@ INSTRUCTIONS = [
     "  Output may use NAME|Hi Cond / |Lo Cond / |Force Cond (GUI use dropdown)",
     "  NAME only = Node (self)",
     "",
-    "Input Conditions (WaveDrom only)",
+    "Input Conditions (Timing only)",
     "  input_name | Side (Hi/Lo) | Mode | Wave | Operation (AND/OR/XOR) | Group Inv | Signal…",
     "  Mode: Low (0) / High (1) / Custom wave / Signal cond.",
     "  Custom wave: fill Wave with 0/1/. or 0{29}1 (e.g. high at step 30)",
     "  Signal cond.: same syntax as Output (Operation per row, OR across rows); leave Wave empty",
     "  Hi default: Signal cond.; Lo default: Low (0)",
-    "  Config wavedrom_steps / wavedrom_hscale used when exporting WaveDrom",
+    "  Config timing_steps / timing_hscale used when exporting timing diagram",
     "",
     "Macros & button",
     "  Enable Content when opening the workbook",

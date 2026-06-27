@@ -55,7 +55,7 @@ def run_build(*, onefile: bool) -> int:
         "--hidden-import",
         "app_expiry",
         "--hidden-import",
-        "wavedrom_scenario_io",
+        "timing_scenario_io",
         MAIN_SCRIPT,
     ]
 

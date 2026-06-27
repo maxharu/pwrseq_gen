@@ -45,10 +45,10 @@ Sheets are detected by **row-1 column-A key** (same in Python `_find_sheet` and 
 | Sheet tab | A1 key | Role |
 |-----------|--------|------|
 | Instructions | — | User instructions |
-| Config | `key` | `module_name`, `pulses`, defaults, `wavedrom_steps`, `wavedrom_hscale` |
+| Config | `key` | `module_name`, `pulses`, defaults, `timing_steps`, `timing_hscale` |
 | **Nodes** | `name` | Main: one row per node; row order = system order |
 | **Output Conditions** | `output_name` | Long table: one row = one AND/OR/XOR group (Verilog + Draw.io) |
-| **Input Conditions** | `input_name` | WaveDrom Input Hi/Lo only (not Verilog) |
+| **Input Conditions** | `input_name` | Timing Input Hi/Lo only (not Verilog) |
 | Lists | — | Hidden; `SignalList`, `PulseList` defined names |
 | Field Reference | — | key / label / hint reference |
 
@@ -85,20 +85,20 @@ Rules:
 
 Maps to `PowerRail.depends_on_*_groups`, `*_intra_op`, `*_group_inv` via `load_powerseq_from_excel`.
 
-### Input Conditions (WaveDrom only)
+### Input Conditions (Timing only)
 
 | Col | Field | Dropdown |
 |-----|-------|----------|
 | A | `input_name` | — (merged per Input block) |
 | B | `cond_side` | Hi, Lo |
 | C | `mode` | Low (0), High (1), Custom wave, Signal cond. |
-| D | `wave` | Custom wave pattern (see wavedrom skill) |
+| D | `wave` | Custom wave pattern (see schemdraw skill) |
 | E | `operation` | AND, OR, XOR |
 | F | `group_inv` | Y, N |
 | G+ | `signal*` | `=SignalList` (Signal cond. mode) |
 
 - Hi default after sync: Signal cond.; Lo default: Low (0)
-- `load_wavedrom_scenario_from_excel()` reads this sheet + Config `wavedrom_*`
+- `load_timing_scenario_from_excel()` reads this sheet + Config `timing_*`
 - Import embeds specs on input rails via `apply_input_wave_dict`
 
 ### Lists / SignalList
@@ -132,7 +132,7 @@ VBA sources: `templates/vba/PwrSeqSync.bas`, `ThisWorkbook.cls`, `SheetNodes.cls
 | Module | Entry | Role |
 |--------|-------|------|
 | `excel_import.py` | `load_powerseq_from_excel(path)` | Full `PowerSeqConfig` |
-| `excel_import.py` | `load_wavedrom_scenario_from_excel(path)` | `WaveDromScenario` from Input Conditions |
+| `excel_import.py` | `load_timing_scenario_from_excel(path)` | `TimingScenario` from Input Conditions |
 | `excel_import.py` | `parse_signal_cell`, `build_signal_dropdown_entries` | Shared signal parsing / Lists |
 | `excel_export.py` | `export_powerseq_to_excel(config, path)` | Write config into template workbook |
 | `group_logic.py` | `parse_intra_op_cell`, `intra_op_label` | AND/OR/XOR ↔ labels |
@@ -204,4 +204,4 @@ xl.Quit()
 
 - Data model: `PowerRail` / `PowerSeqConfig` in `src/config_models.py`
 - GUI use labels: `USE_LABELS` in `src/gui.py` (`Node`, `Hi Cond`, `Lo Cond`, `Force Cond`)
-- WaveDrom scenario from Excel: `.cursor/skills/wavedrom/SKILL.md`
+- Timing scenario from Excel: `.cursor/skills/schemdraw/SKILL.md`

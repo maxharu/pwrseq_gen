@@ -15,7 +15,7 @@ from excel_import import (
     load_powerseq_from_excel,
     parse_signal_cell,
 )
-from wavedrom_sim import DEP_HIGH, DEP_LOW
+from timing_sim import DEP_HIGH, DEP_LOW
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE_XLSX = os.path.join(ROOT, "templates", "powerseq_nodes_template.xlsx")
@@ -84,8 +84,8 @@ class TestLastUsedRow:
 
 
 @pytest.mark.skipif(not HAS_TEMPLATE, reason="excel template missing")
-class TestLoadWavedromConfigGlobals:
-    def test_wavedrom_steps_hscale_from_config_sheet(self):
+class TestLoadTimingConfigGlobals:
+    def test_timing_steps_hscale_from_config_sheet(self):
         from excel_export import export_powerseq_to_excel
 
         cfg = PowerSeqConfig(
@@ -100,20 +100,20 @@ class TestLoadWavedromConfigGlobals:
                     depends_on_hi=["__HIGH__"],
                 ),
             ],
-            wavedrom_scenario={"steps": 120, "hscale": 3},
+            timing_scenario={"steps": 120, "hscale": 3},
         )
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
             path = f.name
         try:
             export_powerseq_to_excel(cfg, path)
             loaded = load_powerseq_from_excel(path)
-            assert loaded.wavedrom_scenario is not None
-            assert loaded.wavedrom_scenario["steps"] == 120
-            assert loaded.wavedrom_scenario["hscale"] == 3
+            assert loaded.timing_scenario is not None
+            assert loaded.timing_scenario["steps"] == 120
+            assert loaded.timing_scenario["hscale"] == 3
         finally:
             os.unlink(path)
 
-    def test_wavedrom_steps_without_input_conditions(self):
+    def test_timing_steps_without_input_conditions(self):
         from openpyxl import load_workbook
 
         from excel_export import export_powerseq_to_excel
@@ -130,7 +130,7 @@ class TestLoadWavedromConfigGlobals:
                     depends_on_hi=["__HIGH__"],
                 ),
             ],
-            wavedrom_scenario={"steps": 88},
+            timing_scenario={"steps": 88},
         )
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
             path = f.name
@@ -142,7 +142,7 @@ class TestLoadWavedromConfigGlobals:
             wb.save(path)
             wb.close()
             loaded = load_powerseq_from_excel(path)
-            assert loaded.wavedrom_scenario is not None
-            assert loaded.wavedrom_scenario["steps"] == 88
+            assert loaded.timing_scenario is not None
+            assert loaded.timing_scenario["steps"] == 88
         finally:
             os.unlink(path)

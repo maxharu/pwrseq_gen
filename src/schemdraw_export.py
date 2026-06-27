@@ -13,21 +13,21 @@ import os
 import re
 
 from config_models import PowerSeqConfig
-from wavedrom_export import (
+from timing_export import (
     ConditionEdgePending,
-    WaveDromExportOptions,
-    WAVEDROM_AUTHOR,
-    WAVEDROM_EDGE_BOTH,
-    WAVEDROM_EDGE_HI_ONLY,
-    WAVEDROM_EDGE_LO_ONLY,
+    TimingExportOptions,
+    TIMING_AUTHOR,
+    TIMING_EDGE_BOTH,
+    TIMING_EDGE_HI_ONLY,
+    TIMING_EDGE_LO_ONLY,
     _build_export_lanes,
     _collect_condition_edge_pending,
     _head_every,
     _head_title_from_filename,
-    validate_wavedrom_doc,
+    validate_timing_doc,
 )
-from wavedrom_sim import (
-    WaveDromScenario,
+from timing_sim import (
+    TimingScenario,
     _norm_hscale,
     default_scenario_for_config,
     simulate,
@@ -108,7 +108,7 @@ def build_schemdraw_extended_edges(
 
 def generate_schemdraw_doc(
     config: PowerSeqConfig,
-    scenario: WaveDromScenario | None = None,
+    scenario: TimingScenario | None = None,
     *,
     output_filename: str | None = None,
     include_rails: frozenset[str] | None = None,
@@ -126,11 +126,11 @@ def generate_schemdraw_doc(
 
     head_title = _head_title_from_filename(output_filename, config.module_name)
 
-    kinds = edge_kinds if edge_kinds is not None else WAVEDROM_EDGE_BOTH
+    kinds = edge_kinds if edge_kinds is not None else TIMING_EDGE_BOTH
     edge_note = ""
-    if kinds == WAVEDROM_EDGE_HI_ONLY:
+    if kinds == TIMING_EDGE_HI_ONLY:
         edge_note = ", arrows=Hi"
-    elif kinds == WAVEDROM_EDGE_LO_ONLY:
+    elif kinds == TIMING_EDGE_LO_ONLY:
         edge_note = ", arrows=Lo"
     lane_note = ""
     if include_rails is not None:
@@ -145,7 +145,7 @@ def generate_schemdraw_doc(
             "text": (
                 f"{head_title} ({steps} steps, hscale="
                 f"{_norm_hscale(scenario.hscale)}, i*=in o*=out{lane_note}{edge_note})\n"
-                f"Author: {WAVEDROM_AUTHOR}"
+                f"Author: {TIMING_AUTHOR}"
             ),
             "tick": 0,
             "every": _head_every(steps),
@@ -165,7 +165,7 @@ def generate_schemdraw_doc(
     if edges:
         doc["edge"] = edges
 
-    errs = validate_wavedrom_doc(doc, steps)
+    errs = validate_timing_doc(doc, steps)
     if errs:
         doc["foot"]["text"] += " Validation: " + "; ".join(errs[:3])
     return doc
@@ -216,7 +216,7 @@ def render_schemdraw(doc: dict, output_path: str) -> None:
 
 def export_schemdraw(
     config: PowerSeqConfig,
-    scenario: WaveDromScenario | None = None,
+    scenario: TimingScenario | None = None,
     *,
     output_filename: str,
     include_rails: frozenset[str] | None = None,
@@ -235,8 +235,8 @@ def export_schemdraw(
 
 def export_schemdraw_from_options(
     config: PowerSeqConfig,
-    scenario: WaveDromScenario | None,
-    options: WaveDromExportOptions,
+    scenario: TimingScenario | None,
+    options: TimingExportOptions,
     output_filename: str,
 ) -> None:
     export_schemdraw(

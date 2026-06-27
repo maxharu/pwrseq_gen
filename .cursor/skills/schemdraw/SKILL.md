@@ -30,15 +30,15 @@ Same simulation + lane building as the shared timing export helpers; **extended 
 | File | Role |
 |------|------|
 | `src/schemdraw_export.py` | Doc generation, render, export API |
-| `src/wavedrom_export.py` | Shared: `_build_export_lanes`, `_collect_condition_edge_pending`, `TimingExportOptions` |
-| `src/wavedrom_sim.py` | `simulate()`, scenario, step indices for edges |
+| `src/timing_export.py` | Shared: `_build_export_lanes`, `_collect_condition_edge_pending`, `TimingExportOptions` |
+| `src/timing_sim.py` | `simulate()`, scenario, step indices for edges |
 | `src/gui.py` | `PreviewPanel` (Schemdraw mode), `TimingNodeSelectDialog`, export menu |
 | `tests/test_schemdraw_export.py` | Extended edges, dual labels, PDF/PNG render |
 
 ## Pipeline
 
 ```
-PowerSeqConfig + WaveDromScenario
+PowerSeqConfig + TimingScenario
   → simulate()
   → _build_export_lanes(include_rails?)
   → _collect_condition_edge_pending(edge_kinds?)
@@ -78,7 +78,7 @@ Language selector: **Schemdraw** in `PreviewPanel`.
 
 | Control | Behavior |
 |---------|----------|
-| **Steps / hscale** | Simulation length and horizontal scale; saved in `wavedrom_scenario`; shown only in Schemdraw mode |
+| **Steps / hscale** | Simulation length and horizontal scale; saved in `timing_scenario`; shown only in Schemdraw mode |
 | **Nodes…** | `TimingNodeSelectDialog` → `_schemdraw_preview_opts` (`TimingExportOptions`); Apply does not close |
 | **Refresh** | Debounced render (600 ms); uses preview options |
 | **Zoom −/+ / Fit** | Scale displayed PNG; Fit = fit viewport width |
@@ -89,7 +89,7 @@ Language selector: **Schemdraw** in `PreviewPanel`.
 
 Canvas: `tk.Canvas` + scrollbars (not `CTkScrollableFrame`). Background via `_resolve_canvas_bg()`.
 
-Initial preview opts: all exportable rails, `WAVEDROM_EDGE_BOTH`.
+Initial preview opts: all exportable rails, `TIMING_EDGE_BOTH`.
 
 ## GUI: Export
 
@@ -123,7 +123,7 @@ Simulation always uses **full** config; only diagram lanes and arrow kinds are f
 
 ## Agent workflow
 
-1. Changing waves/lanes/edges → edit `wavedrom_export` shared helpers or `schemdraw_export.build_schemdraw_extended_edges`; run `tests/test_schemdraw_export.py`.
+1. Changing waves/lanes/edges → edit `timing_export` shared helpers or `schemdraw_export.build_schemdraw_extended_edges`; run `tests/test_schemdraw_export.py`.
 2. Changing render/labels → `_TimingDiagramDualLabels` in `schemdraw_export.py`.
 3. Changing Preview UX → `PreviewPanel` + `PowerSeqGUI._start_schemdraw_preview` in `gui.py`.
 4. Backward arrow bug on large design → verify extended edges (not node letters); run `test_generate_schemdraw_doc_edges_never_go_backward_in_time`.

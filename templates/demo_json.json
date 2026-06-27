@@ -1258,7 +1258,7 @@
       ]
     }
   ],
-  "wavedrom_scenario": {
+  "timing_scenario": {
     "steps": 50
   }
 }

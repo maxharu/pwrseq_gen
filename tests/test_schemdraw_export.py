@@ -15,7 +15,7 @@ from schemdraw_export import (
     render_schemdraw_png_bytes,
     schemdraw_edges_forward_in_time,
 )
-from wavedrom_export import WAVEDROM_EDGE_HI_ONLY, WAVEDROM_EDGE_LO_ONLY
+from timing_export import TIMING_EDGE_HI_ONLY, TIMING_EDGE_LO_ONLY
 
 _DEMO_JSON = Path(__file__).resolve().parents[1] / "templates" / "demo_json.json"
 
@@ -118,8 +118,8 @@ def test_generate_schemdraw_edge_kinds():
     from config_models import PowerSeqConfig
 
     cfg = PowerSeqConfig.from_dict(json.loads(_DEMO_JSON.read_text(encoding="utf-8")))
-    doc_hi = generate_schemdraw_doc(cfg, edge_kinds=WAVEDROM_EDGE_HI_ONLY)
-    doc_lo = generate_schemdraw_doc(cfg, edge_kinds=WAVEDROM_EDGE_LO_ONLY)
+    doc_hi = generate_schemdraw_doc(cfg, edge_kinds=TIMING_EDGE_HI_ONLY)
+    doc_lo = generate_schemdraw_doc(cfg, edge_kinds=TIMING_EDGE_LO_ONLY)
     doc_both = generate_schemdraw_doc(cfg)
     assert len(doc_hi.get("edge", [])) <= len(doc_both.get("edge", []))
     assert len(doc_lo.get("edge", [])) <= len(doc_both.get("edge", []))

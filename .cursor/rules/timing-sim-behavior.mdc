@@ -1,17 +1,17 @@
 ---
-description: Wavedrom 時序模擬器的行為語意（轉態時序、self 依賴、與 C/Verilog 的對齊）
-globs: src/wavedrom_sim.py,src/wavedrom_export.py,src/c_generator.py,src/verilog_generator.py,tests/test_wavedrom_sim.py
+description: 時序模擬器的行為語意（轉態時序、self 依賴、與 C/Verilog 的對齊）
+globs: src/timing_sim.py,src/timing_export.py,src/c_generator.py,src/verilog_generator.py,tests/test_timing_sim.py
 alwaysApply: false
 ---
 
-# Wavedrom 模擬器行為
+# 時序模擬器行為
 
-Wavedrom 是**邏輯預覽（Logic sim, not RTL）**，呈現訊號之間的邏輯因果與串接順序，不模擬 RTL 的 cycle 級時序細節。修改 `wavedrom_sim.py` 時必須維持以下語意，並與 `c_generator.py` / `verilog_generator.py` 對齊。
+時序模擬是**邏輯預覽（Logic sim, not RTL）**，呈現訊號之間的邏輯因果與串接順序，不模擬 RTL 的 cycle 級時序細節。修改 `timing_sim.py` 時必須維持以下語意，並與 `c_generator.py` / `verilog_generator.py` 對齊。
 
 ## 1. 轉態時序：rise/fall 對稱，皆為「條件成立後下一 T」
 
 - L→H（rise）與 H→L（fall）**都**在該方向條件成立後的**下一個 T** 轉態。
-- **不模擬 `cycle_hi` / `cycle_lo`**。這兩個是 RTL（PSEQCELL / pwrcell）的延遲參數，只用在 Verilog/C 產生，不進 Wavedrom。
+- **不模擬 `cycle_hi` / `cycle_lo`**。這兩個是 RTL（PSEQCELL / pwrcell）的延遲參數，只用在 Verilog/C 產生，不進時序模擬。
 - 實作位置：`_OutputFsm.apply_step`（Pass A，套用上一拍 arm 的邊）+ `_OutputFsm.commit`（Pass B，評估條件後 `_PermitGpioFsm.rearm` 下一拍套用 arm），不可重新引入 cycle 計數。
 
 ```python
@@ -40,4 +40,4 @@ fsm.commit(hi_c, lo_c, force) # Pass B：評估條件、arm 下一拍
 
 ## 驗證
 
-`tests/test_wavedrom_sim.py`：`test_output_lo_falls_next_step_ignoring_cycle_lo`（fall == lo_step+1，即使 cycle_lo=4）、`test_output_lo_self_dep_falls_next_step`（dst_fall == src_fall+1）、`test_cycle_hi_ignored_on_output`（rise 不模擬 cycle_hi）。`output/power.json` 實測：`RSMRST_N`@32→`PCH_P0V85A_EN`/`PVNNAON_EN`@33、`PCH_PWROK`@28→`PVCCDD2_EN`@29，皆為來源轉態後 +1T。
+`tests/test_timing_sim.py`：`test_output_lo_falls_next_step_ignoring_cycle_lo`（fall == lo_step+1，即使 cycle_lo=4）、`test_output_lo_self_dep_falls_next_step`（dst_fall == src_fall+1）、`test_cycle_hi_ignored_on_output`（rise 不模擬 cycle_hi）。`output/power.json` 實測：`RSMRST_N`@32→`PCH_P0V85A_EN`/`PVNNAON_EN`@33、`PCH_PWROK`@28→`PVCCDD2_EN`@29，皆為來源轉態後 +1T。

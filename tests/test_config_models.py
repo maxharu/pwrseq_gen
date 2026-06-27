@@ -129,13 +129,13 @@ class TestPowerSeqConfig:
         cfg = PowerSeqConfig.from_dict(d)
         assert cfg.pulses == ["Pulse_1us", "Pulse_1ms"]
 
-    def test_migrate_legacy_wavedrom_inputs_to_rails(self):
+    def test_migrate_legacy_timing_inputs_to_rails(self):
         cfg = PowerSeqConfig.from_dict(
             {
                 "rails": [
                     {"name": "EKEY", "seq_type": "Input", "deb_enable": True},
                 ],
-                "wavedrom_scenario": {
+                "timing_scenario": {
                     "steps": 50,
                     "inputs": {
                         "EKEY": {
@@ -151,7 +151,7 @@ class TestPowerSeqConfig:
         assert ekey.hi_mode == "custom"
         assert ekey.hi_wave == "01"
         out = cfg.to_dict()
-        assert out["wavedrom_scenario"] == {"steps": 50}
+        assert out["timing_scenario"] == {"steps": 50}
         assert out["rails"][0]["hi_mode"] == "custom"
         assert out["rails"][0]["hi_wave"] == "01"
-        assert "inputs" not in out.get("wavedrom_scenario", {})
+        assert "inputs" not in out.get("timing_scenario", {})
