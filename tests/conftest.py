@@ -1,13 +1,15 @@
 """Pytest fixtures for Power Sequence Generator tests."""
-import json
-import os
-
 import pytest
 
-# Add project root to path
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+# 強制非互動式後端：headless 環境下渲染 PNG 不需要 Tk 視窗，
+# 避免某些測試先 import tkinter 後 matplotlib 自動選 TkAgg 而失敗。
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+except Exception:
+    pass
 
+# src/ 由 pyproject.toml 的 [tool.pytest.ini_options] pythonpath 加入 sys.path
 from config_models import PowerSeqConfig, PowerRail
 
 

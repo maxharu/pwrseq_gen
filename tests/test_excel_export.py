@@ -13,7 +13,7 @@ from dataclasses import replace
 from config_models import PowerRail, PowerSeqConfig
 from excel_export import export_powerseq_to_excel, format_signal_cell
 from excel_import import load_powerseq_from_excel
-from wavedrom_sim import DEP_LOW, WaveDromScenario
+from timing_sim import DEP_LOW, TimingScenario
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE_XLSX = os.path.join(ROOT, "templates", "powerseq_nodes_template.xlsx")
@@ -140,16 +140,16 @@ class TestExportRoundtrip:
         finally:
             os.unlink(out)
 
-    def test_export_with_updated_wavedrom_scenario(self):
+    def test_export_with_updated_timing_scenario(self):
         cfg = _load_demo_config()
-        cfg2 = replace(cfg, wavedrom_scenario={"steps": 77})
+        cfg2 = replace(cfg, timing_scenario={"steps": 77})
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
             out = f.name
         try:
             export_powerseq_to_excel(cfg2, out)
             loaded = load_powerseq_from_excel(out)
-            assert loaded.wavedrom_scenario is not None
-            assert loaded.wavedrom_scenario["steps"] == 77
+            assert loaded.timing_scenario is not None
+            assert loaded.timing_scenario["steps"] == 77
         finally:
             os.unlink(out)
 

@@ -1,4 +1,4 @@
-"""Tests for wavedrom_sim / timing export helpers"""
+"""Tests for timing_sim / timing export helpers"""
 import os
 import sys
 
@@ -6,15 +6,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 import pytest
 from config_models import PowerSeqConfig, PowerRail
-from wavedrom_sim import (
+from timing_sim import (
     InputWaveSpec,
-    WaveDromScenario,
+    TimingScenario,
     _internal_sig,
     expand_wave_pattern,
     simulate,
     values_to_wave,
 )
-from wavedrom_sim import expand_binary_wave
+from timing_sim import expand_binary_wave
 
 
 class TestExpandWave:
@@ -69,7 +69,7 @@ class TestSimulate:
                 ),
             ],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=20,
             inputs={
                 "A": InputWaveSpec(
@@ -99,7 +99,7 @@ class TestSimulate:
                 ),
             ],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=20,
             cond_step_delay=1,
             inputs={"A": InputWaveSpec(hi_mode="custom", hi_wave="0.1.")},
@@ -110,7 +110,7 @@ class TestSimulate:
         assert b_hi == a_hi + 1
 
     def test_cycle_hi_ignored_on_output(self):
-        """WaveDrom output 不模擬 cycle_hi；仍為條件成立後下一 step 翻轉。"""
+        """時序模擬 output 不模擬 cycle_hi；仍為條件成立後下一 step 翻轉。"""
         cfg = PowerSeqConfig(
             pulses=["iPulse_1us"],
             rails=[
@@ -124,7 +124,7 @@ class TestSimulate:
                 ),
             ],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=20,
             inputs={"A": InputWaveSpec(hi_mode="custom", hi_wave="0.1.")},
         )
@@ -150,7 +150,7 @@ class TestSimulate:
                 ),
             ],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=20,
             cond_step_delay=1,
             inputs={
@@ -208,7 +208,7 @@ class TestSimulate:
                 ),
             ],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=30,
             cond_step_delay=1,
             inputs={
@@ -254,7 +254,7 @@ class TestSimulate:
                 PowerRail("SLPS4_N", seq_type="input"),
             ],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=30,
             cond_step_delay=1,
             inputs={
@@ -288,7 +288,7 @@ class TestSimulate:
         reason="templates/x15dot-f.xlsm missing",
     )
     def test_pwrgd_drops_when_lo_references_reset_lo_cond(self):
-        from config_models import build_wavedrom_scenario
+        from config_models import build_timing_scenario
         from excel_import import load_powerseq_from_excel
 
         path = os.path.join(
@@ -297,7 +297,7 @@ class TestSimulate:
             "x15dot-f.xlsm",
         )
         cfg = load_powerseq_from_excel(path)
-        result = simulate(cfg, build_wavedrom_scenario(cfg))
+        result = simulate(cfg, build_timing_scenario(cfg))
         for name in ("PWRGD_CPU1_OD", "PWRGD_CPU2_OD"):
             sig = _internal_sig(name)
             assert result.output_lo_cond[sig][44] == 1
@@ -335,7 +335,7 @@ class TestOutputDelayed:
                 ),
             ],
         )
-        result = simulate(cfg, WaveDromScenario(steps=5))
+        result = simulate(cfg, TimingScenario(steps=5))
         assert result.output_values["b"][:3] == [0, 1, 1]
 
     def test_hi_and_lo_both_true_blocks_rise_when_low(self):
@@ -351,7 +351,7 @@ class TestOutputDelayed:
                 ),
             ],
         )
-        result = simulate(cfg, WaveDromScenario(steps=10))
+        result = simulate(cfg, TimingScenario(steps=10))
         assert all(v == 0 for v in result.output_values["en"])
 
     def test_hi_and_lo_both_prev_high_stays_high(self):
@@ -367,7 +367,7 @@ class TestOutputDelayed:
                 ),
             ],
         )
-        result = simulate(cfg, WaveDromScenario(steps=30))
+        result = simulate(cfg, TimingScenario(steps=30))
         en = result.output_values["en"]
         assert all(v == 1 for v in en)
 
@@ -381,7 +381,7 @@ class TestInputDependsSignal:
                 PowerRail("A", seq_type="input"),
             ],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=15,
             inputs={
                 "A": InputWaveSpec(
@@ -408,7 +408,7 @@ class TestInputDependsSignal:
                 PowerRail("A", seq_type="input"),
             ],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=15,
             inputs={
                 "X": InputWaveSpec(
@@ -433,12 +433,12 @@ class TestInputDependsSignal:
         assert x[fall - 1] == 0
 
     def test_input_hi_depends_on_self(self):
-        """Input hi cond may reference its own GPIO (WaveDrom dialog allows self)."""
+        """Input hi cond may reference its own GPIO (Timing dialog allows self)."""
         cfg = PowerSeqConfig(
             pulses=["iPulse_1us"],
             rails=[PowerRail("A", seq_type="input")],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=10,
             inputs={
                 "A": InputWaveSpec(
@@ -457,7 +457,7 @@ class TestInputDependsSignal:
             pulses=["iPulse_1us"],
             rails=[PowerRail("A", seq_type="input")],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=10,
             inputs={"A": InputWaveSpec(hi_mode="custom", hi_wave="01")},
         )
@@ -471,7 +471,7 @@ class TestInputDependsSignal:
             pulses=["iPulse_1us"],
             rails=[PowerRail("A", seq_type="input")],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=10,
             inputs={
                 "A": InputWaveSpec(
@@ -506,7 +506,7 @@ class TestInputDependsSignal:
                 ),
             ],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=10,
             inputs={
                 "RISE": InputWaveSpec(
@@ -542,7 +542,7 @@ class TestInputDependsSignal:
                 ),
             ],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=14,
             inputs={
                 "RISE": InputWaveSpec(
@@ -588,7 +588,7 @@ class TestInputDependsSignal:
                 ),
             ],
         )
-        scenario = WaveDromScenario(
+        scenario = TimingScenario(
             steps=16,
             inputs={
                 "RISE": InputWaveSpec(

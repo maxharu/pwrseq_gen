@@ -4,16 +4,16 @@
 
 ```python
 from config_models import PowerSeqConfig
-from wavedrom_export import WaveDromExportOptions, WAVEDROM_EDGE_HI_ONLY
+from timing_export import TimingExportOptions, TIMING_EDGE_HI_ONLY
 from schemdraw_export import export_schemdraw_from_options
-from wavedrom_sim import load_scenario_json
+from timing_sim import load_scenario_json
 
 cfg = PowerSeqConfig.from_dict(...)
-scenario = load_scenario_json("templates/x15dot-f-wavedrom_scenario.json")
+scenario = load_scenario_json("templates/x15dot-f-timing_scenario.json")
 
-opts = WaveDromExportOptions(
+opts = TimingExportOptions(
     include_rails=frozenset({"VDD", "RESET", "SLPS4"}),
-    edge_kinds=WAVEDROM_EDGE_HI_ONLY,
+    edge_kinds=TIMING_EDGE_HI_ONLY,
 )
 
 export_schemdraw_from_options(cfg, scenario, opts, "output/timing.pdf")
@@ -75,7 +75,7 @@ render_schemdraw(doc, "timing.svg")
 | File | Notes |
 |------|-------|
 | `templates/x15dot-f-wavedrom.json` | WaveDrom export (has node letters) |
-| `templates/x15dot-f-wavedrom_scenario.json` | Simulation inputs (shared) |
+| `templates/x15dot-f-timing_scenario.json` | Simulation inputs (shared) |
 | `templates/x15dot-f-Schemdraw_*.png` | Local render samples (not in git) |
 
 Schemdraw does not commit a separate JSON; doc is generated on the fly like WaveDrom but with extended edges only.

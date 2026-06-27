@@ -16,7 +16,7 @@ render_schemdraw_png_bytes(doc: dict, *, dpi=96) -> bytes
 
 export_schemdraw(config, scenario=None, *, output_filename, include_rails=..., edge_kinds=...)
 
-export_schemdraw_from_options(config, scenario, options: WaveDromExportOptions, output_filename)
+export_schemdraw_from_options(config, scenario, options: TimingExportOptions, output_filename)
 
 build_schemdraw_extended_edges(signals: list[dict], pending: list[ConditionEdgePending]) -> list[str]
 
@@ -25,7 +25,7 @@ schemdraw_edges_forward_in_time(doc: dict) -> list[tuple[str, int, str, int]]
 
 ## Extended edge construction
 
-`ConditionEdgePending` tuple (from `wavedrom_export`):
+`ConditionEdgePending` tuple (from `timing_export`):
 
 ```
 (dep_step, out_step, dep_lane, out_lane, kind)
@@ -77,7 +77,7 @@ with Drawing(show=False) as d:
 
 | Attribute | Purpose |
 |-----------|---------|
-| `_schemdraw_preview_opts` | Last `WaveDromExportOptions` from Nodes dialog |
+| `_schemdraw_preview_opts` | Last `TimingExportOptions` from Nodes dialog |
 | `_schemdraw_preview_after_id` | Debounce timer for preview refresh |
 | `_schemdraw_render_gen` | Drop stale background render results |
 

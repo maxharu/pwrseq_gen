@@ -6,8 +6,8 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from config_models import PowerSeqConfig, PowerRail
-from wavedrom_sim import InputWaveSpec, WaveDromScenario
-from wavedrom_scenario_io import (
+from timing_sim import InputWaveSpec, TimingScenario
+from timing_scenario_io import (
     load_scenario_file,
     resolve_scenario,
     save_scenario_file,
@@ -16,7 +16,7 @@ from wavedrom_scenario_io import (
 
 
 def test_roundtrip_file():
-    scenario = WaveDromScenario(
+    scenario = TimingScenario(
         steps=100,
         hscale=2,
         inputs={"A": InputWaveSpec(hi_mode="custom", hi_wave="0.1.")},
@@ -34,7 +34,7 @@ def test_roundtrip_file():
 
 
 def test_load_wrapped_in_project_dict():
-    wrapped = {"wavedrom_scenario": {"steps": 50, "inputs": {}}}
+    wrapped = {"timing_scenario": {"steps": 50, "inputs": {}}}
     s = scenario_from_dict(wrapped)
     assert s.steps == 50
 
@@ -54,10 +54,10 @@ def test_to_dict_omits_unused_waves():
 def test_resolve_sidecar(tmp_path):
     proj = tmp_path / "board_pseq.json"
     proj.write_text(json.dumps({"rails": [], "module_name": "T"}), encoding="utf-8")
-    sidecar = tmp_path / "board_pseq_wavedrom_scenario.json"
+    sidecar = tmp_path / "board_pseq_timing_scenario.json"
     save_scenario_file(
         str(sidecar),
-        WaveDromScenario(
+        TimingScenario(
             steps=10,
             inputs={"EKEY": InputWaveSpec(hi_mode="constant_1")},
         ),

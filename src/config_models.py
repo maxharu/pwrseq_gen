@@ -86,7 +86,7 @@ class PowerRail:
     deb_cycle_lo: int = 2  # DEB CYCLE_LO
     deb_cycle_sync: int = 2  # DEB CYCLE_SYNC
     deb_pulse: str = DEFAULT_PULSE  # DEB iPulse_Sample
-    # WaveDrom 模擬激勵（僅 input；非 Verilog depends_on）
+    # 時序模擬激勵（僅 input；非 Verilog depends_on）
     hi_mode: str = "depends"
     hi_wave: str = "0"
     hi_groups: list[list[str]] = field(default_factory=list)
@@ -244,7 +244,7 @@ def _rail_dict_has_input_wave(r: dict) -> bool:
 
 
 def input_wave_to_dict(rail: PowerRail) -> dict:
-    """Input 節點 WaveDrom 欄位序列化（與 InputWaveSpec.to_dict 規則一致）。"""
+    """Input 節點 Timing 欄位序列化（與 InputWaveSpec.to_dict 規則一致）。"""
     if rail.seq_type != "input":
         return {}
     d: dict = {"hi_mode": rail.hi_mode, "lo_mode": rail.lo_mode}
@@ -284,7 +284,7 @@ def input_wave_to_dict(rail: PowerRail) -> dict:
 
 
 def apply_input_wave_dict(rail: PowerRail, data: dict) -> None:
-    """將 WaveDrom input 設定寫入 PowerRail（僅 input 語意）。"""
+    """將 Timing input 設定寫入 PowerRail（僅 input 語意）。"""
     rail.hi_mode = data.get("hi_mode", "depends")
     rail.hi_wave = data.get("hi_wave", "0")
     rail.hi_groups = data.get("hi_groups") or []
@@ -301,7 +301,7 @@ def apply_input_wave_dict(rail: PowerRail, data: dict) -> None:
     rail.lo_intra_op = data.get("lo_intra_op") or []
 
 
-def _wavedrom_globals_from_dict(wd: dict | None) -> dict | None:
+def _timing_globals_from_dict(wd: dict | None) -> dict | None:
     """僅保留 steps / hscale（不含 inputs）。"""
     if not wd:
         return None
@@ -315,8 +315,8 @@ def _wavedrom_globals_from_dict(wd: dict | None) -> dict | None:
 
 
 def rail_input_wave_spec(rail: PowerRail):
-    """PowerRail → InputWaveSpec（input 節點 WaveDrom 設定）。"""
-    from wavedrom_sim import InputWaveSpec
+    """PowerRail → InputWaveSpec（input 節點 Timing 設定）。"""
+    from timing_sim import InputWaveSpec
 
     return InputWaveSpec(
         hi_mode=rail.hi_mode,
@@ -336,11 +336,11 @@ def rail_input_wave_spec(rail: PowerRail):
     )
 
 
-def build_wavedrom_scenario(config: "PowerSeqConfig"):
-    """由 config（rails + 全域 wavedrom_scenario）組出 WaveDromScenario。"""
-    from wavedrom_sim import WaveDromScenario, _norm_hscale
+def build_timing_scenario(config: "PowerSeqConfig"):
+    """由 config（rails + 全域 timing_scenario）組出 TimingScenario。"""
+    from timing_sim import TimingScenario, _norm_hscale
 
-    wd = config.wavedrom_scenario or {}
+    wd = config.timing_scenario or {}
     steps = int(wd.get("steps", 50))
     hscale = _norm_hscale(int(wd.get("hscale", wd.get("cond_step_delay", 1))))
     inputs = {
@@ -348,7 +348,7 @@ def build_wavedrom_scenario(config: "PowerSeqConfig"):
         for r in config.rails
         if r.seq_type == "input"
     }
-    return WaveDromScenario(steps=steps, hscale=hscale, inputs=inputs)
+    return TimingScenario(steps=steps, hscale=hscale, inputs=inputs)
 
 
 def _normalize_rail_after_load(rail: PowerRail) -> None:
@@ -448,7 +448,7 @@ class PowerSeqConfig:
     clock_freq_mhz: float = 100.0
     pulse_period_ns: float = 100.0
     pulses: list[str] = field(default_factory=lambda: [DEFAULT_PULSE])  # Pulse 來源列表，每個為單一訊號（無 _Hi/_Lo/_Force）
-    wavedrom_scenario: dict | None = None  # 可選：WaveDrom 匯出設定（見 wavedrom_sim.WaveDromScenario）
+    timing_scenario: dict | None = None  # 可選：Timing 匯出設定（見 timing_sim.TimingScenario）
 
     def rename_rail(self, old_name: str, new_name: str) -> bool:
         """重新命名一個 rail，並把所有其他 rail 的依賴 / inv / use 欄位中的舊名替換為新名。
@@ -492,15 +492,15 @@ class PowerSeqConfig:
             "pulses": self.pulses,
             "rails": [_rail_to_dict(r) for r in self.rails],
         }
-        wd = _wavedrom_globals_from_dict(self.wavedrom_scenario)
+        wd = _timing_globals_from_dict(self.timing_scenario)
         if wd:
-            d["wavedrom_scenario"] = wd
+            d["timing_scenario"] = wd
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "PowerSeqConfig":
         """從 dict 建立"""
-        wd_raw = d.get("wavedrom_scenario") or {}
+        wd_raw = d.get("timing_scenario") or {}
         legacy_inputs = (
             wd_raw.get("inputs") if isinstance(wd_raw.get("inputs"), dict) else {}
         )
@@ -580,14 +580,14 @@ class PowerSeqConfig:
                 if isinstance(legacy, dict):
                     apply_input_wave_dict(rail, legacy)
             rails.append(rail)
-        wavedrom_scenario = _wavedrom_globals_from_dict(wd_raw)
-        if wavedrom_scenario is None and legacy_inputs:
-            wavedrom_scenario = {"steps": int(wd_raw.get("steps", 50))}
+        timing_scenario = _timing_globals_from_dict(wd_raw)
+        if timing_scenario is None and legacy_inputs:
+            timing_scenario = {"steps": int(wd_raw.get("steps", 50))}
         return cls(
             rails=rails,
             module_name=d.get("module_name", "PWRSEQ_TOP"),
             clock_freq_mhz=d.get("clock_freq_mhz", 100.0),
             pulse_period_ns=d.get("pulse_period_ns", 100.0),
             pulses=_normalize_pulse_list(d.get("pulses")),
-            wavedrom_scenario=wavedrom_scenario,
+            timing_scenario=timing_scenario,
         )

@@ -16,7 +16,7 @@ except ImportError as e:
 
 from config_models import DEFAULT_PULSE, PowerRail, PowerSeqConfig, normalize_pulse_name
 from group_logic import is_legacy_group_inv_cell, parse_intra_op_cell
-from wavedrom_sim import DEP_HIGH, DEP_LOW
+from timing_sim import DEP_HIGH, DEP_LOW
 
 DATA_START_ROW = 4
 MAX_DATA_ROW_CAP = 5000
@@ -303,11 +303,11 @@ def _apply_condition_groups(
     setattr(rail, f"{prefix}_use", use_dict)
 
 
-def _wavedrom_scenario_from_config_defaults(defaults: dict[str, Any]) -> dict:
-    """Global WaveDrom steps/hscale from Config sheet (GUI toolbar reads this)."""
-    out: dict = {"steps": defaults["wavedrom_steps"]}
-    if defaults["wavedrom_hscale"] != 1:
-        out["hscale"] = defaults["wavedrom_hscale"]
+def _timing_scenario_from_config_defaults(defaults: dict[str, Any]) -> dict:
+    """Global timing steps/hscale from Config sheet (GUI toolbar reads this)."""
+    out: dict = {"steps": defaults["timing_steps"]}
+    if defaults["timing_hscale"] != 1:
+        out["hscale"] = defaults["timing_hscale"]
     return out
 
 
@@ -323,8 +323,8 @@ def _parse_config_defaults(lookup: dict[str, Any]) -> dict[str, Any]:
         "default_pulse": normalize_pulse_name(
             _cell_str(_config_value(lookup, "default_pulse")) or DEFAULT_PULSE
         ),
-        "wavedrom_steps": _cell_int(_config_value(lookup, "wavedrom_steps"), 50),
-        "wavedrom_hscale": _cell_int(_config_value(lookup, "wavedrom_hscale"), 1),
+        "timing_steps": _cell_int(_config_value(lookup, "timing_steps"), 50),
+        "timing_hscale": _cell_int(_config_value(lookup, "timing_hscale"), 1),
     }
 
 
@@ -476,7 +476,7 @@ def _parse_input_side_rows(
 
 
 def _parse_input_conditions(rows: list[tuple], input_names: list[str]) -> dict[str, dict]:
-    """Return per-input WaveDrom spec dicts."""
+    """Return per-input timing spec dicts."""
     current_input = ""
     hi_rows: list[tuple[str, str, list[tuple[str, bool, str]], bool, str]] = []
     lo_rows: list[tuple[str, str, list[tuple[str, bool, str]], bool, str]] = []
@@ -551,9 +551,9 @@ def _open_excel_workbook(path: str):
     return load_workbook(path, data_only=True)
 
 
-def load_wavedrom_scenario_from_excel(path: str) -> WaveDromScenario:
-    """Load WaveDromScenario from Excel Input Conditions + Config wavedrom fields."""
-    from wavedrom_sim import WaveDromScenario
+def load_timing_scenario_from_excel(path: str) -> TimingScenario:
+    """Load TimingScenario from Excel Input Conditions + Config timing fields."""
+    from timing_sim import TimingScenario
 
     if not os.path.isfile(path):
         raise FileNotFoundError(path)
@@ -578,9 +578,9 @@ def load_wavedrom_scenario_from_excel(path: str) -> WaveDromScenario:
         inputs = _parse_input_conditions(in_rows, input_names)
         if not inputs:
             raise ValueError("No Input Conditions found in workbook")
-        return WaveDromScenario.from_dict(
+        return TimingScenario.from_dict(
             {
-                **_wavedrom_scenario_from_config_defaults(defaults),
+                **_timing_scenario_from_config_defaults(defaults),
                 "inputs": inputs,
             }
         )
@@ -612,7 +612,7 @@ def load_powerseq_from_excel(path: str) -> PowerSeqConfig:
             pass
 
         input_names = [r.name for r in rails if r.seq_type == "input"]
-        wavedrom_scenario = _wavedrom_scenario_from_config_defaults(defaults)
+        timing_scenario = _timing_scenario_from_config_defaults(defaults)
         try:
             ws_in = _find_sheet(wb, "input_name")
             in_rows = _data_sheet_rows(ws_in, max_col=INPUT_COND_MAX_COL)
@@ -631,7 +631,7 @@ def load_powerseq_from_excel(path: str) -> PowerSeqConfig:
             rails=rails,
             module_name=defaults["module_name"],
             pulses=defaults["pulses"],
-            wavedrom_scenario=wavedrom_scenario,
+            timing_scenario=timing_scenario,
         )
     finally:
         wb.close()

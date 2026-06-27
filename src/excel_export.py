@@ -21,7 +21,7 @@ from config_models import (
     DEFAULT_PULSE,
     PowerRail,
     PowerSeqConfig,
-    build_wavedrom_scenario,
+    build_timing_scenario,
     normalize_pulse_name,
     rail_input_wave_spec,
 )
@@ -40,7 +40,7 @@ from excel_import import (
     data_area_end_row,
     last_used_row,
 )
-from wavedrom_sim import DEP_HIGH, DEP_LOW, InputWaveSpec, WaveDromScenario
+from timing_sim import DEP_HIGH, DEP_LOW, InputWaveSpec, TimingScenario
 SHEET_LISTS = "Lists"
 
 INPUT_FILL = PatternFill("solid", fgColor="F3E8FF")
@@ -177,11 +177,11 @@ def _clear_data_area(ws, end_col: int, *, new_row_count: int) -> None:
             cell.value = None
 
 
-def _write_config(ws, config: PowerSeqConfig, scenario: WaveDromScenario) -> None:
+def _write_config(ws, config: PowerSeqConfig, scenario: TimingScenario) -> None:
     _set_config_value(ws, "module_name", config.module_name)
     _set_config_value(ws, "pulses", ",".join(config.pulses))
-    _set_config_value(ws, "wavedrom_steps", scenario.steps)
-    _set_config_value(ws, "wavedrom_hscale", scenario.hscale)
+    _set_config_value(ws, "timing_steps", scenario.steps)
+    _set_config_value(ws, "timing_hscale", scenario.hscale)
 
 
 def _write_nodes(ws, rails: list[PowerRail]) -> None:
@@ -378,7 +378,7 @@ def _input_cond_rows(name: str, spec: InputWaveSpec) -> list[tuple[str, str, str
     return rows
 
 
-def _write_input_conditions(ws, config: PowerSeqConfig, scenario: WaveDromScenario) -> None:
+def _write_input_conditions(ws, config: PowerSeqConfig, scenario: TimingScenario) -> None:
     sig_end = INPUT_META_COLS + INPUT_COND_SIGNAL_MAX_COLS
     all_rows: list[tuple[str, str, str, str | None, str, str, list[str]]] = []
     for rail in config.rails:
@@ -470,13 +470,13 @@ def _write_lists(wb, config: PowerSeqConfig, cond_signals: set[str]) -> None:
     )
 
 
-def _resolve_scenario(config: PowerSeqConfig) -> WaveDromScenario:
-    embedded = config.wavedrom_scenario or {}
+def _resolve_scenario(config: PowerSeqConfig) -> TimingScenario:
+    embedded = config.timing_scenario or {}
     if embedded.get("inputs"):
-        from wavedrom_scenario_io import merge_scenario_for_config
+        from timing_scenario_io import merge_scenario_for_config
 
-        return merge_scenario_for_config(WaveDromScenario.from_dict(embedded), config)
-    return build_wavedrom_scenario(config)
+        return merge_scenario_for_config(TimingScenario.from_dict(embedded), config)
+    return build_timing_scenario(config)
 
 
 def export_powerseq_to_excel(

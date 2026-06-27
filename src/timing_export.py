@@ -1,7 +1,7 @@
 """
 Shared timing-diagram export helpers (lanes, condition edges, WaveJSON checks).
 
-Used by Schemdraw export. Simulation lives in wavedrom_sim.py.
+Used by Schemdraw export. Simulation lives in timing_sim.py.
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import os
 from dataclasses import dataclass
 
 from config_models import PowerRail, PowerSeqConfig
-from wavedrom_sim import (
+from timing_sim import (
     DEP_HIGH,
     DEP_LOW,
     SimResult,
@@ -23,12 +23,6 @@ TIMING_EDGE_BOTH = frozenset({"hi", "lo"})
 TIMING_EDGE_HI_ONLY = frozenset({"hi"})
 TIMING_EDGE_LO_ONLY = frozenset({"lo"})
 
-# Back-compat aliases (internal)
-WAVEDROM_AUTHOR = TIMING_AUTHOR
-WAVEDROM_EDGE_BOTH = TIMING_EDGE_BOTH
-WAVEDROM_EDGE_HI_ONLY = TIMING_EDGE_HI_ONLY
-WAVEDROM_EDGE_LO_ONLY = TIMING_EDGE_LO_ONLY
-
 
 def timing_edge_kinds_from_choice(choice: str) -> frozenset[str]:
     """Map GUI/API choice to edge kind set."""
@@ -39,16 +33,10 @@ def timing_edge_kinds_from_choice(choice: str) -> frozenset[str]:
     return TIMING_EDGE_BOTH
 
 
-wavedrom_edge_kinds_from_choice = timing_edge_kinds_from_choice
-
-
 @dataclass(frozen=True)
 class TimingExportOptions:
     include_rails: frozenset[str]
     edge_kinds: frozenset[str] = TIMING_EDGE_BOTH
-
-
-WaveDromExportOptions = TimingExportOptions
 
 
 def _port_name(name: str, prefix: str) -> str:
@@ -313,7 +301,7 @@ def _collect_condition_edge_pending(
     return pending
 
 
-def validate_wavedrom_doc(doc: dict, steps: int | None = None) -> list[str]:
+def validate_timing_doc(doc: dict, steps: int | None = None) -> list[str]:
     """Quick WaveJSON checks for timing diagram docs."""
     errs: list[str] = []
     signal = doc.get("signal")

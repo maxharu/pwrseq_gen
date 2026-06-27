@@ -1,5 +1,5 @@
 """
-WaveDrom 時序模擬：依使用者定義的 input 波形 + output 依賴/cycle 推算各 rail 邏輯值。
+時序邏輯模擬：依使用者定義的 input 波形 + output 依賴/cycle 推算各 rail 邏輯值。
 """
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ class InputWaveSpec:
 
 
 def _norm_hscale(value: int) -> int:
-    """WaveDrom config.hscale — horizontal pixels per time step (min 1)."""
+    """Timing config.hscale — horizontal pixels per time step (min 1)."""
     try:
         n = int(value)
     except (TypeError, ValueError):
@@ -88,14 +88,14 @@ def _norm_hscale(value: int) -> int:
 
 
 @dataclass
-class WaveDromScenario:
+class TimingScenario:
     steps: int = 200
     inputs: dict[str, InputWaveSpec] = field(default_factory=dict)
     hscale: int = 1
     cond_step_delay: int = 1
 
     @classmethod
-    def from_dict(cls, d: dict) -> WaveDromScenario:
+    def from_dict(cls, d: dict) -> TimingScenario:
         inputs = {}
         for name, spec in (d.get("inputs") or {}).items():
             inputs[name] = InputWaveSpec.from_dict(spec) if isinstance(spec, dict) else InputWaveSpec()
@@ -698,14 +698,14 @@ def _outputs_topo_order(
     return ordered
 
 
-def default_scenario_for_config(config: PowerSeqConfig) -> WaveDromScenario:
-    """為所有 input 建立 scenario（優先使用 rail 上 WaveDrom 欄位）。"""
-    from config_models import build_wavedrom_scenario
+def default_scenario_for_config(config: PowerSeqConfig) -> TimingScenario:
+    """為所有 input 建立 scenario（優先使用 rail 上 Timing 欄位）。"""
+    from config_models import build_timing_scenario
 
-    return build_wavedrom_scenario(config)
+    return build_timing_scenario(config)
 
 
-def simulate(config: PowerSeqConfig, scenario: WaveDromScenario) -> SimResult:
+def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
     """執行離散 pulse 模擬，回傳各軌跡。"""
     steps = max(10, scenario.steps)
     pulses = list(config.pulses or [DEFAULT_PULSE])
