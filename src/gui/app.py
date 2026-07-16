@@ -70,6 +70,7 @@ class PowerSeqGUI(ctk.CTk):
         self._paned_sash_drag = False
         self._history = SnapshotHistory(UNDO_LIMIT)
         self._preview_after_id: Optional[str] = None
+        self._preview_render_gen = 0
         self._schemdraw_preview_after_id: Optional[str] = None
         self._schemdraw_render_gen = 0
         self._schemdraw_preview_opts: TimingExportOptions | None = None
@@ -410,6 +411,48 @@ class PowerSeqGUI(ctk.CTk):
         self._redo_btn.configure(state="normal" if self._history.can_redo else "disabled")
 
     # ---- per-node Apply ----
+    def _apply_rail_frame(self, cf) -> None:
+        """Apply by frame identity（重排後 index 仍正確）。"""
+        try:
+            idx = self.collapsible_frames.index(cf)
+        except ValueError:
+            return
+        self._apply_rail(idx)
+
+    def _make_collapsible_rail(self, rail: PowerRail, *, expanded: bool = False):
+        """建立 CollapsibleRailFrame；on_apply 綁定 frame，不綁死 index。"""
+        holder: list = []
+
+        def _on_apply() -> None:
+            if holder:
+                self._apply_rail_frame(holder[0])
+
+        cf = CollapsibleRailFrame(
+            self.editor_scroll,
+            rail,
+            get_all_rails=self._get_all_rails,
+            get_pulses=self._get_pulses,
+            on_apply=_on_apply,
+            get_input_wave_spec=self._input_wave_spec_for,
+            expanded=expanded,
+        )
+        holder.append(cf)
+        return cf
+
+    @staticmethod
+    def _remap_index_after_move(idx: int | None, from_idx: int, to_idx: int) -> int | None:
+        if idx is None:
+            return None
+        if idx == from_idx:
+            return to_idx
+        if from_idx < to_idx:
+            if from_idx < idx <= to_idx:
+                return idx - 1
+        elif to_idx < from_idx:
+            if to_idx <= idx < from_idx:
+                return idx + 1
+        return idx
+
     def _apply_rail(self, idx: int):
         """將單一 Node 編輯器內容寫入 config；僅此時更新 header chip 與 Preview。"""
         if idx < 0 or idx >= len(self.collapsible_frames):
@@ -443,8 +486,29 @@ class PowerSeqGUI(ctk.CTk):
         cf.rail = self.config_obj.rails[idx]
         self._mark_dirty()
 
-        if old_type != cf.rail.seq_type or new_name != old_name:
-            self._refresh_all()
+        type_changed = old_type != cf.rail.seq_type
+        name_changed = new_name != old_name
+
+        if type_changed:
+            # type 切換會換整塊編輯器欄位，只重建該 frame
+            was_expanded = cf._expanded
+            cf.pack_forget()
+            cf.destroy()
+            new_cf = self._make_collapsible_rail(self.config_obj.rails[idx], expanded=was_expanded)
+            self.collapsible_frames[idx] = new_cf
+            self._apply_inspect_mode()
+            primary = self.node_list.get_primary()
+            self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
+            self._update_validation()
+            self._schedule_preview()
+            return
+
+        if name_changed:
+            cf.update_summary()
+            primary = self.node_list.get_primary()
+            self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
+            self._update_validation()
+            self._schedule_preview()
             return
 
         cf.editor.rail = cf.rail
@@ -516,16 +580,9 @@ class PowerSeqGUI(ctk.CTk):
         for w in self.editor_scroll.winfo_children():
             w.destroy()
         self.collapsible_frames = []
-        for idx, r in enumerate(self.config_obj.rails):
+        for r in self.config_obj.rails:
             is_expanded = r.name in prev_expanded
-            cf = CollapsibleRailFrame(
-                self.editor_scroll, r,
-                get_all_rails=self._get_all_rails,
-                get_pulses=self._get_pulses,
-                on_apply=lambda i=idx: self._apply_rail(i),
-                get_input_wave_spec=self._input_wave_spec_for,
-                expanded=is_expanded,
-            )
+            cf = self._make_collapsible_rail(r, expanded=is_expanded)
             # pack 由 _apply_inspect_mode 統一處理（避免 inspect toggle 後順序錯亂）
             self.collapsible_frames.append(cf)
 
@@ -578,8 +635,26 @@ class PowerSeqGUI(ctk.CTk):
         self.config_obj = self._collect_config()
         rail = self.config_obj.rails.pop(from_idx)
         self.config_obj.rails.insert(to_idx, rail)
+        cf = self.collapsible_frames.pop(from_idx)
+        self.collapsible_frames.insert(to_idx, cf)
         self._mark_dirty()
-        self._refresh_all()
+
+        # 左側列表重建便宜；中間編輯器只改 pack 順序，不 destroy
+        primary = self._remap_index_after_move(
+            self.node_list.get_primary(), from_idx, to_idx,
+        )
+        selected = {
+            remapped
+            for i in self.node_list.get_selection()
+            if (remapped := self._remap_index_after_move(i, from_idx, to_idx)) is not None
+        }
+        self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
+        self.node_list._selected = selected
+        self.node_list._apply_row_bgs()
+        self.node_list.on_multi_change(set(selected))
+        self._apply_inspect_mode()
+        self._update_stats()
+        self._schedule_preview()
 
     def _on_multi_changed(self, selected: set[int]):
         if len(selected) > 1:
@@ -614,11 +689,20 @@ class PowerSeqGUI(ctk.CTk):
         while any(r.name == name for r in self.config_obj.rails):
             n += 1
             name = f"SIG_{n}"
-        self.config_obj.rails.append(PowerRail(name=name, seq_type="output"))
+        rail = PowerRail(name=name, seq_type="output")
+        self.config_obj.rails.append(rail)
+        cf = self._make_collapsible_rail(rail, expanded=True)
+        self.collapsible_frames.append(cf)
         self._mark_dirty()
-        self._refresh_all()
-        if self.collapsible_frames:
-            self.collapsible_frames[-1].expand()
+        primary = len(self.config_obj.rails) - 1
+        self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
+        self.node_list._selected = {primary}
+        self.node_list._apply_row_bgs()
+        self._apply_inspect_mode()
+        self._update_validation()
+        self._schedule_preview()
+        self._update_stats()
+        self.after(50, lambda: self._scroll_to_widget(cf))
 
     def _delete_selected(self):
         selection = self.node_list.get_selection()
@@ -630,9 +714,16 @@ class PowerSeqGUI(ctk.CTk):
         for i in sorted(selection, reverse=True):
             if 0 <= i < len(self.config_obj.rails):
                 del self.config_obj.rails[i]
+                cf = self.collapsible_frames.pop(i)
+                cf.pack_forget()
+                cf.destroy()
         self.node_list.clear_selection()
         self._mark_dirty()
-        self._refresh_all()
+        self.node_list.set_rails(self.config_obj.rails, primary_idx=None)
+        self._apply_inspect_mode()
+        self._update_validation()
+        self._schedule_preview()
+        self._update_stats()
 
     def _batch_delete(self):
         self._delete_selected()
@@ -647,7 +738,23 @@ class PowerSeqGUI(ctk.CTk):
             if 0 <= i < len(self.config_obj.rails):
                 self.config_obj.rails[i].seq_type = new_type
         self._mark_dirty()
-        self._refresh_all()
+        # type 變更需重建受影響的編輯器欄位；只重建選中項
+        for i in sorted(selection):
+            if not (0 <= i < len(self.collapsible_frames)):
+                continue
+            was_expanded = self.collapsible_frames[i]._expanded
+            old = self.collapsible_frames[i]
+            old.pack_forget()
+            old.destroy()
+            self.collapsible_frames[i] = self._make_collapsible_rail(
+                self.config_obj.rails[i], expanded=was_expanded,
+            )
+        primary = self.node_list.get_primary()
+        self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
+        self._apply_inspect_mode()
+        self._update_validation()
+        self._schedule_preview()
+        self._update_stats()
 
     # ---- pulses ----
     def _on_pulses_changed(self, new_pulses: list[str]):
@@ -964,16 +1071,42 @@ class PowerSeqGUI(ctk.CTk):
             ok, errs = validate(cfg)
             status = "live" if ok else f"{len(errs)} error{'s' if len(errs) != 1 else ''}"
             lang = self.preview.get_lang()
-            if lang == "C":
-                code = generate_c(cfg, output_filename=self._preview_c_filename())
-            else:
-                v_path = None
-                if self._current_path and self._current_path.lower().endswith(".json"):
-                    v_path = os.path.splitext(self._current_path)[0] + ".v"
-                code = generate_verilog(cfg, output_filename=v_path)
-            self.preview.set_code(code, status=status)
+            c_name = self._preview_c_filename()
+            v_path = None
+            if self._current_path and self._current_path.lower().endswith(".json"):
+                v_path = os.path.splitext(self._current_path)[0] + ".v"
         except Exception as e:
             self.preview.set_error(str(e))
+            return
+
+        self._preview_render_gen += 1
+        gen = self._preview_render_gen
+
+        def worker() -> None:
+            try:
+                if lang == "C":
+                    code = generate_c(cfg, output_filename=c_name)
+                else:
+                    code = generate_verilog(cfg, output_filename=v_path)
+                self.after(0, lambda: self._apply_code_preview(gen, code, status))
+            except Exception as e:
+                self.after(0, lambda: self._apply_code_preview_error(gen, str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_code_preview(self, gen: int, code: str, status: str) -> None:
+        if gen != self._preview_render_gen:
+            return
+        if not self._show_preview or self.preview.get_lang() == "Schemdraw":
+            return
+        self.preview.set_code(code, status=status)
+
+    def _apply_code_preview_error(self, gen: int, msg: str) -> None:
+        if gen != self._preview_render_gen:
+            return
+        if not self._show_preview or self.preview.get_lang() == "Schemdraw":
+            return
+        self.preview.set_error(msg)
 
     # ---- validation ----
     def _update_validation(self):

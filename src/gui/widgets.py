@@ -197,6 +197,9 @@ class CondSectionFrame(ctk.CTkFrame):
         )
         frame.pack(fill="x", pady=S_XS, padx=(S_LG, S_SM))
 
+        gi_slot = [gi]
+        frame._gi_slot = gi_slot  # type: ignore[attr-defined]
+
         group_bg = _resolve_ctk_color(frame.cget("fg_color"))
         header = _make_hscroll_row(frame, bg_color=group_bg, row_height=34)
 
@@ -204,15 +207,16 @@ class CondSectionFrame(ctk.CTkFrame):
                               text_color=("gray40", "gray70"), cursor="hand2")
         handle.pack(side="left", padx=(0, S_SM))
         handle.bind("<ButtonPress-1>",
-                    lambda _e, g=gi: self._on_group_drag_start(g))
+                    lambda _e, s=gi_slot: self._on_group_drag_start(s[0]))
         handle.bind("<B1-Motion>",
                     lambda e: self._on_group_drag_motion(e))
         handle.bind("<ButtonRelease-1>",
                     lambda _e: self._on_group_drag_release())
 
-        ctk.CTkLabel(header, text=f"Group {gi + 1}",
+        title_label = ctk.CTkLabel(header, text=f"Group {gi + 1}",
                      text_color=self.theme["text"],
-                     font=FONT_CHIP, width=56).pack(side="left", padx=(0, S_SM))
+                     font=FONT_CHIP, width=56)
+        title_label.pack(side="left", padx=(0, S_SM))
 
         dep_options = self.get_dep_options() or [""]
         combo = ctk.CTkComboBox(header, values=dep_options, width=100)
@@ -220,18 +224,18 @@ class CondSectionFrame(ctk.CTkFrame):
         combo.set(dep_options[0])
 
         ctk.CTkButton(header, text="+ Add", width=56,
-                      command=lambda g=gi: self._add_cond_to_group(g)).pack(
+                      command=lambda s=gi_slot: self._add_cond_to_group(s[0])).pack(
             side="left", padx=(0, S_SM)
         )
         ctk.CTkButton(header, text="Del Group", width=72,
-                      command=lambda g=gi: self._remove_group(g)).pack(
+                      command=lambda s=gi_slot: self._remove_group(s[0])).pack(
             side="left", padx=(0, S_SM)
         )
 
         op_init = intra_op_label(self.group_intra_op[gi] if gi < len(self.group_intra_op) else "and")
         op_var = ctk.StringVar(value=op_init)
         self.group_intra_op_vars[gi] = op_var
-        op_var.trace_add("write", lambda *_a, g=gi: self._on_group_intra_op_changed(g))
+        op_var.trace_add("write", lambda *_a, s=gi_slot: self._on_group_intra_op_changed(s[0]))
         op_row = ctk.CTkFrame(header, fg_color="transparent")
         op_row.pack(side="left", padx=(0, S_SM))
         ctk.CTkLabel(op_row, text="Op", font=FONT_HINT).pack(side="left", padx=(0, 4))
@@ -243,14 +247,20 @@ class CondSectionFrame(ctk.CTkFrame):
             inv_init = bool(self.group_inv[gi]) if gi < len(self.group_inv) else False
             gvar = ctk.BooleanVar(value=inv_init)
             self.group_inv_vars[gi] = gvar
-            gvar.trace_add("write", lambda *_a, g=gi: self._on_group_inv_changed(g))
+            gvar.trace_add("write", lambda *_a, s=gi_slot: self._on_group_inv_changed(s[0]))
             ctk.CTkCheckBox(
                 header, text="Inv", variable=gvar, width=72,
             ).pack(side="left", padx=(0, S_SM))
 
         list_frame = ctk.CTkFrame(frame, fg_color="transparent")
         # list_frame 在首列加入時才 pack
-        self.group_frames.append({"frame": frame, "combo": combo, "list_frame": list_frame})
+        self.group_frames.append({
+            "frame": frame,
+            "combo": combo,
+            "list_frame": list_frame,
+            "gi_slot": gi_slot,
+            "title_label": title_label,
+        })
 
         for ii, name in enumerate(group):
             self._add_cond_row(gi, name, ii)
@@ -259,6 +269,7 @@ class CondSectionFrame(ctk.CTkFrame):
         if ii is None:
             ii = len(self.groups[gi]) - 1
         key = (gi, ii)
+        key_slot = [gi, ii]
         is_const = name in (DEP_HIGH, DEP_LOW)
         display_name = "High" if name == DEP_HIGH else ("Low" if name == DEP_LOW else name)
         can_use_hi_lo = (not is_const) and self.is_pseqcell_for(name)
@@ -280,17 +291,18 @@ class CondSectionFrame(ctk.CTkFrame):
 
         row = ctk.CTkFrame(list_frame, fg_color="transparent")
         row.pack(fill="x", pady=1)
+        row._key_slot = key_slot  # type: ignore[attr-defined]
         self.rows[key] = row
 
         rh = ctk.CTkLabel(row, text="\u2261", width=18,
                           text_color=("gray40", "gray70"), cursor="hand2")
         rh.pack(side="left", padx=(2, S_SM))
         rh.bind("<ButtonPress-1>",
-                lambda _e, g=gi, i=ii: self._on_cond_drag_start(g, i))
+                lambda _e, s=key_slot: self._on_cond_drag_start(s[0], s[1]))
         rh.bind("<B1-Motion>",
-                lambda e, g=gi: self._on_cond_drag_motion(g, e))
+                lambda e, s=key_slot: self._on_cond_drag_motion(s[0], e))
         rh.bind("<ButtonRelease-1>",
-                lambda _e, g=gi: self._on_cond_drag_release(g))
+                lambda _e, s=key_slot: self._on_cond_drag_release(s[0]))
 
         ctk.CTkLabel(row, text=display_name, width=120, anchor="w").pack(side="left", padx=(0, S_SM))
         if not is_const:
@@ -298,9 +310,8 @@ class CondSectionFrame(ctk.CTkFrame):
         if can_use_hi_lo:
             ctk.CTkComboBox(row, values=allowed_use,
                             variable=self.use_vars[key], width=100).pack(side="left", padx=(0, S_SM))
-        captured = key
         ctk.CTkButton(row, text="Del", width=50,
-                      command=lambda k=captured: self._remove_cond_by_key(k)).pack(side="left")
+                      command=lambda s=key_slot: self._remove_cond_by_key((s[0], s[1]))).pack(side="left")
 
     def _on_group_inv_changed(self, gi: int):
         if 0 <= gi < len(self.group_inv):
@@ -324,7 +335,7 @@ class CondSectionFrame(ctk.CTkFrame):
         self.groups.append([])
         self.group_inv.append(False)
         self.group_intra_op.append("and")
-        self._rebuild_groups_ui()
+        self._add_group_ui(len(self.groups) - 1)
         self._fire_change()
 
     def _add_cond_to_group(self, gi: int):
@@ -337,33 +348,103 @@ class CondSectionFrame(ctk.CTkFrame):
         self._add_cond_row(gi, dep_key)
         self._fire_change()
 
+    def _shift_cond_keys_after_delete(self, gi: int, deleted_ii: int) -> None:
+        """刪除 (gi, deleted_ii) 後，把同 group 內較大的 ii 左移，並更新 key_slot。"""
+        old_len = len(self.groups[gi]) + 1  # 刪除前長度
+        for old_i in range(deleted_ii + 1, old_len):
+            new_i = old_i - 1
+            old_key = (gi, old_i)
+            new_key = (gi, new_i)
+            row = self.rows.pop(old_key, None)
+            if row is not None:
+                slot = getattr(row, "_key_slot", None)
+                if slot is not None:
+                    slot[0] = gi
+                    slot[1] = new_i
+                self.rows[new_key] = row
+            if old_key in self.inv_vars:
+                self.inv_vars[new_key] = self.inv_vars.pop(old_key)
+            if old_key in self.use_vars:
+                self.use_vars[new_key] = self.use_vars.pop(old_key)
+
     def _remove_cond_by_key(self, key: tuple[int, int]):
         gi, ii = key
         if gi >= len(self.groups) or ii >= len(self.groups[gi]):
             return
-        snap = self._snapshot_inv_use_all()
+        row = self.rows.pop((gi, ii), None)
+        if row is not None:
+            try:
+                row.destroy()
+            except Exception:
+                pass
+        self.inv_vars.pop((gi, ii), None)
+        self.use_vars.pop((gi, ii), None)
         del self.groups[gi][ii]
-        self._rebuild_groups_ui()
-        # 還原 snapshot：同 group 內 ii 之後的鍵要左移 1
-        for (old_gi, old_ii), (inv, use) in snap.items():
-            if old_gi != gi:
-                new_key = (old_gi, old_ii)
-            elif old_ii < ii:
-                new_key = (old_gi, old_ii)
-            elif old_ii > ii:
-                new_key = (old_gi, old_ii - 1)
-            else:
-                continue
-            if new_key in self.inv_vars:
-                self.inv_vars[new_key].set(inv)
-            if new_key in self.use_vars:
-                self.use_vars[new_key].set(use)
+        self._shift_cond_keys_after_delete(gi, ii)
+        if not self.groups[gi]:
+            list_frame = self.group_frames[gi]["list_frame"]
+            try:
+                list_frame.pack_forget()
+            except Exception:
+                pass
         self._fire_change()
+
+    def _remap_group_meta_after_delete(self, deleted_gi: int) -> None:
+        """group 刪除後更新 group_frames 的 gi_slot／標題，以及 vars／rows 的 gi。"""
+        for new_gi in range(deleted_gi, len(self.group_frames)):
+            gf = self.group_frames[new_gi]
+            gf["gi_slot"][0] = new_gi
+            try:
+                gf["title_label"].configure(text=f"Group {new_gi + 1}")
+            except Exception:
+                pass
+
+        def _shift_var_dict(d: dict) -> None:
+            d.pop(deleted_gi, None)
+            for k in sorted([k for k in d if isinstance(k, int) and k > deleted_gi]):
+                d[k - 1] = d.pop(k)
+
+        _shift_var_dict(self.group_inv_vars)
+        _shift_var_dict(self.group_intra_op_vars)
+
+        new_rows: dict[tuple[int, int], ctk.CTkFrame] = {}
+        for (old_gi, ii), row in self.rows.items():
+            if old_gi == deleted_gi:
+                continue
+            new_gi = old_gi - 1 if old_gi > deleted_gi else old_gi
+            slot = getattr(row, "_key_slot", None)
+            if slot is not None:
+                slot[0] = new_gi
+                slot[1] = ii
+            new_rows[(new_gi, ii)] = row
+        self.rows = new_rows
+
+        def _shift_kv(d: dict) -> dict:
+            out = {}
+            for (old_gi, ii), var in d.items():
+                if old_gi == deleted_gi:
+                    continue
+                new_gi = old_gi - 1 if old_gi > deleted_gi else old_gi
+                out[(new_gi, ii)] = var
+            return out
+
+        self.inv_vars = _shift_kv(self.inv_vars)
+        self.use_vars = _shift_kv(self.use_vars)
 
     def _remove_group(self, gi: int):
         if gi >= len(self.groups):
             return
-        snap = self._snapshot_inv_use_all()
+        if gi < len(self.group_frames):
+            gf = self.group_frames.pop(gi)
+            try:
+                gf["frame"].destroy()
+            except Exception:
+                pass
+        # 清掉該 group 的 row／var（frame.destroy 已銷毁 widget）
+        for key in [k for k in self.rows if k[0] == gi]:
+            self.rows.pop(key, None)
+            self.inv_vars.pop(key, None)
+            self.use_vars.pop(key, None)
         del self.groups[gi]
         if gi < len(self.group_inv):
             del self.group_inv[gi]
@@ -373,35 +454,15 @@ class CondSectionFrame(ctk.CTkFrame):
             self.groups = [[]]
             self.group_inv = [False]
             self.group_intra_op = ["and"]
-        self._rebuild_groups_ui()
-        # 還原 snapshot：被移除 group 之後的 gi 要左移 1
-        for (old_gi, old_ii), (inv, use) in snap.items():
-            if old_gi < gi:
-                new_key = (old_gi, old_ii)
-            elif old_gi > gi:
-                new_key = (old_gi - 1, old_ii)
-            else:
-                continue
-            if new_key in self.inv_vars:
-                self.inv_vars[new_key].set(inv)
-            if new_key in self.use_vars:
-                self.use_vars[new_key].set(use)
+            self.group_inv_vars.clear()
+            self.group_intra_op_vars.clear()
+            self.rows.clear()
+            self.inv_vars.clear()
+            self.use_vars.clear()
+            self._add_group_ui(0)
+        else:
+            self._remap_group_meta_after_delete(gi)
         self._fire_change()
-
-    def _snapshot_inv_use_all(self) -> dict[tuple[int, int], tuple[bool, str]]:
-        snap = {}
-        keys = set(self.inv_vars.keys()) | set(self.use_vars.keys())
-        for k in keys:
-            try:
-                inv = bool(self.inv_vars[k].get()) if k in self.inv_vars else False
-            except Exception:
-                inv = False
-            try:
-                use = self.use_vars[k].get() if k in self.use_vars else "Node"
-            except Exception:
-                use = "Node"
-            snap[k] = (inv, use)
-        return snap
 
     # ---- row drag ----
     def _on_cond_drag_start(self, gi: int, ii: int):
@@ -539,36 +600,27 @@ class CondSectionFrame(ctk.CTkFrame):
             return
         if not (0 <= from_idx < len(group)) or not (0 <= to_idx < len(group)):
             return
-        snap = self._snapshot_inv_use_in_group(gi)
         new_order = list(range(len(group)))
         moved = new_order.pop(from_idx)
         new_order.insert(to_idx, moved)
         self.groups[gi] = [group[old] for old in new_order]
-        self._rebuild_groups_ui()
+        # 視覺已在 drag 時排好；只重編 key，不 destroy
+        n = len(new_order)
+        old_rows = {i: self.rows.pop((gi, i)) for i in range(n) if (gi, i) in self.rows}
+        old_inv = {i: self.inv_vars.pop((gi, i)) for i in range(n) if (gi, i) in self.inv_vars}
+        old_use = {i: self.use_vars.pop((gi, i)) for i in range(n) if (gi, i) in self.use_vars}
         for new_i, old_i in enumerate(new_order):
-            new_key = (gi, new_i)
-            if old_i in snap:
-                inv, use = snap[old_i]
-                if new_key in self.inv_vars:
-                    self.inv_vars[new_key].set(inv)
-                if new_key in self.use_vars:
-                    self.use_vars[new_key].set(use)
-
-    def _snapshot_inv_use_in_group(self, gi: int) -> dict[int, tuple[bool, str]]:
-        snap = {}
-        n = len(self.groups[gi])
-        for i in range(n):
-            key = (gi, i)
-            try:
-                inv = bool(self.inv_vars[key].get()) if key in self.inv_vars else False
-            except Exception:
-                inv = False
-            try:
-                use = self.use_vars[key].get() if key in self.use_vars else "Node"
-            except Exception:
-                use = "Node"
-            snap[i] = (inv, use)
-        return snap
+            row = old_rows.get(old_i)
+            if row is not None:
+                slot = getattr(row, "_key_slot", None)
+                if slot is not None:
+                    slot[0] = gi
+                    slot[1] = new_i
+                self.rows[(gi, new_i)] = row
+            if old_i in old_inv:
+                self.inv_vars[(gi, new_i)] = old_inv[old_i]
+            if old_i in old_use:
+                self.use_vars[(gi, new_i)] = old_use[old_i]
 
     # ---- group drag ----
     def _on_group_drag_start(self, gi: int):
@@ -681,7 +733,6 @@ class CondSectionFrame(ctk.CTkFrame):
             return
         if not (0 <= from_idx < len(self.groups)) or not (0 <= to_idx < len(self.groups)):
             return
-        snap_all = self._snapshot_inv_use_all()
         new_order = list(range(len(self.groups)))
         moved = new_order.pop(from_idx)
         new_order.insert(to_idx, moved)
@@ -690,17 +741,44 @@ class CondSectionFrame(ctk.CTkFrame):
         self.group_inv[:] = [self.group_inv[old] for old in new_order]
         self._sync_group_intra_op_len()
         self.group_intra_op[:] = [self.group_intra_op[old] for old in new_order]
-        self._rebuild_groups_ui()
-        for new_gi, old_gi in enumerate(new_order):
-            for ii in range(len(self.groups[new_gi])):
-                new_key = (new_gi, ii)
-                old_key = (old_gi, ii)
-                if old_key in snap_all:
-                    inv, use = snap_all[old_key]
-                    if new_key in self.inv_vars:
-                        self.inv_vars[new_key].set(inv)
-                    if new_key in self.use_vars:
-                        self.use_vars[new_key].set(use)
+        # 視覺已排好；只重排 group_frames 與 key
+        self.group_frames[:] = [self.group_frames[old] for old in new_order]
+        old_to_new = {old: new for new, old in enumerate(new_order)}
+
+        new_rows: dict[tuple[int, int], ctk.CTkFrame] = {}
+        for (old_gi, ii), row in self.rows.items():
+            new_gi = old_to_new[old_gi]
+            slot = getattr(row, "_key_slot", None)
+            if slot is not None:
+                slot[0] = new_gi
+                slot[1] = ii
+            new_rows[(new_gi, ii)] = row
+        self.rows = new_rows
+
+        def _remap_pair_dict(d: dict) -> dict:
+            out = {}
+            for (old_gi, ii), var in d.items():
+                out[(old_to_new[old_gi], ii)] = var
+            return out
+
+        self.inv_vars = _remap_pair_dict(self.inv_vars)
+        self.use_vars = _remap_pair_dict(self.use_vars)
+
+        new_g_inv = {}
+        for old_gi, var in self.group_inv_vars.items():
+            new_g_inv[old_to_new[old_gi]] = var
+        self.group_inv_vars = new_g_inv
+        new_g_op = {}
+        for old_gi, var in self.group_intra_op_vars.items():
+            new_g_op[old_to_new[old_gi]] = var
+        self.group_intra_op_vars = new_g_op
+
+        for new_gi, gf in enumerate(self.group_frames):
+            gf["gi_slot"][0] = new_gi
+            try:
+                gf["title_label"].configure(text=f"Group {new_gi + 1}")
+            except Exception:
+                pass
 
     # ---- getters for RailEditorFrame.get_rail() ----
     def get_groups(self) -> list[list[str]]:
