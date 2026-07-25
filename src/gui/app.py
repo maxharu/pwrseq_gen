@@ -53,6 +53,18 @@ from gui.settings import GuiSettings, RecentFiles
 logger = get_logger(__name__)
 
 
+def _write_config_file(cfg: PowerSeqConfig, path: str) -> None:
+    """Write config to disk by extension. Pure I/O; safe to call off-main-thread."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".xlsx", ".xlsm", ".xls"):
+        from excel_export import export_powerseq_to_excel
+
+        export_powerseq_to_excel(cfg, path)
+    else:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cfg.to_dict(), f, indent=2, ensure_ascii=False)
+
+
 class PowerSeqGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -63,6 +75,7 @@ class PowerSeqGUI(ctk.CTk):
         self.config_obj = PowerSeqConfig()
 
         self._dirty = False
+        self._saving = False
         self._topmost = False
         self._inspect_mode = False
         self._show_preview = True
@@ -83,8 +96,16 @@ class PowerSeqGUI(ctk.CTk):
         self._build_ui()
         self._bind_shortcuts()
         self._refresh_all()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after_idle(self._apply_paned_layout)
         self.after_idle(self.node_list._sync_scroll_height)
+
+    def _on_close(self) -> None:
+        # 存檔中關閉會硬砍 daemon thread → 檔案可能寫一半損毀，先擋下。
+        if self._saving:
+            self._status_msg("Saving… please wait before closing", level="warn")
+            return
+        self.destroy()
 
     # ---- UI ----
     def _tt(self, widget, text: str):
@@ -122,12 +143,12 @@ class PowerSeqGUI(ctk.CTk):
         self._recent_btn = ctk.CTkButton(toolbar, text="\u25BC", width=24, command=self._show_recent_menu)
         self._recent_btn.pack(side="left", padx=(0, S_SM))
         self._tt(self._recent_btn, "Recent files")
-        b_save = ctk.CTkButton(toolbar, text="Save", width=70, command=self._save_json)
-        b_save.pack(side="left", padx=(0, S_XS))
-        self._tt(b_save, "Save JSON or Excel  (Ctrl+S)")
-        b_saveas = ctk.CTkButton(toolbar, text="Save As...", width=80, command=self._save_json_as)
-        b_saveas.pack(side="left", padx=(0, S_SM))
-        self._tt(b_saveas, "Save As JSON or Excel  (Ctrl+Shift+S)")
+        self._save_btn = ctk.CTkButton(toolbar, text="Save", width=70, command=self._save_json)
+        self._save_btn.pack(side="left", padx=(0, S_XS))
+        self._tt(self._save_btn, "Save JSON or Excel  (Ctrl+S)")
+        self._saveas_btn = ctk.CTkButton(toolbar, text="Save As...", width=80, command=self._save_json_as)
+        self._saveas_btn.pack(side="left", padx=(0, S_SM))
+        self._tt(self._saveas_btn, "Save As JSON or Excel  (Ctrl+Shift+S)")
 
         self._sep(toolbar)
 
@@ -346,6 +367,10 @@ class PowerSeqGUI(ctk.CTk):
         self._delete_selected()
 
     def _on_delete_key(self, _event):
+        # 焦點在任何輸入框時，Delete 交給 Entry/Text 自己刪字元，不刪 node
+        focused = self.focus_get()
+        if isinstance(focused, (tk.Entry, tk.Text)):
+            return
         if not self._node_list_delete_armed:
             return
         if not self.node_list.get_selection():
@@ -376,9 +401,9 @@ class PowerSeqGUI(ctk.CTk):
         n_in = sum(1 for r in self.config_obj.rails if r.seq_type == "input")
         self._status.set_stats(n, n_out, n_in)
 
-    def _status_msg(self, msg: str, level: str = "info"):
+    def _status_msg(self, msg: str, level: str = "info", auto_clear_ms: int = 5000):
         if hasattr(self, "_status"):
-            self._status.set_message(msg, level)
+            self._status.set_message(msg, level, auto_clear_ms=auto_clear_ms)
 
     # ---- undo / redo ----
     def _push_undo(self):
@@ -499,6 +524,7 @@ class PowerSeqGUI(ctk.CTk):
             self._apply_inspect_mode()
             primary = self.node_list.get_primary()
             self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
+            self._refresh_all_dep_options()
             self._update_validation()
             self._schedule_preview()
             return
@@ -507,6 +533,7 @@ class PowerSeqGUI(ctk.CTk):
             cf.update_summary()
             primary = self.node_list.get_primary()
             self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
+            self._refresh_all_dep_options()
             self._update_validation()
             self._schedule_preview()
             return
@@ -565,6 +592,12 @@ class PowerSeqGUI(ctk.CTk):
 
     def _get_all_rails(self) -> list[PowerRail]:
         return self.config_obj.rails
+
+    def _refresh_all_dep_options(self) -> None:
+        """只更新已開啟編輯器的 Cond signal 下拉 values（非整頁重建）。"""
+        for cf in self.collapsible_frames:
+            if cf.editor is not None:
+                cf.editor.refresh_dep_options()
 
     # ---- refresh ----
     def _refresh_all(self):
@@ -653,6 +686,7 @@ class PowerSeqGUI(ctk.CTk):
         self.node_list._apply_row_bgs()
         self.node_list.on_multi_change(set(selected))
         self._apply_inspect_mode()
+        self._refresh_all_dep_options()
         self._update_stats()
         self._schedule_preview()
 
@@ -699,6 +733,7 @@ class PowerSeqGUI(ctk.CTk):
         self.node_list._selected = {primary}
         self.node_list._apply_row_bgs()
         self._apply_inspect_mode()
+        self._refresh_all_dep_options()
         self._update_validation()
         self._schedule_preview()
         self._update_stats()
@@ -721,6 +756,7 @@ class PowerSeqGUI(ctk.CTk):
         self._mark_dirty()
         self.node_list.set_rails(self.config_obj.rails, primary_idx=None)
         self._apply_inspect_mode()
+        self._refresh_all_dep_options()
         self._update_validation()
         self._schedule_preview()
         self._update_stats()
@@ -752,6 +788,7 @@ class PowerSeqGUI(ctk.CTk):
         primary = self.node_list.get_primary()
         self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
         self._apply_inspect_mode()
+        self._refresh_all_dep_options()
         self._update_validation()
         self._schedule_preview()
         self._update_stats()
@@ -1251,6 +1288,9 @@ class PowerSeqGUI(ctk.CTk):
         return self._save_json_as()
 
     def _save_json_as(self):
+        if self._saving:
+            self._status_msg("Saving in progress… please wait", level="warn")
+            return
         cfg = self._collect_config()
         initial = os.path.basename(self._current_path) if self._current_path else "powerseq.json"
         cur_ext = os.path.splitext(self._current_path or "")[1].lower()
@@ -1273,26 +1313,76 @@ class PowerSeqGUI(ctk.CTk):
         return self._save_to(path, cfg)
 
     def _save_to(self, path: str, cfg: Optional[PowerSeqConfig] = None):
+        if self._saving:
+            self._status_msg("Saving in progress… please wait", level="warn")
+            return
+        # collect 必須在主緒（讀取 widget）；檔案 I/O 才丟背景緒。
         if cfg is None:
             cfg = self._collect_config()
-        try:
-            ext = os.path.splitext(path)[1].lower()
-            if ext in (".xlsx", ".xlsm", ".xls"):
-                from excel_export import export_powerseq_to_excel
+        ext = os.path.splitext(path)[1].lower()
 
-                export_powerseq_to_excel(cfg, path)
-            else:
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(cfg.to_dict(), f, indent=2, ensure_ascii=False)
-            self.config_obj = cfg
-            self._current_path = path
-            self._recent.add(path)
-            self._mark_clean()
-            self._status_msg(f"Saved: {os.path.basename(path)}", level="success")
-        except Exception as e:
-            logger.exception("Save failed")
-            messagebox.showerror("Error", str(e))
-            self._status_msg(f"Save failed: {e}", level="error")
+        self._saving = True
+        self._set_save_enabled(False)
+        if hasattr(self, "_status"):
+            self._status.set_busy(True)
+        self._status_msg(f"Saving: {os.path.basename(path)}…", level="info", auto_clear_ms=0)
+
+        def worker() -> None:
+            com_inited = False
+            try:
+                if ext == ".xlsm":
+                    # win32com 為 apartment-threaded，背景緒須先 CoInitialize。
+                    try:
+                        import pythoncom  # type: ignore[import-untyped]
+
+                        pythoncom.CoInitialize()
+                        com_inited = True
+                    except Exception:
+                        com_inited = False
+                _write_config_file(cfg, path)
+                self.after(0, lambda: self._on_save_done(path, cfg))
+            except Exception as e:
+                logger.exception("Save failed")
+                self.after(0, lambda err=e: self._on_save_error(err))
+            finally:
+                if com_inited:
+                    try:
+                        import pythoncom  # type: ignore[import-untyped]
+
+                        pythoncom.CoUninitialize()
+                    except Exception:
+                        pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_save_done(self, path: str, cfg: PowerSeqConfig) -> None:
+        self._saving = False
+        self._set_save_enabled(True)
+        if hasattr(self, "_status"):
+            self._status.set_busy(False)
+        self.config_obj = cfg
+        self._current_path = path
+        self._recent.add(path)
+        self._mark_clean()
+        self._status_msg(f"Saved: {os.path.basename(path)}", level="success")
+
+    def _on_save_error(self, e: Exception) -> None:
+        self._saving = False
+        self._set_save_enabled(True)
+        if hasattr(self, "_status"):
+            self._status.set_busy(False)
+        messagebox.showerror("Error", str(e))
+        self._status_msg(f"Save failed: {e}", level="error")
+
+    def _set_save_enabled(self, enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        for name in ("_save_btn", "_saveas_btn"):
+            btn = getattr(self, name, None)
+            if btn is not None:
+                try:
+                    btn.configure(state=state)
+                except Exception:
+                    pass
 
     def _on_generate_menu(self, choice: str):
         if choice == "Verilog":

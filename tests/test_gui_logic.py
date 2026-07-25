@@ -1,7 +1,76 @@
 """Tests for GUI pure logic extracted from PowerSeqGUI."""
 import os
 
+import pytest
+
 from snapshot_history import SnapshotHistory
+
+
+class TestWriteConfigFile:
+    def test_json_write_roundtrip(self, tmp_path):
+        import json
+
+        pytest.importorskip("customtkinter")
+        from config_models import PowerRail, PowerSeqConfig
+        from gui.app import _write_config_file
+
+        cfg = PowerSeqConfig(rails=[PowerRail("A", seq_type="input")])
+        path = tmp_path / "out.json"
+        _write_config_file(cfg, str(path))
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert data["rails"][0]["name"] == "A"
+
+
+def _can_create_ctk() -> bool:
+    try:
+        import customtkinter as ctk
+
+        root = ctk.CTk()
+        root.withdraw()
+        root.destroy()
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _can_create_ctk(), reason="CustomTkinter/display unavailable")
+class TestCondDepOptionsRefresh:
+    def test_refresh_updates_combo_values_after_rename(self):
+        import customtkinter as ctk
+        from gui.widgets import CondSectionFrame
+
+        names = ["SIG_1", "SIG_2"]
+
+        def get_opts():
+            return list(names) + ["High", "Low"]
+
+        root = ctk.CTk()
+        root.withdraw()
+        try:
+            sec = CondSectionFrame(
+                root,
+                kind="hi",
+                get_dep_options=get_opts,
+                is_pseqcell_for=lambda _n: True,
+                initial_groups=[[]],
+                initial_inv_groups=[],
+                initial_use_groups=[],
+                initial_inv_flat={},
+                initial_use_flat={},
+            )
+            combo = sec.group_frames[0]["combo"]
+            assert "SIG_1" in combo.cget("values")
+            assert "RENAMED" not in combo.cget("values")
+
+            names[0] = "RENAMED"
+            sec.refresh_dep_options()
+            vals = list(combo.cget("values"))
+            assert "RENAMED" in vals
+            assert "SIG_1" not in vals
+            assert vals[-2:] == ["High", "Low"]
+        finally:
+            root.destroy()
 
 
 class TestSnapshotHistory:

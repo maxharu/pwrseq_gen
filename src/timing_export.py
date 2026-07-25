@@ -141,35 +141,43 @@ def _leaf_deps_for_edge(
     consumer_kind: str,
     name_to_rail: dict[str, PowerRail],
     chain: frozenset[str] | None = None,
-) -> list[str]:
+) -> list[tuple[str, bool]]:
+    """Leaf deps with inv relative to making this condition term true.
+
+    For use=self/force the leaf is ``dep_name`` with path_inv=False (caller
+    XORs the owner's term inv). For use=hi/lo, recurse into the dependency
+    rail's condition and accumulate per-term inv along the path.
+    """
     dep_rail = name_to_rail.get(dep_name)
     if not dep_rail or dep_name in (DEP_HIGH, DEP_LOW):
         return []
     if dep_rail.seq_type == "input":
-        return [dep_name]
+        return [(dep_name, False)]
 
     get_use = owner.get_hi_use if consumer_kind == "hi" else owner.get_lo_use
     use = get_use(group_idx, item_idx, dep_name)
     if use in ("self", "force"):
-        return [dep_name]
+        return [(dep_name, False)]
     if use not in ("hi", "lo"):
-        return [dep_name]
+        return [(dep_name, False)]
 
     visited = chain or frozenset()
     if dep_name in visited:
-        return [dep_name]
+        return [(dep_name, False)]
 
     cond_kind = use
     groups = (
         dep_rail.get_hi_groups() if cond_kind == "hi" else dep_rail.get_lo_groups()
     )
     if not groups or not any(groups):
-        return [dep_name]
+        return [(dep_name, False)]
 
-    leaves: list[str] = []
+    get_inv = dep_rail.get_hi_inv if cond_kind == "hi" else dep_rail.get_lo_inv
+    leaves: list[tuple[str, bool]] = []
     seen: set[str] = set()
     for gi, ii, sub in _unique_group_deps(groups):
-        for leaf in _leaf_deps_for_edge(
+        sub_inv = bool(get_inv(gi, ii, sub))
+        for leaf, path_inv in _leaf_deps_for_edge(
             sub,
             dep_rail,
             gi,
@@ -178,10 +186,11 @@ def _leaf_deps_for_edge(
             name_to_rail,
             visited | {dep_name},
         ):
+            effective = sub_inv ^ path_inv
             if leaf not in seen:
                 seen.add(leaf)
-                leaves.append(leaf)
-    return leaves if leaves else [dep_name]
+                leaves.append((leaf, effective))
+    return leaves if leaves else [(dep_name, False)]
 
 
 def _dep_bits_series(
@@ -201,12 +210,13 @@ def _dep_bits_series(
 def _dep_trigger_step(
     dep_bits: list[int] | None,
     *,
-    kind: str,
+    inv: bool,
 ) -> int | None:
+    """Step where dep makes the (possibly inverted) condition become true."""
     if not dep_bits:
         return None
-    rising = kind == "hi"
-    return _first_transition_step(dep_bits, rising=rising)
+    # inv=False → true on high → trigger on rising; inv=True → on falling
+    return _first_transition_step(dep_bits, rising=not inv)
 
 
 def _build_export_lanes(
@@ -280,7 +290,9 @@ def _collect_condition_edge_pending(
                 continue
 
             for gi, ii, dep in _unique_group_deps(groups):
-                for leaf in _leaf_deps_for_edge(
+                get_inv = rail.get_hi_inv if kind == "hi" else rail.get_lo_inv
+                term_inv = bool(get_inv(gi, ii, dep))
+                for leaf, path_inv in _leaf_deps_for_edge(
                     dep, rail, gi, ii, kind, name_to_rail,
                 ):
                     dep_rail = name_to_rail.get(leaf)
@@ -290,7 +302,9 @@ def _collect_condition_edge_pending(
                     if not dep_lane:
                         continue
                     dep_bits = _dep_bits_series(leaf, name_to_rail, result)
-                    dep_step = _dep_trigger_step(dep_bits, kind=kind)
+                    dep_step = _dep_trigger_step(
+                        dep_bits, inv=term_inv ^ path_inv,
+                    )
                     if dep_step is None:
                         continue
                     if dep_step > out_step:

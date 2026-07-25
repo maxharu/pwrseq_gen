@@ -27,3 +27,8 @@ doc/
 
 # Excel lock files
 ~$*
+
+# Proprietary X15SNW project files (private board — keep out of public repo)
+src/reference/x15_pseq.v
+templates/x15snw.xlsm
+templates/x15snw_pseq.v
