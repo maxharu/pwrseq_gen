@@ -115,6 +115,20 @@ class CondSectionFrame(ctk.CTkFrame):
             except Exception:
                 pass
 
+    def refresh_dep_options(self) -> None:
+        """只更新各 group 的 signal ComboBox values（不重建 UI）。"""
+        opts = self.get_dep_options() or [""]
+        for gf in self.group_frames:
+            combo = gf.get("combo")
+            if combo is None:
+                continue
+            cur = combo.get()
+            combo.configure(values=opts)
+            if cur in opts:
+                combo.set(cur)
+            else:
+                combo.set(opts[0])
+
     def _sync_group_inv_len(self):
         """讓 self.group_inv 與 self.groups 等長（補 False / 截斷）。"""
         n = len(self.groups)
@@ -1019,6 +1033,9 @@ class InputWaveSidePanel(ctk.CTkFrame):
             out["intra_op"] = self._cond_section.get_group_intra_op()
         return out
 
+    def refresh_dep_options(self) -> None:
+        self._cond_section.refresh_dep_options()
+
 
 class InputWaveCondFrame(ctk.CTkFrame):
     """Input 節點 Timing Hi/Lo Cond（Tab 風格與 Output Conditions 一致）。"""
@@ -1091,6 +1108,10 @@ class InputWaveCondFrame(ctk.CTkFrame):
             lo_intra_op=lo.get("intra_op") or [],
         )
 
+    def refresh_dep_options(self) -> None:
+        self._hi_panel.refresh_dep_options()
+        self._lo_panel.refresh_dep_options()
+
 
 # ============================================================
 # RailEditorFrame — 單一 rail 的屬性編輯面板
@@ -1120,6 +1141,12 @@ class RailEditorFrame(ctk.CTkFrame):
     def _dep_options(self) -> list[str]:
         # 允許選自己：output 可參照自身的 Hi/Lo/Force condition（用 use 下拉指定欄位）
         return [r.name for r in self.get_all_rails()] + ["High", "Low"]
+
+    def refresh_dep_options(self) -> None:
+        """刷新 Conditions / Input Timing 的 signal 下拉名單。"""
+        for sec in self.cond_sections.values():
+            sec.refresh_dep_options()
+        self.input_wave_frame.refresh_dep_options()
 
     def _is_pseqcell_for(self, name: str) -> bool:
         if name in (DEP_HIGH, DEP_LOW):
@@ -1172,8 +1199,8 @@ class RailEditorFrame(ctk.CTkFrame):
         self._type_seg.set(SEQ_TYPE_LABELS.get(self.rail.seq_type, "Output"))
         self._type_seg.pack(side="left")
 
-        # --- Timing (output only) ---
-        self.timing_wrap, timing_body = self._make_section("Timing")
+        # --- Timing (output only): CYCLE / Pulse for PSEQCELL ---
+        self.pseq_timing_wrap, timing_body = self._make_section("Timing")
         grid_t = ctk.CTkFrame(timing_body, fg_color="transparent")
         grid_t.pack(fill="x", padx=S_SM, pady=S_SM)
         for c in range(4):
@@ -1326,10 +1353,10 @@ class RailEditorFrame(ctk.CTkFrame):
         cmb_deb_pulse = ctk.CTkComboBox(grid_d, values=deb_pulses, variable=self.var_deb_pulse, width=130)
         cmb_deb_pulse.grid(row=2, column=1, sticky="w", padx=(0, S_LG), pady=2)
 
-        # --- Timing Hi/Lo (input only) ---
-        self.timing_wrap, timing_body = self._make_section("Timing Hi/Lo")
+        # --- Timing Hi/Lo (input only): Schemdraw / timing-sim stimulus ---
+        self.input_wave_wrap, wave_body = self._make_section("Timing Hi/Lo")
         self.input_wave_frame = InputWaveCondFrame(
-            timing_body,
+            wave_body,
             self._initial_input_wave_spec,
             get_dep_options=self._dep_options,
             is_pseqcell_for=self._is_pseqcell_for,
@@ -1385,15 +1412,15 @@ class RailEditorFrame(ctk.CTkFrame):
     def _on_type_toggle(self, initial: bool = False):
         is_input = self.var_type.get() == "input"
         if is_input:
-            self.timing_wrap.pack_forget()
+            self.pseq_timing_wrap.pack_forget()
             self.cond_wrap.pack_forget()
             self.deb_wrap.pack(fill="x", pady=(0, S_SM))
-            self.timing_wrap.pack(fill="x", pady=(0, S_SM))
+            self.input_wave_wrap.pack(fill="x", pady=(0, S_SM))
             self._on_deb_toggle(initial=initial)
         else:
             self.deb_wrap.pack_forget()
-            self.timing_wrap.pack_forget()
-            self.timing_wrap.pack(fill="x", pady=(0, S_SM))
+            self.input_wave_wrap.pack_forget()
+            self.pseq_timing_wrap.pack(fill="x", pady=(0, S_SM))
             self.cond_wrap.pack(fill="x", pady=(0, S_SM))
         self._repack_apply_row()
 
@@ -1744,7 +1771,20 @@ class StatusBar(ctk.CTkFrame):
             text_color=("gray35", "gray65"),
         )
         self._author_lbl.pack(side="right", padx=(S_SM, 0))
+        self._progress = ctk.CTkProgressBar(self, width=90, height=10, mode="indeterminate")
         self._msg_after_id: Optional[str] = None
+
+    def set_busy(self, on: bool):
+        """存檔等背景工作時顯示不定量進度條。"""
+        try:
+            if on:
+                self._progress.pack(side="right", padx=(S_SM, 0))
+                self._progress.start()
+            else:
+                self._progress.stop()
+                self._progress.pack_forget()
+        except Exception:
+            pass
 
     def set_file(self, path: Optional[str], dirty: bool):
         if path is None:

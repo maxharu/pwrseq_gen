@@ -798,7 +798,7 @@ def _add_pseqcell_group(
     part(_PSEQCELL_STYLE_INNER, "", 0, 0, CELL_INNER_W, CELL_INNER_H)
     h_deb_id = part(
         _PSEQCELL_STYLE_H_DEB,
-        _deb_port_label("H", rail.deb_cycle_hi, rail.pulse_hi),
+        _deb_port_label("H", rail.cycle_hi, rail.pulse_hi),
         0,
         CELL_H_DEB_Y,
         CELL_H_DEB_W,
@@ -806,7 +806,7 @@ def _add_pseqcell_group(
     )
     l_deb_id = part(
         _PSEQCELL_STYLE_L_DEB,
-        _deb_port_label("L", rail.deb_cycle_lo, rail.pulse_lo),
+        _deb_port_label("L", rail.cycle_lo, rail.pulse_lo),
         0,
         CELL_L_DEB_Y,
         CELL_L_DEB_W,
