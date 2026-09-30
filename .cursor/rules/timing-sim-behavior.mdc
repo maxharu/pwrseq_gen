@@ -38,6 +38,18 @@ fsm.commit(hi_c, lo_c, force) # Pass B：評估條件、arm 下一拍
 - 結果：來源**轉態**後，消費端在**下一 T**（+1）轉態，回授路徑與一般路徑一致。不要把這段改回「邊套邊評估」的單段 tick，否則 back-edge 會重新出現 +1 lag。
 - 唯一近似：被 `force` 即時覆寫的 rail，其 force 後準位只在 Pass B 依拓樸序更新；若被排在更前面的 back-edge 讀其準位，讀到的是 Pass A（force 前）值。force 極少作為 self 來源，可接受。
 
+## 4. Input 起始準位一律由 DEB INIT 決定
+
+- input 的初始 GPIO ＝ `PowerRail.deb_init`（Excel Nodes 表 INIT 欄；output 對應 `init`），**與 debounce 是否啟用無關**。
+- Hi/Lo 的四種 mode 只描述**條件何時成立**，不指定訊號準位：
+  - `Low (0)`（`constant_0`）＝該條件恆不成立
+  - `High (1)`（`constant_1`）＝該條件恆成立
+  - `Custom wave` / `Signal cond.` ＝依 wave／條件群組
+- 因此 `High (1)` 在 INIT=0 時仍從 L 起始、**下一 T** 才拉高（與第 1 節 rise/fall 對稱一致）。不可在 `_input_apply_armed` / `_input_rearm` 針對 constant 模式硬釘準位（會蓋掉 INIT，這是舊 bug）。
+- 實作位置：`simulate()` 以 `_PermitGpioFsm(1 if r.deb_init else 0)` 建立 input FSM；`_input_enable_flags` 須把 `constant_1` 視為「可成立」的條件來源；`_input_inst_hi_lo` 的 Hi **與 Lo 兩側**都要處理 `constant_1` → 1。
+
 ## 驗證
 
 `tests/test_timing_sim.py`：`test_output_lo_falls_next_step_ignoring_cycle_lo`（fall == lo_step+1，即使 cycle_lo=4）、`test_output_lo_self_dep_falls_next_step`（dst_fall == src_fall+1）、`test_cycle_hi_ignored_on_output`（rise 不模擬 cycle_hi）。`output/power.json` 實測：`RSMRST_N`@32→`PCH_P0V85A_EN`/`PVNNAON_EN`@33、`PCH_PWROK`@28→`PVCCDD2_EN`@29，皆為來源轉態後 +1T。
+
+起始準位（第 4 節）：`TestInputInitialPolarity`—`test_custom_wave_starts_high_when_deb_init_1`、`test_deb_disabled_still_honors_deb_init`、`test_hi_always_true_starts_from_init_then_rises`、`test_hi_always_false_holds_init_high`、`test_lo_always_true_falls_from_init_high`。
