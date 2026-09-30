@@ -112,7 +112,7 @@ Edge: label → Deb, Hi/Lo stroke.
 |--------|------------|--------|
 | Input GPIO, `use=self` | `NAME` or `~NAME` if inv | Yes, inside block |
 | Output GPIO, `use=self` | `NAME` or `~NAME` | Yes |
-| `use=hi` / `use=lo` | **`{internal_sig}_{hi\|lo}`** (purple cond HTML) | Yes, but text only — **not** a cross-page wire |
+| `use=hi` / `use=lo` | **`{internal_sig}_{hi\|lo}`**, or `~{internal_sig}_{hi\|lo}` if inv (purple cond HTML) | Yes, but text only — **not** a cross-page wire |
 | `use=force` | — | **Skipped** (not drawn) |
 | `__HIGH__` / `__LOW__` | — | Skipped |
 

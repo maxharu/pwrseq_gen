@@ -17,6 +17,7 @@ from drawio_cell_export import (
     _child_merge_channel,
     _export_wire_extra_for_name,
     _merge_lane_label_w,
+    _resolve_term,
 )
 from drawio_export import (
     AND_GATE_H,
@@ -598,3 +599,42 @@ class TestCellCentricDrawio:
             y = float(g.get("y", 0))
             assert x % GRID == 0, f"cell x={x} not on {GRID}pt grid"
             assert y % GRID == 0, f"cell y={y} not on {GRID}pt grid"
+
+
+class TestReferencedCondInversion:
+    """引用他人 Hi/Lo 條件時，inv 必須顯示 ~（與 Verilog 一致）。"""
+
+    def test_resolve_term_inverts_referenced_lo_cond(self):
+        t = _resolve_term("P12V_AUX_EN_N", True, "lo", {})
+        assert t.text == "~p12v_aux_en_n_lo"
+        assert t.is_cond
+
+    def test_resolve_term_inverts_referenced_hi_cond(self):
+        assert _resolve_term("VDD", True, "hi", {}).text == "~vdd_hi"
+
+    def test_resolve_term_keeps_referenced_cond_plain_when_not_inv(self):
+        assert _resolve_term("VDD", False, "lo", {}).text == "vdd_lo"
+
+    def test_resolve_term_still_inverts_self_dep(self):
+        assert _resolve_term("VDD", True, "self", {}).text == "~VDD"
+
+    def test_drawio_label_shows_inverted_referenced_cond(self):
+        cfg = PowerSeqConfig(
+            rails=[
+                PowerRail("PSU_EN", seq_type="input"),
+                PowerRail(
+                    "P12V_AUX_EN_N",
+                    seq_type="output",
+                    init=1,
+                    depends_on_hi_groups=[["P12V_AUX_EN_N"]],
+                    depends_on_hi_inv_groups=[[True]],
+                    depends_on_hi_use_groups=[["lo"]],
+                    depends_on_lo_groups=[["PSU_EN"]],
+                    depends_on_lo_inv_groups=[[False]],
+                    depends_on_lo_use_groups=[["self"]],
+                ),
+            ],
+        )
+        xml = generate_drawio(cfg)
+        assert "~p12v_aux_en_n_lo" in xml
+        assert ">p12v_aux_en_n_lo<" not in xml

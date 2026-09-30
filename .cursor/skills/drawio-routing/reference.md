@@ -34,7 +34,7 @@ Stroke colors (`drawio_geometry.py`):
 | `_wire_and_branch` | 1 term: label→Deb/OR; 2–7: one gate; ≥8: child→merge + merge-lane labels |
 | `_wire_or_fanin` | 1 branch: direct Deb; 2–7: one OR; ≥8: child OR→merge OR/NOR |
 | `_parse_path_group_terms` | Config groups → filtered `list[list[_Term]]` |
-| `_resolve_term` | Build label text; `use=hi/lo` → purple cond name |
+| `_resolve_term` | Build label text; `inv` → `~` prefix in **every** use mode; `use=hi/lo` → purple cond name |
 | `_export_edge_label` | HTML for Deb edge export net name |
 
 ## Placement helpers used by routing (same file)
