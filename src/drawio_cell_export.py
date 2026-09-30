@@ -232,7 +232,10 @@ def _resolve_term(
     if use == "force":
         return None
     if use in ("hi", "lo"):
-        return _Term(f"{_internal_sig(dep)}_{use}", is_cond=True)
+        text = f"{_internal_sig(dep)}_{use}"
+        if inv:
+            text = f"~{text}"
+        return _Term(text, is_cond=True)
     text = dep
     if inv:
         text = f"~{text}"
