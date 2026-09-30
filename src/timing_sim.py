@@ -365,6 +365,8 @@ def _input_inst_hi_lo(
             name_to_rail, raw, out_hi, out_lo, out_val,
             spec.lo_group_inv, spec.lo_intra_op,
         )
+    elif spec.lo_mode == "constant_1":
+        lo = 1
     elif spec.lo_mode == "custom":
         lo = lo_wave_bits[step] if step < len(lo_wave_bits) else 0
     return hi, lo
@@ -382,13 +384,14 @@ def _input_permit_hi_c(spec: InputWaveSpec, inst_hi: int) -> int:
 
 
 def _input_enable_flags(spec: InputWaveSpec) -> tuple[bool, bool]:
+    """該 lane 的條件是否可能成立（"High (1)" 恆成立、"Low (0)" 恆不成立）。"""
     enable_hi = (
         (spec.hi_mode == "depends" and bool(spec.hi_groups))
-        or spec.hi_mode == "custom"
+        or spec.hi_mode in ("custom", "constant_1")
     )
     enable_lo = (
         (spec.lo_mode == "depends" and bool(spec.lo_groups))
-        or spec.lo_mode == "custom"
+        or spec.lo_mode in ("custom", "constant_1")
     )
     return enable_hi, enable_lo
 
@@ -396,13 +399,6 @@ def _input_enable_flags(spec: InputWaveSpec) -> tuple[bool, bool]:
 def _input_apply_armed(spec: InputWaveSpec, fsm: _PermitGpioFsm) -> int:
     """Phase A：套用上一拍 arm 的邊，回傳當拍 GPIO（不評估條件，順序無關）。"""
     enable_hi, enable_lo = _input_enable_flags(spec)
-    if spec.hi_mode == "constant_0":
-        return 0
-    if spec.hi_mode == "constant_1":
-        if enable_lo:
-            fsm.apply_armed(rise_on_hi=False, fall_on_lo=True)
-            return fsm.gpio
-        return 1
     if enable_hi or enable_lo:
         fsm.apply_armed(rise_on_hi=enable_hi, fall_on_lo=enable_lo)
     return fsm.gpio
@@ -413,13 +409,6 @@ def _input_rearm(
 ) -> None:
     """Phase B：依當拍條件重新 arm（下一拍才翻轉）。"""
     enable_hi, enable_lo = _input_enable_flags(spec)
-    if spec.hi_mode == "constant_0":
-        return
-    if spec.hi_mode == "constant_1":
-        if enable_lo:
-            lo_c = 1 if inst_lo else 0
-            fsm.rearm(1, lo_c, rise_on_hi=False, fall_on_lo=True)
-        return
     if enable_hi or enable_lo:
         hi_c = _input_permit_hi_c(spec, inst_hi)
         lo_c = (1 if inst_lo else 0) if enable_lo else 0
@@ -734,9 +723,8 @@ def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
     raw_inputs: dict[str, list[int]] = {r.name: [] for r in inputs}
     input_fsms: dict[str, _PermitGpioFsm] = {}
     for r in inputs:
-        spec = input_specs[r.name]
-        init = 1 if spec.hi_mode == "constant_1" else 0
-        input_fsms[r.name] = _PermitGpioFsm(init)
+        # 起始準位一律由 DEB INIT 決定；Hi/Lo 各模式只描述條件何時成立。
+        input_fsms[r.name] = _PermitGpioFsm(1 if r.deb_init else 0)
 
     fsms = {
         _internal_sig(r.name): _OutputFsm(r) for r in outputs

@@ -606,3 +606,83 @@ class TestInputDependsSignal:
         src_fall = next(i for i in range(1, len(src)) if src[i - 1] == 1 and src[i] == 0)
         dst_fall = next(i for i in range(1, len(dst)) if dst[i - 1] == 1 and dst[i] == 0)
         assert dst_fall == src_fall + 1
+
+
+class TestInputInitialPolarity:
+    """Input 起始準位依 DEB INIT（Low (0)/High (1) 已明確指定準位者不受影響）。"""
+
+    @staticmethod
+    def _run(spec: InputWaveSpec, *, deb_init: int, deb_enable: bool = True) -> list[int]:
+        cfg = PowerSeqConfig(
+            rails=[
+                PowerRail(
+                    "A",
+                    seq_type="input",
+                    deb_enable=deb_enable,
+                    deb_init=deb_init,
+                ),
+            ],
+        )
+        scenario = TimingScenario(steps=10, inputs={"A": spec})
+        return simulate(cfg, scenario).raw_inputs["A"]
+
+    def test_custom_wave_starts_high_when_deb_init_1(self):
+        bits = self._run(
+            InputWaveSpec(hi_mode="custom", hi_wave="1", lo_mode="custom", lo_wave="0"),
+            deb_init=1,
+        )
+        assert bits[0] == 1
+
+    def test_custom_wave_starts_low_when_deb_init_0(self):
+        bits = self._run(
+            InputWaveSpec(hi_mode="custom", hi_wave="1", lo_mode="custom", lo_wave="0"),
+            deb_init=0,
+        )
+        assert bits[0] == 0
+
+    def test_deb_init_1_falls_when_lo_wave_asserts(self):
+        # 起始 H，Lo 條件在 step 2 成立 → 下一拍轉態，不是一開始就 L。
+        bits = self._run(
+            InputWaveSpec(
+                hi_mode="custom", hi_wave="0", lo_mode="custom", lo_wave="0{2}1",
+            ),
+            deb_init=1,
+        )
+        assert bits[0] == 1
+        assert bits[-1] == 0
+
+    def test_depends_mode_starts_high_when_deb_init_1(self):
+        bits = self._run(InputWaveSpec(hi_mode="depends"), deb_init=1)
+        assert bits[0] == 1
+
+    def test_deb_disabled_still_honors_deb_init(self):
+        bits = self._run(
+            InputWaveSpec(hi_mode="custom", hi_wave="0"),
+            deb_init=1,
+            deb_enable=False,
+        )
+        assert bits[0] == 1
+
+    def test_hi_always_true_starts_from_init_then_rises(self):
+        # Hi="High (1)" 表示 Hi 條件恆成立：仍從 INIT=0 的 L 起始，下一拍才拉高。
+        bits = self._run(InputWaveSpec(hi_mode="constant_1"), deb_init=0)
+        assert bits[0] == 0
+        assert bits[1] == 1
+
+    def test_hi_always_true_stays_high_when_init_1(self):
+        assert set(self._run(InputWaveSpec(hi_mode="constant_1"), deb_init=1)) == {1}
+
+    def test_hi_always_false_holds_init_high(self):
+        # Hi="Low (0)" 表示 Hi 條件恆不成立；無 Lo 條件 → 維持 INIT 的 H。
+        assert set(self._run(InputWaveSpec(hi_mode="constant_0"), deb_init=1)) == {1}
+
+    def test_hi_always_false_holds_init_low(self):
+        assert set(self._run(InputWaveSpec(hi_mode="constant_0"), deb_init=0)) == {0}
+
+    def test_lo_always_true_falls_from_init_high(self):
+        # Lo="High (1)" 表示 Lo 條件恆成立：從 INIT=1 的 H 起始，下一拍轉 L。
+        bits = self._run(
+            InputWaveSpec(hi_mode="constant_0", lo_mode="constant_1"), deb_init=1,
+        )
+        assert bits[0] == 1
+        assert bits[1] == 0
