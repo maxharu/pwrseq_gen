@@ -156,7 +156,7 @@ Tests: `tests/test_excel_import.py`, `tests/test_excel_export.py`
 
 ```bash
 # Excel must be installed; Trust Center → Trust access to VBA project object model
-python scripts/embed_excel_vba.py templates/_powerseq_nodes_template_build.xlsx templates/powerseq_nodes_template.xlsm
+set PYTHONPATH=src && python -m excel.vba.embed_excel_vba templates/_powerseq_nodes_template_build.xlsx templates/powerseq_nodes_template.xlsm
 ```
 
 3. Commit updated `templates/vba/vbaProject.bin` so CI/headless runs can zip-inject without Excel
@@ -164,7 +164,7 @@ python scripts/embed_excel_vba.py templates/_powerseq_nodes_template_build.xlsx 
 ### Refresh VBA on user's existing xlsm (keep their data)
 
 ```bash
-python -c "from scripts.embed_excel_vba import refresh_vba_inplace; refresh_vba_inplace('templates/powerseq_nodes_template.xlsm')"
+set PYTHONPATH=src && python -c "from excel.vba.embed_excel_vba import refresh_vba_inplace; refresh_vba_inplace('templates/powerseq_nodes_template.xlsm')"
 ```
 
 ## Verification checklist

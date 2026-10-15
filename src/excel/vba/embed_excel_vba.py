@@ -2,19 +2,17 @@
 將 VBA 巨集嵌入 openpyxl 產生的 xlsx，另存為 xlsm。
 需要本機安裝 Microsoft Excel，且啟用「信任對 VBA 專案物件模型的存取」。
 
-用法:
-  python scripts/embed_excel_vba.py <input.xlsx> <output.xlsm>
+用法（需 src 在 sys.path 上）:
+  set PYTHONPATH=src && python -m excel.vba.embed_excel_vba <input.xlsx> <output.xlsm>
 """
 from __future__ import annotations
 
 import os
 import sys
 
-VBA_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "templates",
-    "vba",
-)
+from core.paths import TEMPLATES_DIR
+
+VBA_DIR = os.path.join(TEMPLATES_DIR, "vba")
 BAS_MODULE = "PwrSeqSync.bas"
 THISWORKBOOK_CODE = "ThisWorkbook.cls"
 SHEET_NODES_CODE = "SheetNodes.cls"

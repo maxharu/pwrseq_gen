@@ -10,12 +10,9 @@ import tempfile
 import zipfile
 from xml.etree import ElementTree as ET
 
-VBA_BIN = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "templates",
-    "vba",
-    "vbaProject.bin",
-)
+from core.paths import TEMPLATES_DIR
+
+VBA_BIN = os.path.join(TEMPLATES_DIR, "vba", "vbaProject.bin")
 
 CT_NS = "{http://schemas.openxmlformats.org/package/2006/content-types}"
 REL_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"

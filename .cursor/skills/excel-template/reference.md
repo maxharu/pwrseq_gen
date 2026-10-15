@@ -9,8 +9,8 @@
 | `src/excel/excel_export.py` | Export config back to workbook; preserves VBA via golden xlsm or zip inject |
 | `src/excel/excel_template_layout.py` | Shared Nodes sheet header rows 1–3 |
 | `src/core/group_logic.py` | AND/OR/XOR labels ↔ internal ops; legacy group_inv detection |
-| `scripts/embed_excel_vba.py` | COM: import VBA modules, add sync button, `refresh_vba_inplace` |
-| `scripts/inject_vba_zip.py` | Merge `vbaProject.bin` into xlsx → xlsm without Excel |
+| `src/excel/vba/embed_excel_vba.py` | COM: import VBA modules, add sync button, `refresh_vba_inplace` |
+| `src/excel/vba/inject_vba_zip.py` | Merge `vbaProject.bin` into xlsx → xlsm without Excel |
 | `scripts/rebuild_vba_project.py` | Helper to refresh bin after VBA edits (wraps generate + COM) |
 | `templates/powerseq_nodes_template.xlsm` | Shipped template (macros) |
 | `templates/powerseq_nodes_template.xlsx` | Fallback when VBA embed fails (import/export still work) |

@@ -60,7 +60,7 @@ src/
     timing_models.py         InputWaveSpec / TimingScenario
     naming.py                safe_name / internal_sig
     constants.py             DEP_HIGH / DEP_LOW
-    paths.py                 templates/ scripts/ reference/ 路徑單一來源
+    paths.py                 templates/ reference/ 路徑單一來源（含打包後）
     validator.py             設定驗證
     group_logic.py           群組 intra-op AND/OR/XOR
     version.py               版本／作者等單一來源
@@ -73,11 +73,12 @@ src/
   codegen/                 verilog_generator.py / c_generator.py
   drawio/                  Draw.io 匯出（export / cell_export / geometry / options）
   excel/                   Excel 匯入／匯出與版面
+    vba/                     VBA 嵌入（COM 需 Excel／zip 注入不需）
   gui/                     CustomTkinter GUI（theme/widgets/panels/dialogs/settings/app）
   tools/                   json2drawio.py / build.py / build_onedir.py
   reference/               PSEQCELL 版面等匯出資產
 tests/                   pytest 測試（邏輯層）
-scripts/                 範本／資產產生與 VBA 工具
+scripts/                 範本／資產產生腳本（依賴 src/，反向不成立）
 templates/               Excel／Draw.io／時序圖範本與資產
 ```
 

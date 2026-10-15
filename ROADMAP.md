@@ -41,6 +41,11 @@
   替 input 畫出 RTL 裡不存在的 `xxx_hi`/`xxx_lo`。現由 `_dep_has_cond_signal` 統一判斷。
 - **打包缺檔修正** — `core/paths.py` 補上 `sys._MEIPASS` 分支，`build.py` 指名打包 Excel 範本與
   `vbaProject.bin`。修正前打包版的 Excel 匯出一律 `FileNotFoundError`。
+- **VBA 腳本移入 `src/excel/vba/`** — `excel_export` 原本在執行期把 `scripts/` 插進 `sys.path`
+  再 import，是產品程式碼依賴開發腳本的反向相依。搬成正式模組後 `build.py` 不再需要
+  `--paths scripts` 與那兩個 `--hidden-import`；`scripts/generate_excel_template.py` 改為
+  `from excel.vba... import`（方向正確）。兩支的 `VBA_DIR` / `VBA_BIN` 原本各自用 `__file__`
+  往上推算，現已改接 `core.paths.TEMPLATES_DIR`，打包後才指得對。
 
 ### 兩條已經是可執行護欄的約束
 
@@ -55,18 +60,7 @@
 
 ## 待辦
 
-### 1. VBA 腳本搬進 `src/excel/vba/`
-
-`excel_export._finalize_xlsm` 在執行期把 `scripts/` 插進 `sys.path` 再 import
-`embed_excel_vba` / `inject_vba_zip`——這是方向相反的相依（產品程式碼依賴開發腳本）。
-打包後更明顯：`SCRIPTS_DIR` 在 bundle 裡根本不存在，那行 `sys.path.insert` 已是空操作，
-import 其實是靠 PyInstaller 的 frozen importer 解析的。
-
-搬成正式模組後 `build.py` 就不再需要 `--paths scripts` 與那兩個 `--hidden-import`。
-
-- **verify**：移除 `--paths scripts` 後全套 pytest 綠，且 frozen 探針仍能匯出 `.xlsm`
-
-### 2. 抽條件 IR
+### 1. 抽條件 IR
 
 `core` 提供唯一的 `resolve_condition(rail, kind) -> CondTree`，把 groups / inv / use /
 intra_op / group_inv 一次性正規化解析完。
@@ -77,13 +71,13 @@ intra_op / group_inv 一次性正規化解析完。
 
 - **verify**：`test_condition_consistency.py` 的 oracle 改成直接走 `CondTree`，黃金輸出 byte 不變
 
-### 3. 五個下游改成只負責渲染 `CondTree`
+### 2. 五個下游改成只負責渲染 `CondTree`
 
 `timing_sim`、`verilog_generator`、`c_generator`、`drawio_cell_export`、`timing_export`。
 
 - **一次只改一個**，verify：每改完一個，黃金輸出仍 byte 不變
 
-### 4. 四套 pulse 名稱解析器收進 `core`
+### 3. 四套 pulse 名稱解析器收進 `core`
 
 `config_models.normalize_pulse_name`、`c_generator._pulse_time_field`、
 `timing_sim._pulse_scale_units`、`drawio_geometry._parse_pulse_period`。
@@ -92,14 +86,14 @@ intra_op / group_inv 一次性正規化解析完。
 
 - **verify**：加一支 `My.Pulse_1us` 的四套一致性測試
 
-### 5. 最小可行 CI
+### 4. 最小可行 CI
 
 `.github/workflows/` 目前是空的，根目錄沒有 `ci.bat`（但 user rule 要求 push 前跑）。
 內容只要三件事：`pytest` + `ruff`（兼管 import 排序）+ 黃金輸出比對。linter 要加進 `requirements-dev.txt`。
 
-### 6. 把套件邊界做成真的 API
+### 5. 把套件邊界做成真的 API
 
-除了 `gui/`（已宣告 `run_gui`），其餘六個 `__init__.py` 都只有一行 docstring，
+除了 `gui/`（已宣告 `run_gui`），其餘七個 `__init__.py` 都只有一行 docstring，
 所有呼叫端都 import 深層路徑（`from drawio.drawio_cell_export import ...`）。
 測試跨進內部的程度也不低：8 個測試檔 import 了 21 個私有符號。
 這代表「套件內部」實際上沒有內部可言，任何內部重構都會打破測試。
@@ -108,7 +102,7 @@ intra_op / group_inv 一次性正規化解析完。
 私有符號的白箱測試可以留，但要清楚那是白箱測試，不是契約。
 同時清掉 `drawio_export.py` 對 `drawio_geometry` 的 34 個符號 re-export facade（大多無人使用）。
 
-### 7. 模擬器補上 Force
+### 6. 模擬器補上 Force
 
 `_eval_dep` 對 `use="force"` 目前回定值 0。模擬器內部其實算得出 force 條件（會傳進 `fsm.commit`），
 只是沒發布成 `out_force` 讓下游依賴讀取，所以是實作缺口而非設計決定——
@@ -116,7 +110,7 @@ intra_op / group_inv 一次性正規化解析完。
 
 - **verify**：移除 `KNOWN_SIM_DIVERGENCE` 後 `test_condition_consistency.py` 仍綠
 
-### 8. （最後）GUI 抽純函式
+### 7. （最後）GUI 抽純函式
 
 `app.py` + `widgets.py` + `panels.py` 約 4400 行，headless 下測試幾乎全 skip——
 等於這 4400 行沒有自動化保護。

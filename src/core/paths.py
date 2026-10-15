@@ -23,7 +23,6 @@ def _data_dir(name: str) -> Path:
 
 # PyInstaller 在載入任何應用模組前就設好 sys.frozen，所以這裡 import 期取值是正確的
 TEMPLATES_DIR = _data_dir("templates")
-SCRIPTS_DIR = _data_dir("scripts")
 
 
 def reference_dir() -> Path:

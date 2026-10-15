@@ -4,7 +4,6 @@ Export PowerSeqConfig to Excel node template (.xlsx / .xlsm).
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
 import zipfile
 from copy import copy
@@ -26,7 +25,7 @@ from core.config_models import (
     rail_input_wave_spec,
 )
 from core.constants import DEP_HIGH, DEP_LOW
-from core.paths import SCRIPTS_DIR, TEMPLATES_DIR
+from core.paths import TEMPLATES_DIR
 from core.timing_models import InputWaveSpec, TimingScenario
 from core.group_logic import intra_op_label
 from excel.excel_template_layout import apply_nodes_sheet_header_rows
@@ -108,19 +107,16 @@ def _finalize_xlsm(tmp_xlsx: str, xlsm_path: str) -> None:
     """Embed VBA + Sync button; re-bind sheet modules so Config pulse edits sync."""
     if not os.path.isfile(VBA_BIN):
         raise FileNotFoundError(f"VBA project not found: {VBA_BIN}")
-    scripts = str(SCRIPTS_DIR)
-    if scripts not in sys.path:
-        sys.path.insert(0, scripts)
 
     try:
-        from embed_excel_vba import embed_vba
+        from excel.vba.embed_excel_vba import embed_vba
 
         embed_vba(tmp_xlsx, xlsm_path)
         return
     except Exception:
         pass
 
-    from inject_vba_zip import copy_sync_button_from_golden, inject_vba_zip
+    from excel.vba.inject_vba_zip import copy_sync_button_from_golden, inject_vba_zip
 
     inject_vba_zip(tmp_xlsx, xlsm_path, VBA_BIN)
     golden = _resolve_xlsm_golden()
@@ -128,7 +124,7 @@ def _finalize_xlsm(tmp_xlsx: str, xlsm_path: str) -> None:
         copy_sync_button_from_golden(xlsm_path, golden)
 
     try:
-        from embed_excel_vba import refresh_vba_inplace
+        from excel.vba.embed_excel_vba import refresh_vba_inplace
 
         refresh_vba_inplace(xlsm_path)
         return
@@ -136,7 +132,7 @@ def _finalize_xlsm(tmp_xlsx: str, xlsm_path: str) -> None:
         pass
 
     try:
-        from embed_excel_vba import add_sync_button_inplace
+        from excel.vba.embed_excel_vba import add_sync_button_inplace
 
         add_sync_button_inplace(xlsm_path)
     except Exception:

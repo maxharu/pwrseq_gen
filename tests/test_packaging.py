@@ -28,7 +28,6 @@ class TestFrozenPaths:
         paths = _reload_paths_as_frozen(monkeypatch, tmp_path)
         try:
             assert paths.TEMPLATES_DIR == tmp_path / "templates"
-            assert paths.SCRIPTS_DIR == tmp_path / "scripts"
             assert paths.reference_dir() == tmp_path / "reference"
         finally:
             importlib.reload(core.paths)
@@ -86,10 +85,14 @@ class TestBuildBundlesExcelAssets:
             assert source != templates_dir, spec
             assert os.path.isfile(source), f"not a single file: {source}"
 
-    def test_vba_helper_scripts_are_importable_in_the_bundle(self):
+    def test_vba_helpers_need_no_scripts_path_workaround(self):
+        """They live in src/excel/vba/, so normal import analysis collects them."""
+        import excel.vba.embed_excel_vba  # noqa: F401
+        import excel.vba.inject_vba_zip  # noqa: F401
+
         cmd = build_command(onefile=True)
-        hidden = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--hidden-import"]
-        assert "embed_excel_vba" in hidden
-        assert "inject_vba_zip" in hidden
         paths_args = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--paths"]
-        assert any(p.endswith("scripts") for p in paths_args), paths_args
+        assert not any(p.endswith("scripts") for p in paths_args), paths_args
+        hidden = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--hidden-import"]
+        assert "embed_excel_vba" not in hidden
+        assert "inject_vba_zip" not in hidden

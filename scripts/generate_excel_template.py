@@ -617,11 +617,11 @@ def _extract_vba_bin(xlsm_path: str, bin_path: str) -> None:
 
 
 def _embed_vba_macros(xlsx_path: str, xlsm_path: str) -> None:
-    scripts_dir = os.path.dirname(os.path.abspath(__file__))
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
-
-    from embed_excel_vba import add_sync_button_inplace, embed_vba, refresh_vba_inplace
+    from excel.vba.embed_excel_vba import (
+        add_sync_button_inplace,
+        embed_vba,
+        refresh_vba_inplace,
+    )
 
     try:
         embed_vba(xlsx_path, xlsm_path)
@@ -631,7 +631,7 @@ def _embed_vba_macros(xlsx_path: str, xlsm_path: str) -> None:
         print(f"COM embed failed ({exc}); trying zip inject...")
 
     if os.path.isfile(VBA_BIN):
-        from inject_vba_zip import inject_vba_zip
+        from excel.vba.inject_vba_zip import inject_vba_zip
 
         inject_vba_zip(xlsx_path, xlsm_path, VBA_BIN)
         try:

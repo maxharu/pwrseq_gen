@@ -28,7 +28,6 @@ def build_command(*, onefile: bool) -> list[str]:
     """組出 PyInstaller 指令。獨立成純函式以便測試打包內容（tests/test_packaging.py）。"""
     ctk_path = get_customtkinter_path()
     reference_dir = os.path.join(SRC_DIR, "reference")
-    scripts_dir = os.path.join(PROJECT_ROOT, "scripts")
     templates_dir = os.path.join(PROJECT_ROOT, "templates")
     workpath = BUILD_DIR if onefile else BUILD_ONEDIR_DIR
 
@@ -56,13 +55,6 @@ def build_command(*, onefile: bool) -> list[str]:
         f"{os.path.join(templates_dir, EXCEL_TEMPLATE)}{os.pathsep}templates",
         "--add-data",
         f"{os.path.join(templates_dir, 'vba', 'vbaProject.bin')}{os.pathsep}templates/vba",
-        # excel_export._finalize_xlsm 在執行期 import 這兩支，打包後要能解析
-        "--paths",
-        scripts_dir,
-        "--hidden-import",
-        "embed_excel_vba",
-        "--hidden-import",
-        "inject_vba_zip",
         "--hidden-import",
         "core.app_expiry",
         "--hidden-import",
