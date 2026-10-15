@@ -604,19 +604,31 @@ class TestCellCentricDrawio:
 class TestReferencedCondInversion:
     """引用他人 Hi/Lo 條件時，inv 必須顯示 ~（與 Verilog 一致）。"""
 
+    # 引用條件訊號的前提是該依賴有 PSEQCELL，所以 rail 表必須帶上 output 節點
+    OUTPUTS = {
+        n: PowerRail(n, seq_type="output") for n in ("P12V_AUX_EN_N", "VDD")
+    }
+
     def test_resolve_term_inverts_referenced_lo_cond(self):
-        t = _resolve_term("P12V_AUX_EN_N", True, "lo", {})
+        t = _resolve_term("P12V_AUX_EN_N", True, "lo", self.OUTPUTS)
         assert t.text == "~p12v_aux_en_n_lo"
         assert t.is_cond
 
     def test_resolve_term_inverts_referenced_hi_cond(self):
-        assert _resolve_term("VDD", True, "hi", {}).text == "~vdd_hi"
+        assert _resolve_term("VDD", True, "hi", self.OUTPUTS).text == "~vdd_hi"
 
     def test_resolve_term_keeps_referenced_cond_plain_when_not_inv(self):
-        assert _resolve_term("VDD", False, "lo", {}).text == "vdd_lo"
+        assert _resolve_term("VDD", False, "lo", self.OUTPUTS).text == "vdd_lo"
 
     def test_resolve_term_still_inverts_self_dep(self):
         assert _resolve_term("VDD", True, "self", {}).text == "~VDD"
+
+    def test_resolve_term_reads_level_when_dep_is_input(self):
+        """input 沒有 PSEQCELL，帶 use=hi/lo 時要退化為讀準位（對齊 Verilog/C）。"""
+        rails = {"PG": PowerRail("PG", seq_type="input")}
+        for use in ("hi", "lo", "force"):
+            t = _resolve_term("PG", False, use, rails)
+            assert t.text == "PG" and not t.is_cond, f"use={use}"
 
     def test_drawio_label_shows_inverted_referenced_cond(self):
         cfg = PowerSeqConfig(

@@ -112,9 +112,14 @@ Edge: label → Deb, Hi/Lo stroke.
 |--------|------------|--------|
 | Input GPIO, `use=self` | `NAME` or `~NAME` if inv | Yes, inside block |
 | Output GPIO, `use=self` | `NAME` or `~NAME` | Yes |
-| `use=hi` / `use=lo` | **`{internal_sig}_{hi\|lo}`**, or `~{internal_sig}_{hi\|lo}` if inv (purple cond HTML) | Yes, but text only — **not** a cross-page wire |
-| `use=force` | — | **Skipped** (not drawn) |
+| **Output** dep, `use=hi` / `use=lo` | **`{internal_sig}_{hi\|lo}`**, or `~{internal_sig}_{hi\|lo}` if inv (purple cond HTML) | Yes, but text only — **not** a cross-page wire |
+| **Output** dep, `use=force` | — | **Skipped** (not drawn) |
+| **Input** dep, any `use` | `NAME` or `~NAME` | Yes — inputs have no PSEQCELL, so there is no `_hi`/`_lo` signal to reference |
 | `__HIGH__` / `__LOW__` | — | Skipped |
+
+`_dep_has_cond_signal(dep, name_to_rail)` gates the `use`-driven rows: a stale `use=hi/lo/force`
+left on an input dep must fall back to its level, matching Verilog / C / the simulator.
+Same guard in `_exported_hilo_keys`. Locked by `tests/test_condition_consistency.py`.
 
 Purple cond styling: `_cond_html` / `COND_COLOR`.
 

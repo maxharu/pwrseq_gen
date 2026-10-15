@@ -198,6 +198,12 @@ class _Builder:
         return eid
 
 
+def _dep_has_cond_signal(dep: str, name_to_rail: dict[str, PowerRail]) -> bool:
+    """只有 output（有 PSEQCELL）才有 xxx_hi / xxx_lo 條件訊號，input 沒有。"""
+    rail = name_to_rail.get(dep)
+    return rail is not None and rail.seq_type == "output"
+
+
 def _exported_hilo_keys(config: PowerSeqConfig) -> set[tuple[str, str]]:
     """(dep_rail, hi|lo) referenced as cond by any consumer output."""
     keys: set[tuple[str, str]] = set()
@@ -216,7 +222,7 @@ def _exported_hilo_keys(config: PowerSeqConfig) -> set[tuple[str, str]]:
                         if hl == "hi"
                         else tgt.get_lo_use(gi, ii, d)
                     )
-                    if use in ("hi", "lo"):
+                    if use in ("hi", "lo") and _dep_has_cond_signal(d, name_to_rail):
                         keys.add((d, use))
     return keys
 
@@ -229,13 +235,15 @@ def _resolve_term(
 ) -> _Term | None:
     if dep in CONST_DEPS:
         return None
-    if use == "force":
-        return None
-    if use in ("hi", "lo"):
-        text = f"{internal_sig(dep)}_{use}"
-        if inv:
-            text = f"~{text}"
-        return _Term(text, is_cond=True)
+    # use=hi/lo/force 只對有 PSEQCELL 的 output 有意義；input 退化為讀該節點準位
+    if _dep_has_cond_signal(dep, name_to_rail):
+        if use == "force":
+            return None
+        if use in ("hi", "lo"):
+            text = f"{internal_sig(dep)}_{use}"
+            if inv:
+                text = f"~{text}"
+            return _Term(text, is_cond=True)
     text = dep
     if inv:
         text = f"~{text}"
