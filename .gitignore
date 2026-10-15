@@ -29,7 +29,10 @@ doc/
 # Excel lock files
 ~$*
 
-# Proprietary X15SNW project files (private board — keep out of public repo)
+# Proprietary X15 project files (private boards — keep out of public repo)
+# 這些曾經被追蹤過，已於歷史中清除；留在本機供測試使用，不可再進版控。
 src/reference/x15_pseq.v
+src/x15_pseq.v
 templates/x15snw.xlsm
 templates/x15snw_pseq.v
+templates/x15dot*

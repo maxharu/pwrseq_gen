@@ -175,7 +175,24 @@
 
 ---
 
-## 待確認
+## X15 專有檔案已自歷史清除
 
-- `src/x15_pseq.v` 自 `efed7e4` 起被 git 追蹤，而 remote 為公開 repo。
-  需確認是否應留在版控中（或連歷史一併清除）。
+`src/x15_pseq.v` 等 X15 專有檔曾被 git 追蹤，而 remote 是公開 repo，已用
+`git filter-repo` 連歷史一併清除（80 個 commit 全數重寫）。清除範圍：
+
+| 範圍 | 檔案 |
+|---|---|
+| `x15_pseq.v` 的全部歷史路徑 | `x15_pseq.v`、`v1.0/`、`v1.1/`、`src/` 四處**同一個 blob** |
+| 同一份設計的 JSON 形式 | `v1.0/x15_pseq_example.json`（`module_name: x15_pseq`，完整訊號拓撲） |
+| X15SNW 產出 | `output/x15snw_pseq.{v,c,json,drawio,xml}`、`_wavedrom_scenario.json` |
+| x15dot 設定與衍生圖 | `templates/x15dot*` 共 30 個路徑 |
+
+只清 `src/x15_pseq.v` 是不夠的：同樣的內容在歷史中有四個路徑，而且還有一份等價的
+JSON——清掉 `.v` 卻留著 JSON 等於沒清。
+
+這些檔案仍留在本機工作目錄供測試使用，並已加進 `.gitignore`。引用
+`templates/x15dot-f.xlsm` 的兩支測試本來就寫了「檔案不存在就 skip」，所以在乾淨的
+clone 或 CI 上會自動跳過，不會紅。
+
+**歷史重寫不等於沒公開過**：fork、既有 clone、GitHub 在 GC 前仍可用舊 SHA 直接存取的
+物件、第三方程式碼搜尋快取都不受影響。若內容確實敏感，仍應以「已外洩」看待。
