@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 
-from core.config_models import PowerRail
+from core.config_models import PowerRail, parse_pulse_period
 from core.constants import DEP_HIGH, DEP_LOW
 from core.paths import reference_dir
 from core.group_logic import normalize_intra_op
@@ -50,33 +50,11 @@ _PSEQCELL_STYLE_O = "rounded=1;whiteSpace=wrap;html=1;"
 _REFERENCE_DIR = reference_dir()
 
 
-def _parse_pulse_period(pulse_name: str) -> tuple[int, str] | None:
-    """Pulse_1us / iPulse_1us → (1, 'us')；Pulse_2ms → (2, 'ms')。"""
-    if not pulse_name or pulse_name in ("default", "High"):
-        return None
-    s = pulse_name
-    if s.startswith("iPulse_"):
-        s = s[7:]
-    elif s.startswith("Pulse_"):
-        s = s[6:]
-    if s.endswith("us"):
-        try:
-            return int(s[:-2]), "us"
-        except ValueError:
-            return None
-    if s.endswith("ms"):
-        try:
-            return int(s[:-2]), "ms"
-        except ValueError:
-            return None
-    return None
-
-
 def _deb_time_text(cycle: int, pulse: str) -> str:
     """PSEQCELL debounce 總時間：cycle × pulse 週期；cycle≤0 或 High/default → 0s。"""
     if cycle <= 0:
         return "0s"
-    parsed = _parse_pulse_period(pulse)
+    parsed = parse_pulse_period(pulse)
     if parsed is None:
         return "0s"
     period, unit = parsed

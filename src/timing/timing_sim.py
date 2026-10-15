@@ -9,7 +9,7 @@ from core.config_models import (
     PowerRail,
     DEFAULT_PULSE,
     build_timing_scenario,
-    normalize_pulse_name,
+    parse_pulse_period,
 )
 from core.cond_ir import CondVisitor, resolve_condition, resolve_item
 from core.constants import DEP_HIGH, DEP_LOW
@@ -31,21 +31,11 @@ class SimResult:
 
 def _pulse_scale_units(pulse_name: str) -> int:
     """相對於 1us 的倍率（用於判斷第幾步該 pulse tick）。"""
-    if not pulse_name or pulse_name in ("default", "High"):
+    parsed = parse_pulse_period(pulse_name)
+    if parsed is None:
         return 1
-    ui = normalize_pulse_name(pulse_name)
-    s = ui[6:] if ui.startswith("Pulse_") else ui.lower()
-    if s.endswith("us"):
-        try:
-            return max(1, int(s[:-2]))
-        except ValueError:
-            return 1
-    if s.endswith("ms"):
-        try:
-            return max(1, int(s[:-2]) * 1000)
-        except ValueError:
-            return 1000
-    return 1
+    period, unit = parsed
+    return max(1, period * (1000 if unit == "ms" else 1))
 
 
 def _expand_wave_tokens(

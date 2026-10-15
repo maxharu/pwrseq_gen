@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 
 from core.cond_ir import CondVisitor, resolve_condition
-from core.config_models import PowerSeqConfig, PowerRail, normalize_pulse_name
+from core.config_models import PowerSeqConfig, PowerRail, pulse_suffix
 from core.group_logic import c_intra_expr
 from core.naming import internal_sig, safe_name
 
@@ -34,12 +34,8 @@ def _filename_to_c_names(filepath: str) -> tuple[str, str, str]:
 
 def _pulse_time_field(pulse_name: str) -> str | None:
     """Pulse_1ms / iPulse_1ms -> t_1ms；High/default/空則 None（呼叫端用常數 1）。"""
-    if not pulse_name or pulse_name in ("default", "High"):
-        return None
-    p = normalize_pulse_name(pulse_name)
-    if p.startswith("Pulse_"):
-        p = p[6:]
-    return f"t_{p}" if p else None
+    suffix = pulse_suffix(pulse_name)
+    return f"t_{suffix}" if suffix else None
 
 
 def _pulse_time_expr(pulse_name: str, var_name: str, *, isr: bool = False) -> str:

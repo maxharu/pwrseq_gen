@@ -75,6 +75,15 @@
 - **`timing_sim._eval_spec_groups` 的語意差異已記錄** — 那是 InputWaveSpec 的激勵條件
   （不是 `depends_on_*`），空 group 直接略過、`use=hi/lo` 查不到時 fallback 到該 rail
   的準位而非 0。只有葉節點借用 IR，output 分支維持原樣並在 docstring 註明。
+- **四套 pulse 名稱解析器已收斂** — `core.config_models` 新增 `pulse_suffix` 與
+  `parse_pulse_period`，`c_generator._pulse_time_field`、`timing_sim._pulse_scale_units`、
+  `drawio_geometry._deb_time_text` 全部改走這兩支，`_parse_pulse_period` 刪除。
+  原本兩處分歧：Draw.io 自己重刻去前綴、不走 `normalize_pulse_name`，所以 `Pulse-1us`
+  這類含 `.`/`-`/空白的名稱在 Verilog / C / 模擬器都正規化成 `Pulse_1us`，Draw.io 卻解不出
+  週期、debounce 標籤顯示 `0s`；模擬器則是 `Pulse_xus` 解不出數字退回 1、`Pulse_xms`
+  退回 1000 的不對稱 fallback。兩者都只在名稱異常時才觸發，三份真實 config 的 pulse
+  全為標準寫法，因此五個後端輸出逐字元不變；`tests/test_pulse_name.py` 用別名對照
+  （`iPulse_1us` / `Pulse-1us` / `Pulse 1us` / `Pulse.2ms`）把一致性鎖住，六個注入 bug 全紅。
 
 ### 兩條已經是可執行護欄的約束
 
@@ -89,21 +98,12 @@
 
 ## 待辦
 
-### 1. 四套 pulse 名稱解析器收進 `core`
-
-`config_models.normalize_pulse_name`、`c_generator._pulse_time_field`、
-`timing_sim._pulse_scale_units`、`drawio_geometry._parse_pulse_period`。
-前三套都會先走 `normalize_pulse_name`，只有 `drawio_geometry` 那套自己重刻了 `iPulse_`/`Pulse_`
-去前綴，因此不做 `safe_name` 正規化——名稱含 `.` 或 `-` 時與其他三套解讀不一致。
-
-- **verify**：加一支 `My.Pulse_1us` 的四套一致性測試
-
-### 2. 最小可行 CI
+### 1. 最小可行 CI
 
 `.github/workflows/` 目前是空的，根目錄沒有 `ci.bat`（但 user rule 要求 push 前跑）。
 內容只要三件事：`pytest` + `ruff`（兼管 import 排序）+ 黃金輸出比對。linter 要加進 `requirements-dev.txt`。
 
-### 3. 把套件邊界做成真的 API
+### 2. 把套件邊界做成真的 API
 
 除了 `gui/`（已宣告 `run_gui`），其餘七個 `__init__.py` 都只有一行 docstring，
 所有呼叫端都 import 深層路徑（`from drawio.drawio_cell_export import ...`）。
@@ -114,7 +114,7 @@
 私有符號的白箱測試可以留，但要清楚那是白箱測試，不是契約。
 同時清掉 `drawio_export.py` 對 `drawio_geometry` 的 34 個符號 re-export facade（大多無人使用）。
 
-### 4. 模擬器補上 Force
+### 3. 模擬器補上 Force
 
 `_SimCond.cond` 對 `kind="force"` 目前回定值 0。模擬器內部其實算得出 force 條件（會傳進 `fsm.commit`），
 只是沒發布成 `out_force` 讓下游依賴讀取，所以是實作缺口而非設計決定——
@@ -122,7 +122,7 @@
 
 - **verify**：移除 `KNOWN_SIM_DIVERGENCE` 後 `test_condition_consistency.py` 仍綠
 
-### 5. （最後）GUI 抽純函式
+### 4. （最後）GUI 抽純函式
 
 `app.py` + `widgets.py` + `panels.py` 約 4400 行，headless 下測試幾乎全 skip——
 等於這 4400 行沒有自動化保護。

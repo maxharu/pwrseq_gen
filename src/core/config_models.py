@@ -31,6 +31,34 @@ def pulse_verilog_name(name: str) -> str:
     return "i" + normalize_pulse_name(name)
 
 
+def pulse_suffix(name: str) -> str | None:
+    """`Pulse_1ms` / `iPulse_1ms` → `1ms`；High / default / 空 → None（不做 pulse 閘控）。"""
+    if not name or name in ("default", "High"):
+        return None
+    s = normalize_pulse_name(name)
+    if s.startswith("Pulse_"):
+        s = s[len("Pulse_"):]
+    return s or None
+
+
+def parse_pulse_period(name: str) -> tuple[int, str] | None:
+    """`Pulse_2ms` → `(2, 'ms')`；High / default 或解不出數字 → None。
+
+    各後端都走這裡，名稱才不會「Verilog 認得、Draw.io 不認得」——`Pulse-1us` 這種
+    含 `.`/`-`/空白的寫法會先被 `normalize_pulse_name` 正規化掉。
+    """
+    s = pulse_suffix(name)
+    if s is None:
+        return None
+    for unit in ("us", "ms"):
+        if s.endswith(unit):
+            try:
+                return int(s[: -len(unit)]), unit
+            except ValueError:
+                return None
+    return None
+
+
 def _normalize_pulse_list(pulses: list[str] | None) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []

@@ -56,7 +56,7 @@ pytest
 src/
   main.py                  進入點（設定 DPI 後啟動 GUI）
   core/                    資料模型與共用基礎
-    config_models.py         PowerSeqConfig / PowerRail
+    config_models.py         PowerSeqConfig / PowerRail、pulse 名稱解析
     timing_models.py         InputWaveSpec / TimingScenario
     naming.py                safe_name / internal_sig
     constants.py             DEP_HIGH / DEP_LOW
