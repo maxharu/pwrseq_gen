@@ -48,6 +48,8 @@ pytest
 
 > 測試以 `pyproject.toml` 設定 `pythonpath = ["src"]`，可直接 import `src/` 下的模組。
 
+已盤點的技術債與改善順序見 [`ROADMAP.md`](ROADMAP.md)。
+
 ## 專案結構
 
 ```
