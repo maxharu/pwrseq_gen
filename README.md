@@ -60,6 +60,7 @@ src/
     timing_models.py         InputWaveSpec / TimingScenario
     naming.py                safe_name / internal_sig
     constants.py             DEP_HIGH / DEP_LOW
+    cond_ir.py               條件語意唯一來源：resolve_condition → CondTree
     paths.py                 templates/ reference/ 路徑單一來源（含打包後）
     validator.py             設定驗證
     group_logic.py           群組 intra-op AND/OR/XOR

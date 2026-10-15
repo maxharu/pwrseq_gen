@@ -25,6 +25,9 @@
 是架構在求救**：每新增一個語意，就要記得同步五個地方，漏一個就產生「只有某種匯出格式錯」的 bug。
 已修掉的兩個 Draw.io bug 都是這一類。
 
+`core/cond_ir.py` 已經是那份唯一實作，但**五個下游還沒接上**（待辦第 1 項），
+在那之前一致性仍只由 `tests/test_condition_consistency.py` 事後把關。
+
 ---
 
 ## 已完成（安全網）
@@ -46,6 +49,13 @@
   `--paths scripts` 與那兩個 `--hidden-import`；`scripts/generate_excel_template.py` 改為
   `from excel.vba... import`（方向正確）。兩支的 `VBA_DIR` / `VBA_BIN` 原本各自用 `__file__`
   往上推算，現已改接 `core.paths.TEMPLATES_DIR`，打包後才指得對。
+- **條件 IR `core/cond_ir.py`** — `resolve_condition(rail, kind, name_to_rail) -> CondTree`
+  把 groups / inv / use / group_inv / intra_op 一次解析完。節點：`Const` / `Level` / `Cond` /
+  `Not` / `Group`（group 內 intra_op）/ `AnyGroup`（group 間 OR）。樹的形狀刻意對齊 F-DEP-08
+  的兩層結構而非任意布林樹，渲染端才不會把兩層搞混。`CondVisitor` 做成 ABC：日後新增節點型別，
+  沒跟上的下游在**建構當下**就 `TypeError`。`test_condition_consistency.py` 的 oracle 已改成
+  透過 visitor 讀 IR，IR 本身則由 `tests/test_cond_ir.py` 對照手寫期望值把關
+  （否則 IR 寫錯會讓所有後端「一致地錯」）。
 
 ### 兩條已經是可執行護欄的約束
 
@@ -60,24 +70,18 @@
 
 ## 待辦
 
-### 1. 抽條件 IR
+### 1. 五個下游改成只負責渲染 `CondTree`
 
-`core` 提供唯一的 `resolve_condition(rail, kind) -> CondTree`，把 groups / inv / use /
-intra_op / group_inv 一次性正規化解析完。
+`timing_sim`、`verilog_generator`、`c_generator`、`drawio_cell_export`、`timing_export`，
+各寫一個 `CondVisitor` 取代自己那套走訪。
 
-待決定：`CondTree` 設計成**純資料**（dataclass，下游各自 match/render），
-還是**帶 visitor**（下游提供 const / level / cond / and / or / xor / not 等 callback）。
-後者能保證沒有下游漏掉新增的節點型別——而「漏掉語意」正是 Draw.io bug 的成因。
+注意 `timing_export.format_rail_condition` 目前**完全忽略** `intra_op` 與 `group_inv`
+（一律 `&`、不套整組反相），`_dep_label` 也沒檢查依賴是不是 output——同一類 bug，
+只是出現在人讀的標籤上。改用 IR 會順帶修掉，所以預期這支的輸出會變，黃金檔要重出。
 
-- **verify**：`test_condition_consistency.py` 的 oracle 改成直接走 `CondTree`，黃金輸出 byte 不變
+- **一次只改一個**，verify：每改完一個，黃金輸出仍 byte 不變（`timing_export` 除外，見上）
 
-### 2. 五個下游改成只負責渲染 `CondTree`
-
-`timing_sim`、`verilog_generator`、`c_generator`、`drawio_cell_export`、`timing_export`。
-
-- **一次只改一個**，verify：每改完一個，黃金輸出仍 byte 不變
-
-### 3. 四套 pulse 名稱解析器收進 `core`
+### 2. 四套 pulse 名稱解析器收進 `core`
 
 `config_models.normalize_pulse_name`、`c_generator._pulse_time_field`、
 `timing_sim._pulse_scale_units`、`drawio_geometry._parse_pulse_period`。
@@ -86,12 +90,12 @@ intra_op / group_inv 一次性正規化解析完。
 
 - **verify**：加一支 `My.Pulse_1us` 的四套一致性測試
 
-### 4. 最小可行 CI
+### 3. 最小可行 CI
 
 `.github/workflows/` 目前是空的，根目錄沒有 `ci.bat`（但 user rule 要求 push 前跑）。
 內容只要三件事：`pytest` + `ruff`（兼管 import 排序）+ 黃金輸出比對。linter 要加進 `requirements-dev.txt`。
 
-### 5. 把套件邊界做成真的 API
+### 4. 把套件邊界做成真的 API
 
 除了 `gui/`（已宣告 `run_gui`），其餘七個 `__init__.py` 都只有一行 docstring，
 所有呼叫端都 import 深層路徑（`from drawio.drawio_cell_export import ...`）。
@@ -102,7 +106,7 @@ intra_op / group_inv 一次性正規化解析完。
 私有符號的白箱測試可以留，但要清楚那是白箱測試，不是契約。
 同時清掉 `drawio_export.py` 對 `drawio_geometry` 的 34 個符號 re-export facade（大多無人使用）。
 
-### 6. 模擬器補上 Force
+### 5. 模擬器補上 Force
 
 `_eval_dep` 對 `use="force"` 目前回定值 0。模擬器內部其實算得出 force 條件（會傳進 `fsm.commit`），
 只是沒發布成 `out_force` 讓下游依賴讀取，所以是實作缺口而非設計決定——
@@ -110,7 +114,7 @@ intra_op / group_inv 一次性正規化解析完。
 
 - **verify**：移除 `KNOWN_SIM_DIVERGENCE` 後 `test_condition_consistency.py` 仍綠
 
-### 7. （最後）GUI 抽純函式
+### 6. （最後）GUI 抽純函式
 
 `app.py` + `widgets.py` + `panels.py` 約 4400 行，headless 下測試幾乎全 skip——
 等於這 4400 行沒有自動化保護。

@@ -4,14 +4,15 @@ Verilog / C / Draw.io / the simulator each re-implement the same dependency
 semantics. Nothing in the code forces them to agree, so this module states the
 semantics once as an oracle and checks every backend against it.
 
-The oracle reduces one dependency item to a *leaf*:
+The semantics live in `core.cond_ir`; this module reads them back through a
+visitor as a *leaf* tuple and compares every backend against it:
 
     ("const", 0|1)              __LOW__ / __HIGH__
     ("level", name)             that node's actual level
     ("cond", name, hi|lo|force) that node's condition signal
 
-An item resolves to a condition signal only when the dependency is an output
-node *and* `use` is hi/lo/force; everything else is a level. Group assembly
+`tests/test_cond_ir.py` checks `core.cond_ir` against hand-written expectations,
+so a wrong IR cannot quietly make every backend agree here. Group assembly
 (intra_op -> group_inv -> OR-join) is shared via `core.group_logic` and is not
 re-checked here.
 
@@ -24,6 +25,7 @@ import os
 
 import pytest
 
+from core.cond_ir import CondVisitor, resolve_dep
 from core.config_models import PowerRail, PowerSeqConfig
 from core.constants import DEP_HIGH, DEP_LOW
 from core.naming import internal_sig, safe_name
@@ -53,18 +55,31 @@ def _name_to_rail(rails):
     return {r.name: r for r in rails}
 
 
+class _LeafTuple(CondVisitor):
+    """Flatten a cond_ir leaf into the tuple form the _want_* helpers expect."""
+
+    def const(self, value):
+        return ("const", value)
+
+    def level(self, name):
+        return ("level", name)
+
+    def cond(self, name, kind):
+        return ("cond", name, kind)
+
+    def invert(self, operand):
+        raise AssertionError("resolve_dep never wraps a leaf in Not")
+
+    def group(self, op, items):
+        raise AssertionError("resolve_dep never returns a group")
+
+    def any_group(self, groups):
+        raise AssertionError("resolve_dep never returns a group join")
+
+
 def _spec_leaf(dep, use, name_to_rail):
     """Documented semantics (F-DEP-07, timing-sim-behavior.mdc §2)."""
-    if dep == DEP_HIGH:
-        return ("const", 1)
-    if dep == DEP_LOW:
-        return ("const", 0)
-    rail = name_to_rail.get(dep)
-    if rail is None or rail.seq_type == "input":
-        return ("level", dep)
-    if use in ("hi", "lo", "force"):
-        return ("cond", dep, use)
-    return ("level", dep)
+    return resolve_dep(dep, use, name_to_rail).accept(_LeafTuple())
 
 
 def _want_verilog(leaf, name_to_rail, inv):
