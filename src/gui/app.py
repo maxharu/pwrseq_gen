@@ -12,6 +12,12 @@ from PIL import Image
 from codegen import generate_c, generate_verilog
 from core.app_expiry import ensure_not_expired
 from core.applog import get_logger
+from core.config_edit import (
+    delete_indices,
+    move_item,
+    next_rail_name,
+    remap_index_after_move,
+)
 from core.config_models import (
     DEFAULT_PULSE,
     PowerRail,
@@ -452,20 +458,6 @@ class PowerSeqGUI(ctk.CTk):
         holder.append(cf)
         return cf
 
-    @staticmethod
-    def _remap_index_after_move(idx: int | None, from_idx: int, to_idx: int) -> int | None:
-        if idx is None:
-            return None
-        if idx == from_idx:
-            return to_idx
-        if from_idx < to_idx:
-            if from_idx < idx <= to_idx:
-                return idx - 1
-        elif to_idx < from_idx:
-            if to_idx <= idx < from_idx:
-                return idx + 1
-        return idx
-
     def _apply_rail(self, idx: int):
         """將單一 Node 編輯器內容寫入 config；僅此時更新 header chip 與 Preview。"""
         if idx < 0 or idx >= len(self.collapsible_frames):
@@ -645,8 +637,6 @@ class PowerSeqGUI(ctk.CTk):
         self.after(50, lambda: self._scroll_to_widget(cf))
 
     def _on_node_reordered(self, from_idx: int, to_idx: int):
-        if from_idx == to_idx:
-            return
         if not (0 <= from_idx < len(self.config_obj.rails)):
             return
         if not (0 <= to_idx < len(self.config_obj.rails)):
@@ -654,20 +644,19 @@ class PowerSeqGUI(ctk.CTk):
         self._push_undo()
         # 重排前先 collect 一次，避免改順序時遺失目前 widget 內未提交的編輯
         self.config_obj = self._collect_config()
-        rail = self.config_obj.rails.pop(from_idx)
-        self.config_obj.rails.insert(to_idx, rail)
-        cf = self.collapsible_frames.pop(from_idx)
-        self.collapsible_frames.insert(to_idx, cf)
+        if not move_item(self.config_obj.rails, from_idx, to_idx):
+            return
+        move_item(self.collapsible_frames, from_idx, to_idx)
         self._mark_dirty()
 
         # 左側列表重建便宜；中間編輯器只改 pack 順序，不 destroy
-        primary = self._remap_index_after_move(
+        primary = remap_index_after_move(
             self.node_list.get_primary(), from_idx, to_idx,
         )
         selected = {
             remapped
             for i in self.node_list.get_selection()
-            if (remapped := self._remap_index_after_move(i, from_idx, to_idx)) is not None
+            if (remapped := remap_index_after_move(i, from_idx, to_idx)) is not None
         }
         self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
         self.node_list._selected = selected
@@ -706,11 +695,7 @@ class PowerSeqGUI(ctk.CTk):
     def _add_rail(self):
         self._push_undo()
         self.config_obj = self._collect_config()
-        n = len(self.config_obj.rails) + 1
-        name = f"SIG_{n}"
-        while any(r.name == name for r in self.config_obj.rails):
-            n += 1
-            name = f"SIG_{n}"
+        name = next_rail_name([r.name for r in self.config_obj.rails])
         rail = PowerRail(name=name, seq_type="output")
         self.config_obj.rails.append(rail)
         cf = self._make_collapsible_rail(rail, expanded=True)
@@ -734,12 +719,10 @@ class PowerSeqGUI(ctk.CTk):
             return
         self._push_undo()
         self.config_obj = self._collect_config()
-        for i in sorted(selection, reverse=True):
-            if 0 <= i < len(self.config_obj.rails):
-                del self.config_obj.rails[i]
-                cf = self.collapsible_frames.pop(i)
-                cf.pack_forget()
-                cf.destroy()
+        for i in delete_indices(self.config_obj.rails, selection):
+            cf = self.collapsible_frames.pop(i)
+            cf.pack_forget()
+            cf.destroy()
         self.node_list.clear_selection()
         self._mark_dirty()
         self.node_list.set_rails(self.config_obj.rails, primary_idx=None)

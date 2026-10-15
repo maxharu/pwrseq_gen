@@ -13,6 +13,26 @@ except Exception:
 from core.config_models import PowerRail, PowerSeqConfig
 
 
+@pytest.fixture(scope="session")
+def ctk_root():
+    """整個 session 共用唯一的 Tk root；Tk 不可用時跳過該測試。
+
+    這個環境下反覆建立／銷毀 Tk root 會偶發
+    `couldn't read file ".../init.tcl": No error`（檔案其實存在，原因欄是 "No error"），
+    所以 root 只建一次、由需要的測試共用，widget 各自建在它底下。
+    """
+    ctk = pytest.importorskip("customtkinter")
+    try:
+        root = ctk.CTk()
+    except Exception as e:
+        pytest.skip(f"CustomTkinter/display unavailable: {e}")
+    root.withdraw()
+    try:
+        yield root
+    finally:
+        root.destroy()
+
+
 @pytest.fixture
 def sample_config_dict():
     """Sample config for round-trip tests."""

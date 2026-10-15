@@ -4,6 +4,7 @@ from typing import Callable, Optional
 
 import customtkinter as ctk
 
+from core.cond_edit import CondEditModel
 from core.config_models import (
     DEFAULT_PULSE,
     PowerRail,
@@ -27,13 +28,7 @@ class CondSectionFrame(ctk.CTkFrame):
     def __init__(self, master, kind: str,
                  get_dep_options: Callable[[], list[str]],
                  is_pseqcell_for: Callable[[str], bool],
-                 initial_groups: list[list[str]],
-                 initial_inv_groups: list[list[bool]],
-                 initial_use_groups: list[list[str]],
-                 initial_inv_flat: dict,
-                 initial_use_flat: dict,
-                 initial_group_inv: Optional[list[bool]] = None,
-                 initial_group_intra_op: Optional[list[str]] = None,
+                 model: CondEditModel,
                  show_group_inv: bool = True,
                  on_change: Optional[Callable[[], None]] = None,
                  get_self_name: Optional[Callable[[], str]] = None,
@@ -47,22 +42,9 @@ class CondSectionFrame(ctk.CTkFrame):
         self.on_change = on_change
         self.show_group_inv = show_group_inv
 
-        self.groups: list[list[str]] = [list(g) for g in (initial_groups or [[]])]
-        if not self.groups:
-            self.groups = [[]]
-
-        self._init_inv_groups = initial_inv_groups or []
-        self._init_use_groups = initial_use_groups or []
-        self._init_inv_flat = initial_inv_flat or {}
-        self._init_use_flat = initial_use_flat or {}
-
-        # 每個 group：整組反相、區塊內運算（AND/OR/XOR）。與 self.groups 同序。
-        self.group_inv: list[bool] = [bool(x) for x in (initial_group_inv or [])]
-        self.group_intra_op: list[str] = [
-            normalize_intra_op(x) for x in (initial_group_intra_op or [])
-        ]
-        self._sync_group_inv_len()
-        self._sync_group_intra_op_len()
+        # 唯一的真實來源。結構操作一律先改它，再 _rebuild_groups_ui() 重繪；
+        # 下面那些 *_vars / rows / group_frames 都只是當下畫面的對照表。
+        self.model = model
 
         self.inv_vars: dict[tuple[int, int], ctk.BooleanVar] = {}
         self.use_vars: dict[tuple[int, int], ctk.StringVar] = {}
@@ -75,6 +57,18 @@ class CondSectionFrame(ctk.CTkFrame):
         self._group_drag_state: Optional[dict] = None
 
         self._build_ui()
+
+    @property
+    def groups(self) -> list[list[str]]:
+        return self.model.groups
+
+    @property
+    def group_inv(self) -> list[bool]:
+        return self.model.group_inv
+
+    @property
+    def group_intra_op(self) -> list[str]:
+        return self.model.group_intra_op
 
     def _fire_change(self):
         if self.on_change is not None:
@@ -96,38 +90,6 @@ class CondSectionFrame(ctk.CTkFrame):
                 combo.set(cur)
             else:
                 combo.set(opts[0])
-
-    def _sync_group_inv_len(self):
-        """讓 self.group_inv 與 self.groups 等長（補 False / 截斷）。"""
-        n = len(self.groups)
-        if len(self.group_inv) < n:
-            self.group_inv = self.group_inv + [False] * (n - len(self.group_inv))
-        elif len(self.group_inv) > n:
-            self.group_inv = self.group_inv[:n]
-
-    def _sync_group_intra_op_len(self):
-        n = len(self.groups)
-        if len(self.group_intra_op) < n:
-            self.group_intra_op = self.group_intra_op + ["and"] * (n - len(self.group_intra_op))
-        elif len(self.group_intra_op) > n:
-            self.group_intra_op = self.group_intra_op[:n]
-
-    # ---- initial value lookup ----
-    def _get_initial_inv(self, gi: int, ii: int, name: str) -> bool:
-        if self._init_inv_groups:
-            try:
-                return bool(self._init_inv_groups[gi][ii])
-            except IndexError:
-                pass
-        return bool(self._init_inv_flat.get(name, False))
-
-    def _get_initial_use(self, gi: int, ii: int, name: str) -> str:
-        if self._init_use_groups:
-            try:
-                return str(self._init_use_groups[gi][ii])
-            except IndexError:
-                pass
-        return str(self._init_use_flat.get(name, "self"))
 
     def _allowed_use_labels(self, name: str) -> list[str]:
         """可選的 use 標籤。自我參照時移除會造成同欄位組合迴圈的選項。
@@ -155,6 +117,11 @@ class CondSectionFrame(ctk.CTkFrame):
         self._rebuild_groups_ui()
 
     def _rebuild_groups_ui(self):
+        """依 self.model 重繪整個區塊。
+
+        每項的 inv / use 存在 model 裡（不是只存在 Tk 變數裡），所以重建不會弄丟
+        使用者的編輯——這正是結構操作能一律「改 model 再重繪」的前提。
+        """
         for w in self.groups_container.winfo_children():
             w.destroy()
         self.group_frames.clear()
@@ -163,8 +130,7 @@ class CondSectionFrame(ctk.CTkFrame):
         self.group_inv_vars.clear()
         self.group_intra_op_vars.clear()
         self.rows.clear()
-        self._sync_group_inv_len()
-        self._sync_group_intra_op_len()
+        self.model.normalize()
         for gi in range(len(self.groups)):
             self._add_group_ui(gi)
 
@@ -256,16 +222,21 @@ class CondSectionFrame(ctk.CTkFrame):
         display_name = "High" if name == DEP_HIGH else ("Low" if name == DEP_LOW else name)
         can_use_hi_lo = (not is_const) and self.is_pseqcell_for(name)
 
-        inv_val = False if is_const else self._get_initial_inv(gi, ii, name)
-        use_val = USE_LABELS.get(self._get_initial_use(gi, ii, name), "Node")
+        inv_val = False if is_const else bool(self.model.inv[gi][ii])
+        use_val = USE_LABELS.get(self.model.use[gi][ii], "Node")
         allowed_use = self._allowed_use_labels(name)
         if use_val not in allowed_use:
             use_val = allowed_use[0] if allowed_use else "Node"
+        # 自我參照時 use 會被限縮，把修正後的值寫回 model，重繪才不會又跳回原值
+        self.model.inv[gi][ii] = inv_val
+        self.model.use[gi][ii] = USE_REVERSE.get(use_val, "self")
         self.inv_vars[key] = ctk.BooleanVar(value=inv_val)
         self.use_vars[key] = ctk.StringVar(value=use_val)
         # trace 在初值設定後才註冊，避免初始化就觸發
-        self.inv_vars[key].trace_add("write", lambda *_: self._fire_change())
-        self.use_vars[key].trace_add("write", lambda *_: self._fire_change())
+        self.inv_vars[key].trace_add(
+            "write", lambda *_, s=key_slot: self._on_inv_changed(s[0], s[1]))
+        self.use_vars[key].trace_add(
+            "write", lambda *_, s=key_slot: self._on_use_changed(s[0], s[1]))
 
         list_frame = self.group_frames[gi]["list_frame"]
         if not list_frame.winfo_ismapped():
@@ -295,6 +266,23 @@ class CondSectionFrame(ctk.CTkFrame):
         ctk.CTkButton(row, text="Del", width=50,
                       command=lambda s=key_slot: self._remove_cond_by_key((s[0], s[1]))).pack(side="left")
 
+    def _on_inv_changed(self, gi: int, ii: int):
+        if 0 <= gi < len(self.model.inv) and 0 <= ii < len(self.model.inv[gi]):
+            try:
+                self.model.inv[gi][ii] = bool(self.inv_vars[(gi, ii)].get())
+            except Exception:
+                self.model.inv[gi][ii] = False
+        self._fire_change()
+
+    def _on_use_changed(self, gi: int, ii: int):
+        if 0 <= gi < len(self.model.use) and 0 <= ii < len(self.model.use[gi]):
+            try:
+                self.model.use[gi][ii] = USE_REVERSE.get(
+                    self.use_vars[(gi, ii)].get(), "self")
+            except Exception:
+                self.model.use[gi][ii] = "self"
+        self._fire_change()
+
     def _on_group_inv_changed(self, gi: int):
         if 0 <= gi < len(self.group_inv):
             try:
@@ -314,9 +302,7 @@ class CondSectionFrame(ctk.CTkFrame):
         self._fire_change()
 
     def add_group(self):
-        self.groups.append([])
-        self.group_inv.append(False)
-        self.group_intra_op.append("and")
+        self.model.add_group()
         self._add_group_ui(len(self.groups) - 1)
         self._fire_change()
 
@@ -326,124 +312,21 @@ class CondSectionFrame(ctk.CTkFrame):
         if not sel:
             return
         dep_key = DEP_HIGH if sel == "High" else (DEP_LOW if sel == "Low" else sel)
-        self.groups[gi].append(dep_key)
+        if not self.model.add_dep(gi, dep_key):
+            return
         self._add_cond_row(gi, dep_key)
         self._fire_change()
 
-    def _shift_cond_keys_after_delete(self, gi: int, deleted_ii: int) -> None:
-        """刪除 (gi, deleted_ii) 後，把同 group 內較大的 ii 左移，並更新 key_slot。"""
-        old_len = len(self.groups[gi]) + 1  # 刪除前長度
-        for old_i in range(deleted_ii + 1, old_len):
-            new_i = old_i - 1
-            old_key = (gi, old_i)
-            new_key = (gi, new_i)
-            row = self.rows.pop(old_key, None)
-            if row is not None:
-                slot = getattr(row, "_key_slot", None)
-                if slot is not None:
-                    slot[0] = gi
-                    slot[1] = new_i
-                self.rows[new_key] = row
-            if old_key in self.inv_vars:
-                self.inv_vars[new_key] = self.inv_vars.pop(old_key)
-            if old_key in self.use_vars:
-                self.use_vars[new_key] = self.use_vars.pop(old_key)
-
     def _remove_cond_by_key(self, key: tuple[int, int]):
-        gi, ii = key
-        if gi >= len(self.groups) or ii >= len(self.groups[gi]):
+        if not self.model.remove_dep(*key):
             return
-        row = self.rows.pop((gi, ii), None)
-        if row is not None:
-            try:
-                row.destroy()
-            except Exception:
-                pass
-        self.inv_vars.pop((gi, ii), None)
-        self.use_vars.pop((gi, ii), None)
-        del self.groups[gi][ii]
-        self._shift_cond_keys_after_delete(gi, ii)
-        if not self.groups[gi]:
-            list_frame = self.group_frames[gi]["list_frame"]
-            try:
-                list_frame.pack_forget()
-            except Exception:
-                pass
+        self._rebuild_groups_ui()
         self._fire_change()
 
-    def _remap_group_meta_after_delete(self, deleted_gi: int) -> None:
-        """group 刪除後更新 group_frames 的 gi_slot／標題，以及 vars／rows 的 gi。"""
-        for new_gi in range(deleted_gi, len(self.group_frames)):
-            gf = self.group_frames[new_gi]
-            gf["gi_slot"][0] = new_gi
-            try:
-                gf["title_label"].configure(text=f"Group {new_gi + 1}")
-            except Exception:
-                pass
-
-        def _shift_var_dict(d: dict) -> None:
-            d.pop(deleted_gi, None)
-            for k in sorted([k for k in d if isinstance(k, int) and k > deleted_gi]):
-                d[k - 1] = d.pop(k)
-
-        _shift_var_dict(self.group_inv_vars)
-        _shift_var_dict(self.group_intra_op_vars)
-
-        new_rows: dict[tuple[int, int], ctk.CTkFrame] = {}
-        for (old_gi, ii), row in self.rows.items():
-            if old_gi == deleted_gi:
-                continue
-            new_gi = old_gi - 1 if old_gi > deleted_gi else old_gi
-            slot = getattr(row, "_key_slot", None)
-            if slot is not None:
-                slot[0] = new_gi
-                slot[1] = ii
-            new_rows[(new_gi, ii)] = row
-        self.rows = new_rows
-
-        def _shift_kv(d: dict) -> dict:
-            out = {}
-            for (old_gi, ii), var in d.items():
-                if old_gi == deleted_gi:
-                    continue
-                new_gi = old_gi - 1 if old_gi > deleted_gi else old_gi
-                out[(new_gi, ii)] = var
-            return out
-
-        self.inv_vars = _shift_kv(self.inv_vars)
-        self.use_vars = _shift_kv(self.use_vars)
-
     def _remove_group(self, gi: int):
-        if gi >= len(self.groups):
+        if not self.model.remove_group(gi):
             return
-        if gi < len(self.group_frames):
-            gf = self.group_frames.pop(gi)
-            try:
-                gf["frame"].destroy()
-            except Exception:
-                pass
-        # 清掉該 group 的 row／var（frame.destroy 已銷毁 widget）
-        for key in [k for k in self.rows if k[0] == gi]:
-            self.rows.pop(key, None)
-            self.inv_vars.pop(key, None)
-            self.use_vars.pop(key, None)
-        del self.groups[gi]
-        if gi < len(self.group_inv):
-            del self.group_inv[gi]
-        if gi < len(self.group_intra_op):
-            del self.group_intra_op[gi]
-        if not self.groups:
-            self.groups = [[]]
-            self.group_inv = [False]
-            self.group_intra_op = ["and"]
-            self.group_inv_vars.clear()
-            self.group_intra_op_vars.clear()
-            self.rows.clear()
-            self.inv_vars.clear()
-            self.use_vars.clear()
-            self._add_group_ui(0)
-        else:
-            self._remap_group_meta_after_delete(gi)
+        self._rebuild_groups_ui()
         self._fire_change()
 
     # ---- row drag ----
@@ -575,34 +458,8 @@ class CondSectionFrame(ctk.CTkFrame):
         return (len(cands) - 1, last_di)
 
     def _reorder_cond(self, gi: int, from_idx: int, to_idx: int):
-        if gi >= len(self.groups):
-            return
-        group = self.groups[gi]
-        if from_idx == to_idx:
-            return
-        if not (0 <= from_idx < len(group)) or not (0 <= to_idx < len(group)):
-            return
-        new_order = list(range(len(group)))
-        moved = new_order.pop(from_idx)
-        new_order.insert(to_idx, moved)
-        self.groups[gi] = [group[old] for old in new_order]
-        # 視覺已在 drag 時排好；只重編 key，不 destroy
-        n = len(new_order)
-        old_rows = {i: self.rows.pop((gi, i)) for i in range(n) if (gi, i) in self.rows}
-        old_inv = {i: self.inv_vars.pop((gi, i)) for i in range(n) if (gi, i) in self.inv_vars}
-        old_use = {i: self.use_vars.pop((gi, i)) for i in range(n) if (gi, i) in self.use_vars}
-        for new_i, old_i in enumerate(new_order):
-            row = old_rows.get(old_i)
-            if row is not None:
-                slot = getattr(row, "_key_slot", None)
-                if slot is not None:
-                    slot[0] = gi
-                    slot[1] = new_i
-                self.rows[(gi, new_i)] = row
-            if old_i in old_inv:
-                self.inv_vars[(gi, new_i)] = old_inv[old_i]
-            if old_i in old_use:
-                self.use_vars[(gi, new_i)] = old_use[old_i]
+        if self.model.reorder_dep(gi, from_idx, to_idx):
+            self._rebuild_groups_ui()
 
     # ---- group drag ----
     def _on_group_drag_start(self, gi: int):
@@ -711,157 +568,35 @@ class CondSectionFrame(ctk.CTkFrame):
         return (len(cands) - 1, cands[-1][0])
 
     def _reorder_groups(self, from_idx: int, to_idx: int):
-        if from_idx == to_idx:
-            return
-        if not (0 <= from_idx < len(self.groups)) or not (0 <= to_idx < len(self.groups)):
-            return
-        new_order = list(range(len(self.groups)))
-        moved = new_order.pop(from_idx)
-        new_order.insert(to_idx, moved)
-        self.groups[:] = [self.groups[old] for old in new_order]
-        self._sync_group_inv_len()
-        self.group_inv[:] = [self.group_inv[old] for old in new_order]
-        self._sync_group_intra_op_len()
-        self.group_intra_op[:] = [self.group_intra_op[old] for old in new_order]
-        # 視覺已排好；只重排 group_frames 與 key
-        self.group_frames[:] = [self.group_frames[old] for old in new_order]
-        old_to_new = {old: new for new, old in enumerate(new_order)}
-
-        new_rows: dict[tuple[int, int], ctk.CTkFrame] = {}
-        for (old_gi, ii), row in self.rows.items():
-            new_gi = old_to_new[old_gi]
-            slot = getattr(row, "_key_slot", None)
-            if slot is not None:
-                slot[0] = new_gi
-                slot[1] = ii
-            new_rows[(new_gi, ii)] = row
-        self.rows = new_rows
-
-        def _remap_pair_dict(d: dict) -> dict:
-            out = {}
-            for (old_gi, ii), var in d.items():
-                out[(old_to_new[old_gi], ii)] = var
-            return out
-
-        self.inv_vars = _remap_pair_dict(self.inv_vars)
-        self.use_vars = _remap_pair_dict(self.use_vars)
-
-        new_g_inv = {}
-        for old_gi, var in self.group_inv_vars.items():
-            new_g_inv[old_to_new[old_gi]] = var
-        self.group_inv_vars = new_g_inv
-        new_g_op = {}
-        for old_gi, var in self.group_intra_op_vars.items():
-            new_g_op[old_to_new[old_gi]] = var
-        self.group_intra_op_vars = new_g_op
-
-        for new_gi, gf in enumerate(self.group_frames):
-            gf["gi_slot"][0] = new_gi
-            try:
-                gf["title_label"].configure(text=f"Group {new_gi + 1}")
-            except Exception:
-                pass
+        if self.model.reorder_groups(from_idx, to_idx):
+            self._rebuild_groups_ui()
 
     # ---- getters for RailEditorFrame.get_rail() ----
     def get_groups(self) -> list[list[str]]:
-        return [list(g) for g in self.groups if g]
+        return self.model.to_groups()
 
     def get_inv_groups(self) -> list[list[bool]]:
-        result = []
-        for gi, g in enumerate(self.groups):
-            if not g:
-                continue
-            row = []
-            for ii in range(len(g)):
-                key = (gi, ii)
-                val = False
-                if key in self.inv_vars:
-                    try:
-                        val = bool(self.inv_vars[key].get())
-                    except Exception:
-                        val = False
-                row.append(val)
-            result.append(row)
-        return result
+        return self.model.to_inv_groups()
 
     def get_use_groups(self) -> list[list[str]]:
-        result = []
-        for gi, g in enumerate(self.groups):
-            if not g:
-                continue
-            row = []
-            for ii in range(len(g)):
-                key = (gi, ii)
-                val = "self"
-                if key in self.use_vars:
-                    try:
-                        val = USE_REVERSE.get(self.use_vars[key].get(), "self")
-                    except Exception:
-                        val = "self"
-                row.append(val)
-            result.append(row)
-        return result
+        return self.model.to_use_groups()
 
     def get_group_inv(self) -> list[bool]:
         """每個非空 group 的整組反相旗標，與 get_groups() 同序。"""
-        result = []
-        for gi, g in enumerate(self.groups):
-            if not g:
-                continue
-            val = False
-            if gi in self.group_inv_vars:
-                try:
-                    val = bool(self.group_inv_vars[gi].get())
-                except Exception:
-                    val = False
-            elif gi < len(self.group_inv):
-                val = bool(self.group_inv[gi])
-            result.append(val)
-        return result
+        return self.model.to_group_inv()
 
     def get_group_intra_op(self) -> list[str]:
         """每個非空 group 的區塊內運算，與 get_groups() 同序。"""
-        result = []
-        for gi, g in enumerate(self.groups):
-            if not g:
-                continue
-            val = "and"
-            if gi in self.group_intra_op_vars:
-                try:
-                    val = normalize_intra_op(self.group_intra_op_vars[gi].get())
-                except Exception:
-                    val = "and"
-            elif gi < len(self.group_intra_op):
-                val = normalize_intra_op(self.group_intra_op[gi])
-            result.append(val)
-        return result
+        return self.model.to_group_intra_op()
 
     def get_inv_flat(self) -> dict[str, bool]:
-        d = {}
-        for gi, g in enumerate(self.groups):
-            for ii, name in enumerate(g):
-                key = (gi, ii)
-                if key in self.inv_vars:
-                    try:
-                        d[name] = bool(self.inv_vars[key].get())
-                    except Exception:
-                        d[name] = False
-        return d
+        return self.model.to_inv_flat()
 
     def get_use_flat(self) -> dict[str, str]:
-        d = {}
-        for gi, g in enumerate(self.groups):
-            for ii, name in enumerate(g):
-                key = (gi, ii)
-                if key in self.use_vars:
-                    try:
-                        d[name] = USE_REVERSE.get(self.use_vars[key].get(), "self")
-                    except Exception:
-                        d[name] = "self"
-        return d
+        return self.model.to_use_flat()
 
     def get_flat_deps(self) -> list[str]:
-        return [d for g in self.get_groups() for d in g]
+        return self.model.to_flat_deps()
 
 
 # ============================================================
@@ -929,19 +664,18 @@ class InputWaveSidePanel(ctk.CTkFrame):
         )
         self._wave_var.trace_add("write", lambda *_: self._fire_change())
 
-        init_groups = [list(g) for g in groups] if groups else [[]]
         self._cond_section = CondSectionFrame(
             self._opt_slot,
             kind=side,
             get_dep_options=get_dep_options,
             is_pseqcell_for=is_pseqcell_for,
-            initial_groups=init_groups,
-            initial_inv_groups=inv_groups,
-            initial_use_groups=use_groups,
-            initial_inv_flat={},
-            initial_use_flat={},
-            initial_group_inv=list(group_inv),
-            initial_group_intra_op=list(intra_op),
+            model=CondEditModel.from_initial(
+                groups=groups,
+                inv_groups=inv_groups,
+                use_groups=use_groups,
+                group_inv=group_inv,
+                group_intra_op=intra_op,
+            ),
             show_group_inv=True,
             on_change=self._fire_change,
             get_self_name=get_self_name,
@@ -1237,39 +971,11 @@ class RailEditorFrame(ctk.CTkFrame):
             theme = COND_THEME[kind]
             self.cond_tabs.add(theme["name"])
             tab = self.cond_tabs.tab(theme["name"])
-            init_groups_fn = {"hi": self.rail.get_hi_groups,
-                              "lo": self.rail.get_lo_groups,
-                              "force": self.rail.get_force_groups}[kind]
-            init_groups = [list(g) for g in init_groups_fn()] if init_groups_fn() else [[]]
-            init_inv = {"hi": self.rail.depends_on_hi_inv_groups,
-                        "lo": self.rail.depends_on_lo_inv_groups,
-                        "force": self.rail.depends_on_force_inv_groups}[kind]
-            init_use = {"hi": self.rail.depends_on_hi_use_groups,
-                        "lo": self.rail.depends_on_lo_use_groups,
-                        "force": self.rail.depends_on_force_use_groups}[kind]
-            init_inv_flat = {"hi": self.rail.depends_on_hi_inv,
-                             "lo": self.rail.depends_on_lo_inv,
-                             "force": self.rail.depends_on_force_inv}[kind]
-            init_use_flat = {"hi": self.rail.depends_on_hi_use,
-                             "lo": self.rail.depends_on_lo_use,
-                             "force": self.rail.depends_on_force_use}[kind]
-            init_group_inv = {"hi": self.rail.depends_on_hi_group_inv,
-                              "lo": self.rail.depends_on_lo_group_inv,
-                              "force": self.rail.depends_on_force_group_inv}[kind]
-            init_group_intra_op = {"hi": self.rail.depends_on_hi_intra_op,
-                                   "lo": self.rail.depends_on_lo_intra_op,
-                                   "force": self.rail.depends_on_force_intra_op}[kind]
             sec = CondSectionFrame(
                 tab, kind,
                 get_dep_options=self._dep_options,
                 is_pseqcell_for=self._is_pseqcell_for,
-                initial_groups=init_groups,
-                initial_inv_groups=init_inv,
-                initial_use_groups=init_use,
-                initial_inv_flat=init_inv_flat,
-                initial_use_flat=init_use_flat,
-                initial_group_inv=init_group_inv,
-                initial_group_intra_op=init_group_intra_op,
+                model=CondEditModel.from_rail(self.rail, kind),
                 get_self_name=lambda: self.rail.name,
             )
             sec.pack(fill="both", expand=True, padx=S_SM, pady=S_SM)

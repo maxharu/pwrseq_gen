@@ -5,6 +5,8 @@
 排序原則：**先建立安全網，再動結構，GUI 放最後**。GUI 是最大也最沒有自動化保護的區塊，
 而前面幾步（條件 IR、pulse 解析收斂）正好會把它需要的純函式準備好。
 
+**本輪盤點的項目已全部完成**，只剩下方「待確認」一項需要決定。
+
 ---
 
 ## 核心問題：同一套條件語意有五份獨立實作
@@ -133,7 +135,35 @@
   所以改用專門的端對端測試驗證傳播（`TestForceCondition` / `TestForceConditionInInputWaveSpec`），
   八個注入退化全紅。
 
-### 兩條已經是可執行護欄的約束
+- **GUI 的編輯邏輯已抽成純資料模型** — 原本的盤查結論與這份文件先前的描述不同：
+  42 處 `depends_on_*` 其實只集中在兩段扁平的欄位對應，沒什麼邏輯；真正棘手的是
+  **`CondSectionFrame` 根本沒有模型**——每項依賴的 `inv` / `use` 只存在 Tk 變數裡、
+  以 `(gi, ii)` 為 key，widget 本身就是模型。於是每次新增／刪除／拖放重排都得把九個
+  平行集合一起重新索引，約 210 行純索引算術，而且因為與 widget 銷毀綁在一起而完全
+  無法測試。
+
+  `core/cond_edit.py` 的 `CondEditModel` 把 groups 與平行的 inv / use / group 層設定
+  收成一份純資料，結構操作變成單純的 list 操作（`_reorder_groups` 從 51 行變成 6 行），
+  widget 改成「改模型 → `_rebuild_groups_ui()` 重繪」。重繪之所以可行，正是因為 inv/use
+  不再只存在 Tk 變數裡——那 210 行外科手術式的重映射，存在的理由就是為了迴避重繪。
+  `widgets.py` 淨減少 294 行。
+
+  `core/config_edit.py` 收了 `app.py` 的節點清單操作：`next_rail_name`、
+  `delete_indices`（必須由大到小刪）、`move_item`、`remap_index_after_move`。最後這支
+  原本是 `app.py` 裡的 staticmethod，純歸純、但一行測試都沒有。
+
+  驗證方式與前面各項不同：GUI 不在任何黃金路徑上，**無法用位元比對證明等價**。改以
+  `CondEditModel.from_rail` → 模型 → 寫回之後**解析出的條件樹必須完全相同**當作等價證明
+  （條件樹正是五個後端實際消費的東西），加上 343 組三連操作的形狀不變量、以及 widget 層
+  測試證明接線正確（重繪後 Tk 變數與模型一致、改 Tk 變數有寫回模型）。十二個注入退化
+  全紅——其中兩個一開始是綠的，補上缺的測試後才變紅。
+
+  順帶修掉一個長期的測試偶發：這個環境下一個 process 只能可靠地建立一次 Tk root，而
+  `_can_create_ctk()` 在 import 期就先建了一個又毀掉，所以後續 `ctk.CTk()` 會偶發
+  `couldn't read file ".../init.tcl": No error`。改由 `conftest.py` 的 session 級
+  `ctk_root` fixture 共用唯一的 root。
+
+### 三條已經是可執行護欄的約束
 
 比文件可靠，改壞了會紅：
 
@@ -141,22 +171,7 @@
 |---|---|
 | `templates/` 含未追蹤的客戶檔案，打包只能逐一指名，**不可整包帶入** | `tests/test_packaging.py::test_templates_dir_is_never_bundled_wholesale` |
 | 跨套件呼叫只能走 `__init__.py` 宣告的介面 | `tests/test_package_api.py` |
-
----
-
-## 待辦
-
-### GUI 抽純函式（僅剩這一項）
-
-`app.py` + `widgets.py` + `panels.py` 約 4400 行，headless 下測試幾乎全 skip——
-等於這 4400 行沒有自動化保護。
-
-不過直接操作 group 結構的地方只有 45 處，而且**全部集中在 `widgets.py`**
-（`app.py` 與 `panels.py` 皆為 0）。所以這一項的實際範圍比行數看起來小得多，
-是一次可收斂的重構，不是全面改寫。
-
-把「編輯 config 的邏輯」抽成 `core` 的純函式（輸入 config + 使用者動作，輸出新 config），
-widget 只負責綁 Tk 變數。這是讓 GUI 邏輯擺脫 Tk、能進 CI 的唯一辦法。
+| 條件編輯器的 inv / use 必須與 groups 同形狀（再加平行欄位時尤其容易漏） | `tests/test_cond_edit.py` 的 `assert_shape`，含 343 組三連操作 |
 
 ---
 
