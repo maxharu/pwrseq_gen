@@ -29,10 +29,10 @@ from core.cond_ir import CondVisitor, resolve_dep, resolve_item
 from core.config_models import PowerRail, PowerSeqConfig
 from core.constants import DEP_HIGH, DEP_LOW
 from core.naming import internal_sig, safe_name
-from codegen.c_generator import _c_dep_expr
+from codegen.c_generator import _CCond
 from codegen.verilog_generator import _VerilogCond
-from drawio.drawio_cell_export import _resolve_term
-from timing.timing_sim import _eval_dep
+from drawio.drawio_cell_export import _DrawioCond
+from timing.timing_sim import _SimCond
 
 TEMPLATES = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates"
@@ -129,7 +129,8 @@ def _sim_actual(dep, use, inv, name_to_rail, bit):
     elif leaf[0] == "cond":
         channel = {"hi": out_hi, "lo": out_lo, "force": out_val}[leaf[2]]
         channel[internal_sig(leaf[1])] = bit
-    return _eval_dep(dep, name_to_rail, raw, out_hi, out_lo, out_val, inv, use)
+    evaluator = _SimCond(name_to_rail, raw, out_hi, out_lo, out_val)
+    return resolve_item(dep, inv, use, name_to_rail).accept(evaluator)
 
 
 def _disagreements(backend, deps, uses, name_to_rail):
@@ -145,9 +146,11 @@ def _disagreements(backend, deps, uses, name_to_rail):
                         leaf, name_to_rail, inv
                     )
                 elif backend == "c":
-                    ok = _c_dep_expr(dep, name_to_rail, inv, use, C_VAR) == _want_c(leaf, inv)
+                    item = resolve_item(dep, inv, use, name_to_rail)
+                    ok = item.accept(_CCond(C_VAR)) == _want_c(leaf, inv)
                 elif backend == "drawio":
-                    term = _resolve_term(dep, inv, use, name_to_rail)
+                    item = resolve_item(dep, inv, use, name_to_rail)
+                    term = item.accept(_DrawioCond(set(name_to_rail)))
                     ok = (term.text if term else None) == _want_drawio(leaf, inv)
                 else:
                     ok = all(

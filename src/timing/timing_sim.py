@@ -11,6 +11,7 @@ from core.config_models import (
     build_timing_scenario,
     normalize_pulse_name,
 )
+from core.cond_ir import CondVisitor, resolve_condition, resolve_item
 from core.constants import DEP_HIGH, DEP_LOW
 from core.naming import internal_sig
 from core.timing_models import InputWaveSpec, TimingScenario
@@ -179,11 +180,17 @@ def _eval_spec_groups(
     group_inv: list[bool] | None = None,
     intra_op: list[str] | None = None,
 ) -> int:
-    """評估 input 的 hi/lo 訊號條件（group 內 Operation、groups 間 OR）。"""
+    """評估 input 的 hi/lo 訊號條件（group 內 Operation、groups 間 OR）。
+
+    注意這不是 `depends_on_*`，而是 InputWaveSpec 的激勵條件，語意也不同：
+    空 group 直接略過（不當成 0），且 `use=hi/lo` 查不到時 fallback 到該 rail 的準位
+    而非 0。因此只有葉節點借用 `core.cond_ir`，output 分支維持原樣。
+    """
     if not groups:
         return 0
     group_inv = group_inv or []
     intra_op = intra_op or []
+    leaf_eval = _SimCond(name_to_rail, raw, out_hi, out_lo, out_val)
     group_results = []
     for gi, group in enumerate(groups):
         if not group:
@@ -204,10 +211,7 @@ def _eval_spec_groups(
                 if inv:
                     v = 1 - v
             else:
-                v = _eval_dep(
-                    d, name_to_rail, raw, out_hi, out_lo, out_val,
-                    inv, use,
-                )
+                v = resolve_item(d, inv, use, name_to_rail).accept(leaf_eval)
             terms.append(v)
         if terms:
             op = intra_op[gi] if gi < len(intra_op) else "and"
@@ -302,79 +306,51 @@ def _input_rearm(
         fsm.rearm(hi_c, lo_c, rise_on_hi=enable_hi, fall_on_lo=enable_lo)
 
 
-def _eval_dep(
-    dep_name: str,
-    name_to_rail: dict[str, PowerRail],
-    raw: dict[str, int],
-    out_hi: dict[str, int],
-    out_lo: dict[str, int],
-    out_val: dict[str, int],
-    inverted: bool,
-    use_mode: str,
-) -> int:
-    if dep_name == DEP_HIGH:
-        v = 0 if inverted else 1
-        return v
-    if dep_name == DEP_LOW:
-        v = 1 if inverted else 0
-        return v
+class _SimCond(CondVisitor):
+    """把 CondTree 求值成 0/1。
 
-    dep = name_to_rail.get(dep_name)
-    if not dep or dep.seq_type == "input":
-        v = raw.get(dep_name, 0)
-    else:
-        sig = internal_sig(dep_name)
-        if use_mode == "hi":
-            v = out_hi.get(sig, 0)
-        elif use_mode == "lo":
-            v = out_lo.get(sig, 0)
-        elif use_mode == "force":
-            v = 0
-        else:
-            v = out_val.get(sig, 0)
-    if inverted:
-        return 1 - v
-    return v
+    準位：input 讀腳位（raw），output 讀該 rail 實際輸出（out_val），對齊 Verilog/C。
+    """
 
+    def __init__(
+        self,
+        name_to_rail: dict[str, PowerRail],
+        raw: dict[str, int],
+        out_hi: dict[str, int],
+        out_lo: dict[str, int],
+        out_val: dict[str, int],
+    ):
+        self.name_to_rail = name_to_rail
+        self.raw = raw
+        self.out_hi = out_hi
+        self.out_lo = out_lo
+        self.out_val = out_val
 
-def _eval_groups(
-    groups: list[list[str]],
-    rail: PowerRail,
-    kind: str,
-    name_to_rail: dict[str, PowerRail],
-    raw: dict[str, int],
-    out_hi: dict[str, int],
-    out_lo: dict[str, int],
-    out_val: dict[str, int],
-) -> int:
-    if not groups:
-        return 1 if kind == "hi" else 0
+    def const(self, value: int) -> int:
+        return value
 
-    get_inv = {"hi": rail.get_hi_inv, "lo": rail.get_lo_inv, "force": rail.get_force_inv}[kind]
-    get_use = {"hi": rail.get_hi_use, "lo": rail.get_lo_use, "force": rail.get_force_use}[kind]
-    get_group_inv = {"hi": rail.get_hi_group_inv, "lo": rail.get_lo_group_inv,
-                     "force": rail.get_force_group_inv}[kind]
-    get_intra_op = {"hi": rail.get_hi_intra_op, "lo": rail.get_lo_intra_op,
-                    "force": rail.get_force_intra_op}[kind]
+    def level(self, name: str) -> int:
+        dep = self.name_to_rail.get(name)
+        if dep is not None and dep.seq_type == "output":
+            return self.out_val.get(internal_sig(name), 0)
+        return self.raw.get(name, 0)
 
-    group_results = []
-    for gi, group in enumerate(groups):
-        terms = []
-        for ii, d in enumerate(group):
-            use = get_use(gi, ii, d)
-            inv = get_inv(gi, ii, d)
-            # self on output → 該 rail 實際輸出準位（out_val），對齊 Verilog/C；
-            # use=hi/lo/force 才走條件欄位。由 _eval_dep 統一處理。
-            v = _eval_dep(
-                d, name_to_rail, raw, out_hi, out_lo, out_val,
-                inv, use,
-            )
-            terms.append(v)
-        gr = eval_intra_op(get_intra_op(gi), terms)
-        if get_group_inv(gi):
-            gr = 1 - gr
-        group_results.append(gr)
-    return 1 if any(group_results) else 0
+    def cond(self, name: str, kind: str) -> int:
+        if kind == "force":
+            # 模擬器沒有發布 per-rail 的 force 條件（KNOWN_SIM_DIVERGENCE）
+            return 0
+        channel = self.out_hi if kind == "hi" else self.out_lo
+        return channel.get(internal_sig(name), 0)
+
+    def invert(self, operand: int) -> int:
+        return 1 - operand
+
+    def group(self, op: str, items: list[int], inv: bool) -> int:
+        value = eval_intra_op(op, items)
+        return 1 - value if inv else value
+
+    def any_group(self, groups: list[int]) -> int:
+        return 1 if any(groups) else 0
 
 
 def _finest_pulse_scale(pulses: list[str]) -> int:
@@ -660,18 +636,10 @@ def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
             changed = False
             for rail in output_order:
                 sig = internal_sig(rail.name)
-                new_hi = _eval_groups(
-                    rail.get_hi_groups(), rail, "hi", name_to_rail,
-                    raw_t, hi_t, lo_t, cur_val,
-                )
-                new_lo = _eval_groups(
-                    rail.get_lo_groups(), rail, "lo", name_to_rail,
-                    raw_t, hi_t, lo_t, cur_val,
-                )
-                new_force = _eval_groups(
-                    rail.get_force_groups(), rail, "force", name_to_rail,
-                    raw_t, hi_t, lo_t, cur_val,
-                )
+                evaluator = _SimCond(name_to_rail, raw_t, hi_t, lo_t, cur_val)
+                new_hi = resolve_condition(rail, "hi", name_to_rail).accept(evaluator)
+                new_lo = resolve_condition(rail, "lo", name_to_rail).accept(evaluator)
+                new_force = resolve_condition(rail, "force", name_to_rail).accept(evaluator)
                 if (
                     hi_t.get(sig) != new_hi
                     or lo_t.get(sig) != new_lo

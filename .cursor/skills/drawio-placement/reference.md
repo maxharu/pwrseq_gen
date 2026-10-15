@@ -100,7 +100,7 @@ Inter-group OR: `_or_gate_style` → OR or NOR (all single-input groups inverted
 | `_intra_group_gate_width` | One group's horizontal gate span |
 | `_path_horizontal_gate_width` | Full Hi/Lo path gate column width |
 | `_group_left_x` | Leftmost label X estimate (optional `child_merge_channel`) |
-| `_resolve_term` | dep/inv/use → `_Term` label text |
+| `_DrawioCond` | `CondTree` leaf → `_Term` label text (undrawable → `None`) |
 | `_effective_stack_inputs` | Stack height for sizing |
 | `_declaration_order_outputs` | Output order (= config declaration) |
 | `_grid_columns` | `options.grid_columns` or sqrt heuristic |

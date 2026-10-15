@@ -8,6 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
+from core.cond_ir import resolve_item
 from core.config_models import PowerSeqConfig, PowerRail
 from drawio.drawio_cell_export import (
     AND_TREE_THRESHOLD,
@@ -17,7 +18,7 @@ from drawio.drawio_cell_export import (
     _child_merge_channel,
     _export_wire_extra_for_name,
     _merge_lane_label_w,
-    _resolve_term,
+    _DrawioCond,
 )
 from drawio.drawio_export import (
     AND_GATE_H,
@@ -609,26 +610,35 @@ class TestReferencedCondInversion:
         n: PowerRail(n, seq_type="output") for n in ("P12V_AUX_EN_N", "VDD")
     }
 
+    @staticmethod
+    def _term(dep, inv, use, rails):
+        return resolve_item(dep, inv, use, rails).accept(_DrawioCond(set(rails)))
+
     def test_resolve_term_inverts_referenced_lo_cond(self):
-        t = _resolve_term("P12V_AUX_EN_N", True, "lo", self.OUTPUTS)
+        t = self._term("P12V_AUX_EN_N", True, "lo", self.OUTPUTS)
         assert t.text == "~p12v_aux_en_n_lo"
         assert t.is_cond
 
     def test_resolve_term_inverts_referenced_hi_cond(self):
-        assert _resolve_term("VDD", True, "hi", self.OUTPUTS).text == "~vdd_hi"
+        assert self._term("VDD", True, "hi", self.OUTPUTS).text == "~vdd_hi"
 
     def test_resolve_term_keeps_referenced_cond_plain_when_not_inv(self):
-        assert _resolve_term("VDD", False, "lo", self.OUTPUTS).text == "vdd_lo"
+        assert self._term("VDD", False, "lo", self.OUTPUTS).text == "vdd_lo"
 
     def test_resolve_term_still_inverts_self_dep(self):
-        assert _resolve_term("VDD", True, "self", {}).text == "~VDD"
+        assert self._term("VDD", True, "self", self.OUTPUTS).text == "~VDD"
 
     def test_resolve_term_reads_level_when_dep_is_input(self):
         """input 沒有 PSEQCELL，帶 use=hi/lo 時要退化為讀準位（對齊 Verilog/C）。"""
         rails = {"PG": PowerRail("PG", seq_type="input")}
         for use in ("hi", "lo", "force"):
-            t = _resolve_term("PG", False, use, rails)
+            t = self._term("PG", False, use, rails)
             assert t.text == "PG" and not t.is_cond, f"use={use}"
+
+    def test_resolve_term_drops_force_cond_and_unknown_dep(self):
+        """Force 不畫；不在 config 裡的依賴沒有對應元件，也不畫。"""
+        assert self._term("VDD", False, "force", self.OUTPUTS) is None
+        assert self._term("NOBODY", False, "self", self.OUTPUTS) is None
 
     def test_drawio_label_shows_inverted_referenced_cond(self):
         cfg = PowerSeqConfig(

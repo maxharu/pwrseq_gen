@@ -8,9 +8,16 @@
 下方期望值取自接 `core.cond_ir` *之前* 的輸出，逐字元對照過，因此是真正的回歸基準。
 其餘後端改走 CondTree 時，照樣在這裡加一組。
 """
+import pytest
+
+from core.cond_ir import resolve_condition
 from core.config_models import PowerRail, PowerSeqConfig
 from core.constants import DEP_HIGH, DEP_LOW
+from core.naming import internal_sig
+from codegen.c_generator import generate_c
 from codegen.verilog_generator import generate_verilog
+from drawio.drawio_cell_export import _exported_hilo_keys, _parse_path_group_terms
+from timing.timing_sim import _SimCond
 
 SYNTH = PowerSeqConfig(
     module_name="synth",
@@ -61,6 +68,21 @@ EXPECTED_VERILOG_ASSIGNS = [
 ]
 
 
+EXPECTED_C_CONDITIONS = [
+    "synth_var.mixed .hi.condition    = !((!oemgpio_DI_Get(IN_DEB) ^ synth_var.base.hi.condition))"
+    " | (0) | !((oemgpio_DI_Get(IN_RAW) | !synth_var.base.force.condition | 1));",
+    "synth_var.mixed .lo.condition    = (synth_var.base.lo.condition) | !(0)"
+    " | (oemgpio_DI_Get(IN_RAW));",
+    "synth_var.mixed .force.condition = (synth_var.base.force.condition | oemgpio_DI_Get(IN_DEB));",
+    "synth_var.legacy.hi.condition    = (!synth_var.base.lo.condition & oemgpio_DI_Get(IN_RAW));",
+    "synth_var.legacy.lo.condition    = 0;",
+    "synth_var.legacy.force.condition = 0;",
+    "synth_var.bare  .hi.condition    = 1;",
+    "synth_var.bare  .lo.condition    = 0;",
+    "synth_var.bare  .force.condition = 0;",
+]
+
+
 def test_verilog_group_assembly():
     lines = [
         ln.strip()
@@ -68,3 +90,86 @@ def test_verilog_group_assembly():
         if ln.strip().startswith(("assign mixed_", "assign legacy_", "assign bare_"))
     ]
     assert lines == EXPECTED_VERILOG_ASSIGNS
+
+
+def test_c_group_assembly():
+    lines = [
+        ln.strip()
+        for ln in generate_c(SYNTH, "synth.c").splitlines()
+        if ".condition" in ln and ln.strip().startswith("synth_var.")
+        and not ln.strip().startswith("synth_var.base")
+    ]
+    assert lines == EXPECTED_C_CONDITIONS
+
+
+# ---- 模擬器 ------------------------------------------------------------
+
+NAME_TO_RAIL = {r.name: r for r in SYNTH.rails}
+BASE = internal_sig("BASE")
+
+
+def _sim(rail_name, kind, raw=None, out_hi=None, out_lo=None, out_val=None):
+    tree = resolve_condition(NAME_TO_RAIL[rail_name], kind, NAME_TO_RAIL)
+    return tree.accept(
+        _SimCond(NAME_TO_RAIL, raw or {}, out_hi or {}, out_lo or {}, out_val or {})
+    )
+
+
+@pytest.mark.parametrize("in_deb,base_hi,want", [(0, 0, 0), (1, 0, 1), (0, 1, 1), (1, 1, 0)])
+def test_sim_mixed_hi_reduces_to_the_xor_group(in_deb, base_hi, want):
+    """第 2 組是反相常數 1 → 0；第 3 組含常數 1 的 or 恆真、整組反相 → 0。
+    因此整條只剩第 1 組：!((~IN_DEB) ^ BASE.hi)。"""
+    got = _sim("MIXED", "hi", raw={"IN_DEB": in_deb}, out_hi={BASE: base_hi})
+    assert got == want
+
+
+@pytest.mark.parametrize("base_lo,in_raw", [(0, 0), (1, 0), (0, 1), (1, 1)])
+def test_sim_mixed_lo_is_pinned_high_by_the_inverted_empty_group(base_lo, in_raw):
+    """空 group 求值為 0，帶整組反相後變成 1，而 group 間是 OR。"""
+    assert _sim("MIXED", "lo", raw={"IN_RAW": in_raw}, out_lo={BASE: base_lo}) == 1
+
+
+@pytest.mark.parametrize("in_deb", [0, 1])
+def test_sim_mixed_force_follows_in_deb_only(in_deb):
+    """(BASE.force | IN_DEB)，而模擬器的 force 條件恆為 0（KNOWN_SIM_DIVERGENCE）。"""
+    assert _sim("MIXED", "force", raw={"IN_DEB": in_deb}, out_val={BASE: 1}) == in_deb
+
+
+@pytest.mark.parametrize("base_lo,in_raw,want", [(0, 0, 0), (0, 1, 1), (1, 0, 0), (1, 1, 0)])
+def test_sim_legacy_hi_is_and_of_inverted_cond_and_level(base_lo, in_raw, want):
+    got = _sim("LEGACY", "hi", raw={"IN_RAW": in_raw}, out_lo={BASE: base_lo})
+    assert got == want
+
+
+def test_sim_bare_uses_the_empty_condition_defaults():
+    assert (_sim("BARE", "hi"), _sim("BARE", "lo"), _sim("BARE", "force")) == (1, 0, 0)
+
+
+# ---- Draw.io ----------------------------------------------------------
+
+def _drawio_groups(rail_name, hl):
+    parsed = _parse_path_group_terms(NAME_TO_RAIL[rail_name], hl, NAME_TO_RAIL, set(NAME_TO_RAIL))
+    return [[(t.text, t.is_cond) for t in group] for group in parsed]
+
+
+def test_drawio_drops_undrawable_terms_and_empty_groups():
+    """常數與 Force 條件畫不出來，整組只剩常數時該 group 不該留下空殼。"""
+    assert _drawio_groups("MIXED", "hi") == [
+        # 第 1 組：準位（帶 ~）+ 條件訊號
+        [("~IN_DEB", False), ("base_hi", True)],
+        # 第 2 組只有反相常數 → 整組消失；第 3 組的 BASE use=force 與 __LOW__ 也被丟掉，
+        # IN_RAW 雖然帶 use=hi 但它是 input，退化為準位
+        [("IN_RAW", False)],
+    ]
+    assert _drawio_groups("MIXED", "lo") == [[("base_lo", True)], [("IN_RAW", False)]]
+    assert _drawio_groups("LEGACY", "hi") == [[("~base_lo", True), ("IN_RAW", False)]]
+
+
+def test_drawio_no_condition_draws_no_gate():
+    assert _drawio_groups("BARE", "hi") == []
+    assert _drawio_groups("LEGACY", "lo") == []
+
+
+def test_drawio_exported_cond_signals_exclude_force():
+    """只有被當成條件引用的 xxx_hi / xxx_lo 要拉線出來，Force 不畫所以不算。"""
+    assert _exported_hilo_keys(SYNTH) == {("BASE", "hi"), ("BASE", "lo")}

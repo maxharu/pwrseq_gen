@@ -8,8 +8,9 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
+from core.cond_ir import CondVisitor, resolve_condition
 from core.config_models import PowerSeqConfig, PowerRail, normalize_pulse_name
-from core.constants import DEP_HIGH, DEP_LOW
+from core.group_logic import c_intra_expr
 from core.naming import internal_sig, safe_name
 
 
@@ -72,74 +73,33 @@ def _collect_used_time_fields(config: PowerSeqConfig, sequenced: list[PowerRail]
     return result
 
 
-def _c_dep_expr(
-    dep_name: str,
-    name_to_rail: dict[str, PowerRail],
-    inverted: bool = False,
-    use_mode: str = "self",
-    var_name: str = "power_var",
-) -> str:
-    if dep_name == DEP_HIGH:
-        base = "0" if inverted else "1"
-        return base
-    if dep_name == DEP_LOW:
-        base = "1" if inverted else "0"
-        return base
+class _CCond(CondVisitor):
+    """把 CondTree 渲染成 firmware C 運算式。
 
-    dep = name_to_rail.get(dep_name)
-    if not dep or dep.seq_type == "input":
-        base = f"oemgpio_DI_Get({_gpio_macro(dep_name)})"
-    else:
-        sig = internal_sig(dep_name)
-        if use_mode == "hi":
-            base = f"{var_name}.{sig}.hi.condition"
-        elif use_mode == "lo":
-            base = f"{var_name}.{sig}.lo.condition"
-        elif use_mode == "force":
-            base = f"{var_name}.{sig}.force.condition"
-        else:
-            # self on output：節點本身的實際輸出準位（讀回 GPIO），對齊 Verilog/模擬器
-            base = f"oemgpio_DI_Get({_gpio_macro(dep_name)})"
+    準位一律讀回 GPIO（output 也是），只有 use=hi/lo/force 才讀 pwrcell 的條件欄位。
+    """
 
-    if inverted:
-        if base in ("0", "1"):
-            return "1" if base == "0" else "0"
-        return f"!{base}"
-    return base
+    def __init__(self, var_name: str):
+        self.var_name = var_name
 
+    def const(self, value: int) -> str:
+        return "1" if value else "0"
 
-from core.group_logic import c_intra_expr
+    def level(self, name: str) -> str:
+        return f"oemgpio_DI_Get({_gpio_macro(name)})"
 
+    def cond(self, name: str, kind: str) -> str:
+        return f"{self.var_name}.{internal_sig(name)}.{kind}.condition"
 
-def _groups_to_c_expr(
-    groups: list[list[str]],
-    rail: PowerRail,
-    kind: str,
-    name_to_rail: dict[str, PowerRail],
-    var_name: str,
-) -> str:
-    if not groups:
-        return "1" if kind == "hi" else "0"
+    def invert(self, operand: str) -> str:
+        return f"!{operand}"
 
-    get_inv = {"hi": rail.get_hi_inv, "lo": rail.get_lo_inv, "force": rail.get_force_inv}[kind]
-    get_use = {"hi": rail.get_hi_use, "lo": rail.get_lo_use, "force": rail.get_force_use}[kind]
-    get_group_inv = {"hi": rail.get_hi_group_inv, "lo": rail.get_lo_group_inv,
-                     "force": rail.get_force_group_inv}[kind]
-    get_intra_op = {"hi": rail.get_hi_intra_op, "lo": rail.get_lo_intra_op,
-                    "force": rail.get_force_intra_op}[kind]
+    def group(self, op: str, items: list[str], inv: bool) -> str:
+        expr = c_intra_expr(items, op)
+        return f"!({expr})" if inv else expr
 
-    group_exprs = []
-    for gi, group in enumerate(groups):
-        terms = []
-        for ii, d in enumerate(group):
-            use = get_use(gi, ii, d)
-            term = _c_dep_expr(d, name_to_rail, get_inv(gi, ii, d), use, var_name)
-            terms.append(term)
-        group_expr = c_intra_expr(terms, get_intra_op(gi))
-        if get_group_inv(gi):
-            group_expr = f"!({group_expr})"
-        group_exprs.append(group_expr)
-    return " | ".join(group_exprs)
+    def any_group(self, groups: list[str]) -> str:
+        return " | ".join(groups)
 
 
 _C_BANNER_INNER = 56  # power.c：// 與結尾 // 之間固定 56 字元
@@ -342,11 +302,12 @@ def generate_c(
     lines.append(_C_HANDLER_BEGIN)
 
     w_cell = max((len(internal_sig(r.name)) for r in sequenced), default=0)
+    renderer = _CCond(var_name)
     for r in sequenced:
         s = internal_sig(r.name)
-        hi_expr = _groups_to_c_expr(r.get_hi_groups(), r, "hi", name_to_rail, var_name)
-        lo_expr = _groups_to_c_expr(r.get_lo_groups(), r, "lo", name_to_rail, var_name)
-        force_expr = _groups_to_c_expr(r.get_force_groups(), r, "force", name_to_rail, var_name)
+        hi_expr = resolve_condition(r, "hi", name_to_rail).accept(renderer)
+        lo_expr = resolve_condition(r, "lo", name_to_rail).accept(renderer)
+        force_expr = resolve_condition(r, "force", name_to_rail).accept(renderer)
         lines.append(f"    {var_name}.{s.ljust(w_cell)}.hi.condition    = {hi_expr};")
         lines.append(f"    {var_name}.{s.ljust(w_cell)}.lo.condition    = {lo_expr};")
         lines.append(f"    {var_name}.{s.ljust(w_cell)}.force.condition = {force_expr};")

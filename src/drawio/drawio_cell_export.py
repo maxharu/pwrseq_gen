@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from xml.dom import minidom
 
+from core.cond_ir import AnyGroup, CondVisitor, resolve_condition
 from core.config_models import PowerSeqConfig, PowerRail
 from core.naming import internal_sig
 from drawio.drawio_export_options import DrawioExportOptions
@@ -35,7 +36,6 @@ from drawio.drawio_geometry import (  # noqa: E402
     CELL_O_W,
     CELL_O_X,
     CELL_O_Y,
-    CONST_DEPS,
     GAP,
     GRID,
     INPUT_LABEL_H,
@@ -198,56 +198,78 @@ class _Builder:
         return eid
 
 
-def _dep_has_cond_signal(dep: str, name_to_rail: dict[str, PowerRail]) -> bool:
-    """只有 output（有 PSEQCELL）才有 xxx_hi / xxx_lo 條件訊號，input 沒有。"""
-    rail = name_to_rail.get(dep)
-    return rail is not None and rail.seq_type == "output"
+class _DrawioCond(CondVisitor):
+    """把 CondTree 渲染成閘輸入的 `_Term`。
+
+    畫不出來的葉節點一律回 None，由 `group` 濾掉：常數不需要閘輸入、不在 config 裡的
+    依賴沒有對應元件、Force 條件則整個不畫。
+    """
+
+    def __init__(self, valid: set[str]):
+        self.valid = valid
+
+    def const(self, value: int) -> _Term | None:
+        return None
+
+    def level(self, name: str) -> _Term | None:
+        return _Term(name) if name in self.valid else None
+
+    def cond(self, name: str, kind: str) -> _Term | None:
+        if kind == "force":
+            return None
+        return _Term(f"{internal_sig(name)}_{kind}", is_cond=True)
+
+    def invert(self, operand: _Term | None) -> _Term | None:
+        if operand is None:
+            return None
+        return _Term(f"~{operand.text}", operand.is_cond)
+
+    def group(self, op: str, items: list[_Term | None], inv: bool) -> list[_Term]:
+        # intra_op / group_inv 決定的是閘的種類（AND/NAND、OR/NOR），由版面那層處理
+        return [t for t in items if t is not None]
+
+    def any_group(self, groups: list[list[_Term]]) -> list[list[_Term]]:
+        return [g for g in groups if g]
+
+
+class _CondSignalKeys(CondVisitor):
+    """蒐集條件樹引用到的 (節點, hi|lo)，用來決定哪些 xxx_hi / xxx_lo 要拉線出來。"""
+
+    def const(self, value: int) -> list[tuple[str, str]]:
+        return []
+
+    def level(self, name: str) -> list[tuple[str, str]]:
+        return []
+
+    def cond(self, name: str, kind: str) -> list[tuple[str, str]]:
+        return [(name, kind)] if kind in ("hi", "lo") else []
+
+    def invert(self, operand: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        return operand
+
+    def group(
+        self, op: str, items: list[list[tuple[str, str]]], inv: bool
+    ) -> list[tuple[str, str]]:
+        return [key for item in items for key in item]
+
+    def any_group(
+        self, groups: list[list[tuple[str, str]]]
+    ) -> list[tuple[str, str]]:
+        return [key for group in groups for key in group]
 
 
 def _exported_hilo_keys(config: PowerSeqConfig) -> set[tuple[str, str]]:
     """(dep_rail, hi|lo) referenced as cond by any consumer output."""
-    keys: set[tuple[str, str]] = set()
     name_to_rail = {r.name: r for r in config.rails}
-    valid = set(name_to_rail)
+    collector = _CondSignalKeys()
+    keys: set[tuple[str, str]] = set()
     for tgt in config.rails:
         if tgt.seq_type != "output":
             continue
-        for hl, groups in [("hi", tgt.get_hi_groups()), ("lo", tgt.get_lo_groups())]:
-            for gi, group in enumerate(groups):
-                for ii, d in enumerate(group):
-                    if d not in valid or d in CONST_DEPS:
-                        continue
-                    use = (
-                        tgt.get_hi_use(gi, ii, d)
-                        if hl == "hi"
-                        else tgt.get_lo_use(gi, ii, d)
-                    )
-                    if use in ("hi", "lo") and _dep_has_cond_signal(d, name_to_rail):
-                        keys.add((d, use))
+        for hl in ("hi", "lo"):
+            tree = resolve_condition(tgt, hl, name_to_rail)
+            keys.update(tree.accept(collector))
     return keys
-
-
-def _resolve_term(
-    dep: str,
-    inv: bool,
-    use: str,
-    name_to_rail: dict[str, PowerRail],
-) -> _Term | None:
-    if dep in CONST_DEPS:
-        return None
-    # use=hi/lo/force 只對有 PSEQCELL 的 output 有意義；input 退化為讀該節點準位
-    if _dep_has_cond_signal(dep, name_to_rail):
-        if use == "force":
-            return None
-        if use in ("hi", "lo"):
-            text = f"{internal_sig(dep)}_{use}"
-            if inv:
-                text = f"~{text}"
-            return _Term(text, is_cond=True)
-    text = dep
-    if inv:
-        text = f"~{text}"
-    return _Term(text, is_cond=False)
 
 
 def _and_columns(n: int) -> int:
@@ -347,24 +369,13 @@ def _child_merge_channel(right_terms: list[_Term]) -> int:
 def _parse_path_group_terms(
     rail: PowerRail,
     hl: str,
-    groups: list[list[str]],
     name_to_rail: dict[str, PowerRail],
     valid: set[str],
 ) -> list[list[_Term]]:
-    parsed: list[list[_Term]] = []
-    for gi, group in enumerate(groups):
-        terms: list[_Term] = []
-        for ii, d in enumerate(group):
-            if d not in valid or d in CONST_DEPS:
-                continue
-            inv = rail.get_hi_inv(gi, ii, d) if hl == "hi" else rail.get_lo_inv(gi, ii, d)
-            use = rail.get_hi_use(gi, ii, d) if hl == "hi" else rail.get_lo_use(gi, ii, d)
-            t = _resolve_term(d, inv, use, name_to_rail)
-            if t is not None:
-                terms.append(t)
-        if terms:
-            parsed.append(terms)
-    return parsed
+    tree = resolve_condition(rail, hl, name_to_rail)
+    if not isinstance(tree, AnyGroup):
+        return []  # 完全沒有 group（條件退化成常數），沒有閘要畫
+    return tree.accept(_DrawioCond(valid))
 
 
 def _intra_group_gate_width(terms: list[_Term]) -> int:
@@ -379,12 +390,11 @@ def _intra_group_gate_width(terms: list[_Term]) -> int:
 
 def _path_horizontal_gate_width(
     rail: PowerRail,
-    groups: list[list[str]],
     hl: str,
     name_to_rail: dict[str, PowerRail],
     valid: set[str],
 ) -> int:
-    parsed = _parse_path_group_terms(rail, hl, groups, name_to_rail, valid)
+    parsed = _parse_path_group_terms(rail, hl, name_to_rail, valid)
     if not parsed:
         return 0
     intra = max(_intra_group_gate_width(t) for t in parsed)
@@ -509,8 +519,8 @@ def _estimate_block_size(
     hi_count = _max_group_inputs(hi_g)
     lo_count = _max_group_inputs(lo_g)
     gate_w = max(
-        _path_horizontal_gate_width(rail, hi_g, "hi", name_to_rail, valid),
-        _path_horizontal_gate_width(rail, lo_g, "lo", name_to_rail, valid),
+        _path_horizontal_gate_width(rail, "hi", name_to_rail, valid),
+        _path_horizontal_gate_width(rail, "lo", name_to_rail, valid),
     )
     wire_extra = _max_export_wire_extra(rail, exported_hilo)
     _, _, block_h = _block_vertical_layout(
@@ -699,7 +709,7 @@ def _wire_path_v2(
     gate_right = cell_x - GATE_CELL_GAP
 
     parsed_groups: list[list[_Term]] = _parse_path_group_terms(
-        rail, hl, groups, name_to_rail, valid
+        rail, hl, name_to_rail, valid
     )
 
     if not parsed_groups:

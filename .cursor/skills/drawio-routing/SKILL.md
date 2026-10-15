@@ -106,7 +106,7 @@ Edge: label → Deb, Hi/Lo stroke.
 
 ---
 
-## Term resolution (`_resolve_term`)
+## Term resolution (`_DrawioCond`)
 
 | Config | Label text | Wired? |
 |--------|------------|--------|
@@ -117,9 +117,13 @@ Edge: label → Deb, Hi/Lo stroke.
 | **Input** dep, any `use` | `NAME` or `~NAME` | Yes — inputs have no PSEQCELL, so there is no `_hi`/`_lo` signal to reference |
 | `__HIGH__` / `__LOW__` | — | Skipped |
 
-`_dep_has_cond_signal(dep, name_to_rail)` gates the `use`-driven rows: a stale `use=hi/lo/force`
-left on an input dep must fall back to its level, matching Verilog / C / the simulator.
-Same guard in `_exported_hilo_keys`. Locked by `tests/test_condition_consistency.py`.
+The input-vs-output distinction is **not** decided here: `core.cond_ir.resolve_condition` emits
+`Cond(name, kind)` only for outputs, so a stale `use=hi/lo/force` left on an input dep arrives as
+`Level(name)` and falls back to its level, matching Verilog / C / the simulator. `_DrawioCond`
+only decides *rendering* — which leaves are undrawable (constants, Force, deps outside the
+config) return `None` and are filtered out by `group` / `any_group`.
+`_exported_hilo_keys` walks the same tree via `_CondSignalKeys`.
+Locked by `tests/test_condition_consistency.py` and `tests/test_cond_render.py`.
 
 Purple cond styling: `_cond_html` / `COND_COLOR`.
 
