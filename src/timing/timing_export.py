@@ -140,10 +140,16 @@ def _leaf_deps_for_edge(
 ) -> list[tuple[str, bool]]:
     """Leaf deps with inv relative to making this condition term true.
 
-    Reading a node's level (or its Force condition, which the sim does not publish)
-    makes it the leaf. Referencing another rail's Hi/Lo condition recurses into that
-    rail and accumulates per-term inv along the path; a rail whose condition yields no
-    leaf -- or which closes a cycle -- falls back to being its own leaf.
+    Reading a node's level makes it the leaf. Referencing another rail's Hi/Lo
+    condition recurses into that rail and accumulates per-term inv along the path;
+    a rail whose condition yields no leaf -- or which closes a cycle -- falls back
+    to being its own leaf.
+
+    Force stops at the leaf like a level does, because `_dep_bits_series` always
+    reads the leaf's *level* waveform and Force takes effect on the same step it
+    becomes true: the referenced rail's own waveform already shows the transition,
+    so pointing the arrow at it is exact. Hi/Lo lag by one step, which is why only
+    those recurse to find the real cause.
     """
     rail = name_to_rail.get(item.name)
     if rail is None:
