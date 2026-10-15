@@ -15,12 +15,12 @@ import re
 from core.config_models import PowerSeqConfig
 from core.timing_models import TimingScenario, norm_hscale
 from timing.timing_export import (
-    ConditionEdgePending,
-    TimingExportOptions,
     TIMING_AUTHOR,
     TIMING_EDGE_BOTH,
     TIMING_EDGE_HI_ONLY,
     TIMING_EDGE_LO_ONLY,
+    ConditionEdgePending,
+    TimingExportOptions,
     _build_export_lanes,
     _collect_condition_edge_pending,
     _head_every,

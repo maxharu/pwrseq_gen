@@ -5,15 +5,16 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 import pytest
-from core.config_models import PowerSeqConfig, PowerRail
+
+from core.config_models import PowerRail, PowerSeqConfig
 from core.naming import internal_sig
 from core.timing_models import InputWaveSpec, TimingScenario
 from timing.timing_sim import (
+    expand_binary_wave,
     expand_wave_pattern,
     simulate,
     values_to_wave,
 )
-from timing.timing_sim import expand_binary_wave
 
 
 class TestExpandWave:

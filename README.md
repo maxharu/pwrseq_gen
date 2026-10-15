@@ -48,6 +48,16 @@ pytest
 
 > 測試以 `pyproject.toml` 設定 `pythonpath = ["src"]`，可直接 import `src/` 下的模組。
 
+push / 開 PR 前跑完整 CI（lint + 測試，含黃金輸出比對）：
+
+```bat
+ci.bat
+```
+
+`.github/workflows/ci.yml` 直接呼叫同一支 `ci.bat`，所以本地與 CI 不會跑到不同指令。
+Lint 規則定義在 `pyproject.toml` 的 `[tool.ruff.lint]`：只納管 `F`（真錯誤）、`E9`、
+`I`（import 排序）、`RUF100`。
+
 已盤點的技術債與改善順序見 [`ROADMAP.md`](ROADMAP.md)。
 
 ## 專案結構
@@ -78,6 +88,7 @@ src/
   gui/                     CustomTkinter GUI（theme/widgets/panels/dialogs/settings/app）
   tools/                   json2drawio.py / build.py / build_onedir.py
   reference/               PSEQCELL 版面等匯出資產
+ci.bat                   本地 CI（ruff + pytest；GitHub workflow 也呼叫這支）
 tests/                   pytest 測試（邏輯層）
 scripts/                 範本／資產產生腳本（依賴 src/，反向不成立）
 templates/               Excel／Draw.io／時序圖範本與資產

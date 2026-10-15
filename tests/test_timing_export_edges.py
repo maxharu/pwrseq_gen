@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 from core.config_models import PowerRail, PowerSeqConfig
+from core.timing_models import InputWaveSpec, TimingScenario
 from timing.timing_export import (
     _build_export_lanes,
     _collect_condition_edge_pending,
     _dep_trigger_step,
 )
-from core.timing_models import InputWaveSpec, TimingScenario
 from timing.timing_sim import simulate
 
 

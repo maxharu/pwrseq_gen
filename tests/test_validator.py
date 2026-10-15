@@ -4,12 +4,11 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-import pytest
-from core.config_models import PowerSeqConfig, PowerRail
+from core.config_models import PowerRail, PowerSeqConfig
 from core.validator import (
+    check_circular_dependency,
     check_duplicate_names,
     check_missing_deps,
-    check_circular_dependency,
     validate,
 )
 

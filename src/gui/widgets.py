@@ -5,15 +5,13 @@ from typing import Callable, Optional
 import customtkinter as ctk
 
 from core.config_models import (
-    PowerRail,
     DEFAULT_PULSE,
+    PowerRail,
     apply_input_wave_dict,
 )
 from core.group_logic import INTRA_OP_LABELS, intra_op_label, normalize_intra_op
 from core.timing_models import InputWaveSpec
-
 from gui.theme import *
-
 
 # ============================================================
 # CondSectionFrame — Hi / Lo / Force 共用條件區塊（B1）

@@ -25,12 +25,12 @@ import os
 
 import pytest
 
+from codegen.c_generator import _CCond
+from codegen.verilog_generator import _VerilogCond
 from core.cond_ir import CondVisitor, resolve_dep, resolve_item
 from core.config_models import PowerRail, PowerSeqConfig
 from core.constants import DEP_HIGH, DEP_LOW
 from core.naming import internal_sig, safe_name
-from codegen.c_generator import _CCond
-from codegen.verilog_generator import _VerilogCond
 from drawio.drawio_cell_export import _DrawioCond
 from timing.timing_sim import _SimCond
 

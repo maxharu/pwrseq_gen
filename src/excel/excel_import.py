@@ -22,8 +22,8 @@ from core.config_models import (
     normalize_pulse_name,
 )
 from core.constants import DEP_HIGH, DEP_LOW
-from core.timing_models import TimingScenario
 from core.group_logic import is_legacy_group_inv_cell, parse_intra_op_cell
+from core.timing_models import TimingScenario
 
 DATA_START_ROW = 4
 MAX_DATA_ROW_CAP = 5000

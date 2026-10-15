@@ -6,11 +6,12 @@
 - 無 Lo 依賴時 iLo 接 1'b0
 """
 import os
-from core.config_models import PowerSeqConfig, PowerRail, DEFAULT_PULSE, pulse_verilog_name
-from core.cond_ir import Const, CondVisitor, resolve_condition
+
+from core.cond_ir import CondVisitor, Const, resolve_condition
+from core.config_models import DEFAULT_PULSE, PowerRail, PowerSeqConfig, pulse_verilog_name
 from core.constants import DEP_HIGH, DEP_LOW
-from core.naming import internal_sig, safe_name
 from core.group_logic import verilog_intra_expr
+from core.naming import internal_sig, safe_name
 
 
 def _filename_to_module_and_guard(filepath: str) -> tuple[str, str]:
@@ -43,21 +44,6 @@ def _aligned_hash_params(param_rows: list[list[tuple[str, int]]]) -> list[str]:
         ]
         blocks.append("#(" + ", ".join(parts) + ")")
     return blocks
-
-
-def _get_successors(config: PowerSeqConfig) -> dict[str, list[str]]:
-    """取得每個節點的後繼（依賴它的節點，不含 external），排除 __HIGH__/__LOW__"""
-    succ = {r.name: [] for r in config.rails}
-    for r in config.rails:
-        deps = (
-            r.get_depends_on_hi_flat()
-            + r.get_depends_on_lo_flat()
-            + r.get_depends_on_force_flat()
-        )
-        for dep in deps:
-            if dep not in (DEP_HIGH, DEP_LOW) and dep in succ:
-                succ[dep].append(r.name)
-    return succ
 
 
 def _topological_sort(rails: list) -> list:
@@ -167,9 +153,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
     # 節點順序 = config.rails（左側列表拖拉順序），用於 port 與整份 Verilog 程式碼順序
     node_order_rails = config.rails
     name_to_rail = {r.name: r for r in config.rails}
-    successors = _get_successors(config)
     sequenced = [r for r in node_order_rails if r.has_pseqcell]
-    externals = [r for r in node_order_rails if r.seq_type == "input"]
     inputs_with_deb = [r for r in node_order_rails if r.seq_type == "input" and getattr(r, "deb_enable", False)]
 
     if output_filename:

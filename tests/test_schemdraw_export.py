@@ -103,7 +103,7 @@ def test_generate_schemdraw_doc_edges_never_go_backward_in_time():
 
 @pytest.mark.skipif(not _DEMO_JSON.is_file(), reason="demo_json.json missing")
 def test_generate_schemdraw_include_rails_subset():
-    from core.config_models import PowerRail, PowerSeqConfig
+    from core.config_models import PowerSeqConfig
 
     cfg = PowerSeqConfig.from_dict(json.loads(_DEMO_JSON.read_text(encoding="utf-8")))
     first_out = next(r.name for r in cfg.rails if r.has_pseqcell)

@@ -3,7 +3,11 @@ from __future__ import annotations
 
 from core.config_models import PowerSeqConfig
 from drawio.drawio_export_options import DrawioExportOptions
-from drawio.drawio_geometry import (  # noqa: F401 — re-export for callers
+from drawio.drawio_geometry import (
+    _PSEQCELL_STYLE_H_DEB,
+    _PSEQCELL_STYLE_INNER,
+    _PSEQCELL_STYLE_L_DEB,
+    _PSEQCELL_STYLE_O,
     AND_GATE_H,
     AND_GATE_W,
     CELL_GROUP_H,
@@ -29,10 +33,6 @@ from drawio.drawio_geometry import (  # noqa: F401 — re-export for callers
     STROKE_DEFAULT,
     STROKE_HI,
     STROKE_LO,
-    _PSEQCELL_STYLE_H_DEB,
-    _PSEQCELL_STYLE_INNER,
-    _PSEQCELL_STYLE_L_DEB,
-    _PSEQCELL_STYLE_O,
     _and_gate_style,
     _deb_port_label,
     _escape_xml,

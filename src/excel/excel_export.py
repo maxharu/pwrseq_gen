@@ -25,10 +25,9 @@ from core.config_models import (
     rail_input_wave_spec,
 )
 from core.constants import DEP_HIGH, DEP_LOW
+from core.group_logic import intra_op_label
 from core.paths import TEMPLATES_DIR
 from core.timing_models import InputWaveSpec, TimingScenario
-from core.group_logic import intra_op_label
-from excel.excel_template_layout import apply_nodes_sheet_header_rows
 from excel.excel_import import (
     COND_META_COLS,
     COND_SIGNAL_MAX_COLS,
@@ -36,12 +35,13 @@ from excel.excel_import import (
     INPUT_COND_SIGNAL_MAX_COLS,
     INPUT_META_COLS,
     MAX_DATA_ROW_CAP,
-    OUTPUT_USE_SUFFIXES,
     _find_sheet,
     build_signal_dropdown_entries,
     data_area_end_row,
     last_used_row,
 )
+from excel.excel_template_layout import apply_nodes_sheet_header_rows
+
 SHEET_LISTS = "Lists"
 
 INPUT_FILL = PatternFill("solid", fgColor="F3E8FF")

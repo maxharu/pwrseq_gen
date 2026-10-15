@@ -3,7 +3,7 @@ name = "pwrseq_gen"
 version = "1.5"
 description = "Power Sequence Generator — GUI for editing power-sequence nodes and exporting Verilog/C/Draw.io/Schemdraw/Excel."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 authors = [{ name = "Haru" }]
 dependencies = [
     "customtkinter>=5.2.0",
@@ -14,9 +14,30 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0.0"]
+dev = ["pytest>=7.0.0", "ruff>=0.17.0"]
 build = ["pyinstaller>=6.0.0"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+src = ["src"]
+
+[tool.ruff.lint]
+# 只納管「會壞掉」與「會造成 diff 雜訊」的規則：
+#   F    真錯誤（未定義名稱、未使用 import / 變數）
+#   E9   語法層級錯誤
+#   I    import 排序
+#   RUF100  失效的 noqa
+# 刻意不開 BLE001（blind-except）與 S110（try-except-pass）：GUI 有 130 餘處
+# `except Exception: pass` 是「預覽／繪圖失敗不要讓整個視窗掛掉」的既定取向，
+# 要改是設計決策，不該由 linter 逼著改。
+select = ["F", "E9", "I", "RUF100"]
+
+[tool.ruff.lint.per-file-ignores]
+# GUI 用 `from gui.theme import *` 匯入配色常數，星號 import 無法靜態追蹤
+"src/gui/*.py" = ["F403", "F405"]
+# facade 模組的用途就是 re-export
+"src/drawio/drawio_export.py" = ["F401"]

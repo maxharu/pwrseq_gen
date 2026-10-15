@@ -6,8 +6,9 @@ __pycache__/
 *.pyc
 *.pyo
 
-# pytest
+# pytest / ruff
 .pytest_cache/
+.ruff_cache/
 
 # PyInstaller
 *.spec

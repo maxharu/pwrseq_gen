@@ -38,6 +38,7 @@ def _can_create_ctk() -> bool:
 class TestCondDepOptionsRefresh:
     def test_refresh_updates_combo_values_after_rename(self):
         import customtkinter as ctk
+
         from gui.widgets import CondSectionFrame
 
         names = ["SIG_1", "SIG_2"]

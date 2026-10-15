@@ -6,8 +6,8 @@ import xml.etree.ElementTree as ET
 
 from core.config_models import PowerRail, parse_pulse_period
 from core.constants import DEP_HIGH, DEP_LOW
-from core.paths import reference_dir
 from core.group_logic import normalize_intra_op
+from core.paths import reference_dir
 
 CONST_DEPS = {DEP_HIGH, DEP_LOW}
 

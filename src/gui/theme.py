@@ -5,7 +5,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 from core.constants import DEP_HIGH, DEP_LOW
-from core.version import APP_NAME, APP_AUTHOR, APP_VERSION, APP_COPYRIGHT_YEAR
+from core.version import APP_AUTHOR, APP_COPYRIGHT_YEAR, APP_NAME, APP_VERSION
 
 # 關閉自動 DPI 縮放，避免縮放時 dropdown 出現 TclError。
 ctk.deactivate_automatic_dpi_awareness()

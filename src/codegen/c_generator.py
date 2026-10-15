@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 
 from core.cond_ir import CondVisitor, resolve_condition
-from core.config_models import PowerSeqConfig, PowerRail, pulse_suffix
+from core.config_models import PowerRail, PowerSeqConfig, pulse_suffix
 from core.group_logic import c_intra_expr
 from core.naming import internal_sig, safe_name
 

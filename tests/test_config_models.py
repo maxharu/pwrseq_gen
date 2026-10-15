@@ -1,12 +1,10 @@
 """Tests for config_models.py"""
-import json
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-import pytest
-from core.config_models import PowerSeqConfig, PowerRail
+from core.config_models import PowerRail, PowerSeqConfig
 
 
 class TestPowerRail:

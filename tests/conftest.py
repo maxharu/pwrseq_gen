@@ -10,7 +10,7 @@ except Exception:
     pass
 
 # src/ 由 pyproject.toml 的 [tool.pytest.ini_options] pythonpath 加入 sys.path
-from core.config_models import PowerSeqConfig, PowerRail
+from core.config_models import PowerRail, PowerSeqConfig
 
 
 @pytest.fixture

@@ -15,11 +15,15 @@ from dataclasses import dataclass
 from xml.dom import minidom
 
 from core.cond_ir import AnyGroup, CondVisitor, resolve_condition
-from core.config_models import PowerSeqConfig, PowerRail
+from core.config_models import PowerRail, PowerSeqConfig
 from core.naming import internal_sig
 from drawio.drawio_export_options import DrawioExportOptions
-
-from drawio.drawio_geometry import (  # noqa: E402
+from drawio.drawio_geometry import (
+    _GATE_STYLE_OR,
+    _PSEQCELL_STYLE_H_DEB,
+    _PSEQCELL_STYLE_INNER,
+    _PSEQCELL_STYLE_L_DEB,
+    _PSEQCELL_STYLE_O,
     AND_GATE_H,
     AND_GATE_W,
     CELL_GROUP_H,
@@ -44,16 +48,10 @@ from drawio.drawio_geometry import (  # noqa: E402
     STROKE_DEFAULT,
     STROKE_HI,
     STROKE_LO,
-    _PSEQCELL_STYLE_H_DEB,
-    _PSEQCELL_STYLE_INNER,
-    _PSEQCELL_STYLE_L_DEB,
-    _PSEQCELL_STYLE_O,
-    _and_gate_style,
     _deb_port_label,
     _escape_xml,
     _intra_child_gate_style,
     _intra_merge_gate_style,
-    _GATE_STYLE_OR,
     _or_gate_style,
 )
 

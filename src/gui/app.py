@@ -9,38 +9,37 @@ from typing import Optional
 import customtkinter as ctk
 from PIL import Image
 
+from codegen.c_generator import generate_c
+from codegen.verilog_generator import generate_verilog
 from core.app_expiry import ensure_not_expired
+from core.applog import get_logger
 from core.config_models import (
+    DEFAULT_PULSE,
     PowerRail,
     PowerSeqConfig,
-    DEFAULT_PULSE,
     build_timing_scenario,
     rail_input_wave_spec,
 )
-from drawio.drawio_export import generate_drawio
+from core.snapshot_history import SnapshotHistory
+from core.timing_models import InputWaveSpec, TimingScenario
 from core.validator import validate
-from codegen.verilog_generator import generate_verilog
-from codegen.c_generator import generate_c
+from drawio.drawio_export import generate_drawio
+from gui.dialogs import *
+from gui.panels import *
+from gui.settings import GuiSettings, RecentFiles
+from gui.theme import *
+from gui.widgets import *
+from timing.schemdraw_export import (
+    export_schemdraw_from_options,
+    generate_schemdraw_doc,
+    render_schemdraw_png_bytes,
+)
 from timing.timing_export import (
     TIMING_EDGE_BOTH,
     TIMING_EDGE_HI_ONLY,
     TIMING_EDGE_LO_ONLY,
     TimingExportOptions,
 )
-from core.timing_models import InputWaveSpec, TimingScenario
-from timing.schemdraw_export import (
-    export_schemdraw_from_options,
-    generate_schemdraw_doc,
-    render_schemdraw_png_bytes,
-)
-
-from core.applog import get_logger
-from core.snapshot_history import SnapshotHistory
-from gui.theme import *
-from gui.widgets import *
-from gui.dialogs import *
-from gui.panels import *
-from gui.settings import GuiSettings, RecentFiles
 
 logger = get_logger(__name__)
 

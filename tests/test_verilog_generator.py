@@ -5,9 +5,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-import pytest
-from core.config_models import PowerSeqConfig, PowerRail
-from codegen.verilog_generator import generate_verilog, _filename_to_module_and_guard
+from codegen.verilog_generator import _filename_to_module_and_guard, generate_verilog
+from core.config_models import PowerRail, PowerSeqConfig
 
 
 class TestFilenameToModuleAndGuard:

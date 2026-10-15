@@ -5,14 +5,13 @@ from typing import Callable
 import customtkinter as ctk
 
 from core.config_models import PowerRail
+from gui.theme import *
 from timing.timing_export import (
     TIMING_EDGE_HI_ONLY,
     TIMING_EDGE_LO_ONLY,
     TimingExportOptions,
     timing_edge_kinds_from_choice,
 )
-
-from gui.theme import *
 
 
 class AboutDialog(ctk.CTkToplevel):

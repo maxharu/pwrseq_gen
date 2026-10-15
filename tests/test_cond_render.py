@@ -10,12 +10,12 @@
 """
 import pytest
 
+from codegen.c_generator import generate_c
+from codegen.verilog_generator import generate_verilog
 from core.cond_ir import resolve_condition
 from core.config_models import PowerRail, PowerSeqConfig
 from core.constants import DEP_HIGH, DEP_LOW
 from core.naming import internal_sig
-from codegen.c_generator import generate_c
-from codegen.verilog_generator import generate_verilog
 from drawio.drawio_cell_export import _exported_hilo_keys, _parse_path_group_terms
 from timing.timing_export import _condition_items, _leaf_deps_for_edge
 from timing.timing_sim import _SimCond

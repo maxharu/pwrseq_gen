@@ -7,15 +7,13 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 
 from core.config_models import (
-    PowerRail,
     DEFAULT_PULSE,
+    PowerRail,
     normalize_pulse_name,
 )
 from core.timing_models import norm_hscale
-
 from gui.theme import *
 from gui.widgets import *
-
 
 # ============================================================
 # NodeListPanel — 左側節點列表（A5 / B5）

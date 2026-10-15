@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 import sys
-import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VBA_BIN = os.path.join(ROOT, "templates", "vba", "vbaProject.bin")
@@ -18,9 +17,11 @@ def main() -> int:
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
 
-    from generate_excel_template import main as gen_main, OUT_PATH
     import shutil
     import zipfile
+
+    from generate_excel_template import OUT_PATH
+    from generate_excel_template import main as gen_main
 
     # 強制走 COM embed，避免 zip-inject 舊 vbaProject.bin 覆蓋剛改的 .bas/.cls
     bak = VBA_BIN + ".bak"

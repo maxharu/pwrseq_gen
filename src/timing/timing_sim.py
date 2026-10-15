@@ -4,18 +4,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from core.cond_ir import CondVisitor, resolve_condition, resolve_item
 from core.config_models import (
-    PowerSeqConfig,
-    PowerRail,
     DEFAULT_PULSE,
+    PowerRail,
+    PowerSeqConfig,
     build_timing_scenario,
     parse_pulse_period,
 )
-from core.cond_ir import CondVisitor, resolve_condition, resolve_item
 from core.constants import DEP_HIGH, DEP_LOW
+from core.group_logic import eval_intra_op
 from core.naming import internal_sig
 from core.timing_models import InputWaveSpec, TimingScenario
-from core.group_logic import eval_intra_op
 
 
 @dataclass

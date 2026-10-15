@@ -1,9 +1,8 @@
 """Application expiry — block GUI use after the trial end date."""
 from __future__ import annotations
 
-from datetime import date
-
 import tkinter as tk
+from datetime import date
 from tkinter import messagebox
 
 # Last valid calendar day (inclusive). Expired from the next day onward.

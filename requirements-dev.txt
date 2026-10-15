@@ -1,3 +1,4 @@
-# 開發相依（測試）。執行期相依見 requirements.txt。
+# 開發相依（測試 + lint）。執行期相依見 requirements.txt。
 -r requirements.txt
 pytest>=7.0.0
+ruff>=0.17.0

@@ -84,6 +84,24 @@
   退回 1000 的不對稱 fallback。兩者都只在名稱異常時才觸發，三份真實 config 的 pulse
   全為標準寫法，因此五個後端輸出逐字元不變；`tests/test_pulse_name.py` 用別名對照
   （`iPulse_1us` / `Pulse-1us` / `Pulse 1us` / `Pulse.2ms`）把一致性鎖住，六個注入 bug 全紅。
+- **CI 已建立** — 根目錄 `ci.bat`（`ruff check` + `pytest`，黃金輸出比對本來就在
+  `tests/test_golden_exports.py` 裡），`.github/workflows/ci.yml` 直接呼叫同一支，
+  所以本地與 CI 不可能跑到不同指令。已驗證 lint 與測試任一失敗都會讓 `ci.bat` 回非零。
+
+  ruff 規則刻意只開 `F` / `E9` / `I` / `RUF100`。開預設全集會有 282 筆，其中
+  blind-except 80 筆、try-except-pass 53 筆來自 GUI「預覽／繪圖失敗不要讓視窗掛掉」
+  的既定取向，那是設計決策不該由 linter 逼著改；星號 import 的 `F403`/`F405` 與
+  facade 的 `F401` 用 per-file-ignores 排除。導入時順手清掉 unused import 15、
+  unsorted-imports 40、失效 noqa 9，以及三個賦值後沒用的變數（`verilog_generator`
+  的 `successors` / `externals` 連同只服務它們的 `_get_successors` 一起移除）。
+  42 個檔案被重排 import，五個後端輸出逐字元不變。
+- **`requires-python` 已修正為 `>=3.10`** — 原本寫 `>=3.8`，但 72 個 `.py` 只有 18 個有
+  `from __future__ import annotations`，其餘直接用 `list[str]` / `str | None` 當註解，
+  在 3.8/3.9 上 import 當下就會炸。宣告與實際支援範圍本來就不一致。
+- **GUI 預覽失敗時看不到錯誤訊息的 bug 已修** — 兩個預覽 worker 寫成
+  `except Exception as e: self.after(0, lambda: ...str(e))`，但 Python 在 except 區塊
+  結束時會隱含 `del e`，lambda 延後執行時 `str(e)` 丟 NameError，使用者什麼都看不到。
+  由 ruff `F821` 發現，現在也由 CI 的 `F` 規則守住。
 
 ### 兩條已經是可執行護欄的約束
 
@@ -98,12 +116,7 @@
 
 ## 待辦
 
-### 1. 最小可行 CI
-
-`.github/workflows/` 目前是空的，根目錄沒有 `ci.bat`（但 user rule 要求 push 前跑）。
-內容只要三件事：`pytest` + `ruff`（兼管 import 排序）+ 黃金輸出比對。linter 要加進 `requirements-dev.txt`。
-
-### 2. 把套件邊界做成真的 API
+### 1. 把套件邊界做成真的 API
 
 除了 `gui/`（已宣告 `run_gui`），其餘七個 `__init__.py` 都只有一行 docstring，
 所有呼叫端都 import 深層路徑（`from drawio.drawio_cell_export import ...`）。
@@ -114,7 +127,7 @@
 私有符號的白箱測試可以留，但要清楚那是白箱測試，不是契約。
 同時清掉 `drawio_export.py` 對 `drawio_geometry` 的 34 個符號 re-export facade（大多無人使用）。
 
-### 3. 模擬器補上 Force
+### 2. 模擬器補上 Force
 
 `_SimCond.cond` 對 `kind="force"` 目前回定值 0。模擬器內部其實算得出 force 條件（會傳進 `fsm.commit`），
 只是沒發布成 `out_force` 讓下游依賴讀取，所以是實作缺口而非設計決定——
@@ -122,7 +135,7 @@
 
 - **verify**：移除 `KNOWN_SIM_DIVERGENCE` 後 `test_condition_consistency.py` 仍綠
 
-### 4. （最後）GUI 抽純函式
+### 3. （最後）GUI 抽純函式
 
 `app.py` + `widgets.py` + `panels.py` 約 4400 行，headless 下測試幾乎全 skip——
 等於這 4400 行沒有自動化保護。

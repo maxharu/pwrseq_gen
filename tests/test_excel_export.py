@@ -11,9 +11,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 from dataclasses import replace
 
 from core.config_models import PowerRail, PowerSeqConfig
+from core.constants import DEP_LOW
 from excel.excel_export import export_powerseq_to_excel, format_signal_cell
 from excel.excel_import import load_powerseq_from_excel
-from core.constants import DEP_LOW
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE_XLSX = os.path.join(ROOT, "templates", "powerseq_nodes_template.xlsx")

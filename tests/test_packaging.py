@@ -87,7 +87,7 @@ class TestBuildBundlesExcelAssets:
 
     def test_vba_helpers_need_no_scripts_path_workaround(self):
         """They live in src/excel/vba/, so normal import analysis collects them."""
-        import excel.vba.embed_excel_vba  # noqa: F401
+        import excel.vba.embed_excel_vba
         import excel.vba.inject_vba_zip  # noqa: F401
 
         cmd = build_command(onefile=True)

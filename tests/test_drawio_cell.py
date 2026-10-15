@@ -4,36 +4,29 @@ import os
 import sys
 import xml.etree.ElementTree as ET
 
-import pytest
-
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from core.cond_ir import resolve_item
-from core.config_models import PowerSeqConfig, PowerRail
+from core.config_models import PowerRail, PowerSeqConfig
 from drawio.drawio_cell_export import (
     AND_TREE_THRESHOLD,
     EXPORT_WIRE_MIN,
     LABEL_STACK_STEP,
-    _Term,
     _child_merge_channel,
+    _DrawioCond,
     _export_wire_extra_for_name,
     _merge_lane_label_w,
-    _DrawioCond,
+    _Term,
 )
 from drawio.drawio_export import (
+    _PSEQCELL_STYLE_H_DEB,
+    _PSEQCELL_STYLE_INNER,
     AND_GATE_H,
     AND_GATE_W,
-    CELL_O_H,
-    CELL_O_W,
-    CELL_O_X,
-    CELL_O_Y,
     GAP,
     GRID,
     STROKE_HI,
     STROKE_LO,
-    _PSEQCELL_STYLE_H_DEB,
-    _PSEQCELL_STYLE_INNER,
-    _PSEQCELL_STYLE_O,
     generate_drawio,
 )
 

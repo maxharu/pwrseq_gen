@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from core.config_models import PowerRail, PowerSeqConfig
+from core.constants import DEP_HIGH, DEP_LOW
 from excel.excel_import import (
     _parse_input_cond_meta,
     _parse_output_cond_meta,
@@ -15,7 +16,6 @@ from excel.excel_import import (
     load_powerseq_from_excel,
     parse_signal_cell,
 )
-from core.constants import DEP_HIGH, DEP_LOW
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE_XLSX = os.path.join(ROOT, "templates", "powerseq_nodes_template.xlsx")

@@ -8,9 +8,9 @@ import pytest
 
 from core.cond_ir import (
     AnyGroup,
-    Const,
     Cond,
     CondVisitor,
+    Const,
     Group,
     Level,
     Not,

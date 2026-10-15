@@ -12,13 +12,14 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 import pytest
+
+from codegen.c_generator import _pulse_time_field
 from core.config_models import (
     normalize_pulse_name,
     parse_pulse_period,
     pulse_suffix,
     pulse_verilog_name,
 )
-from codegen.c_generator import _pulse_time_field
 from drawio.drawio_geometry import _deb_time_text
 from timing.timing_sim import _pulse_scale_units
 

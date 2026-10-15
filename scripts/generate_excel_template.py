@@ -20,8 +20,8 @@ try:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
-    from openpyxl.worksheet.datavalidation import DataValidation
     from openpyxl.workbook.defined_name import DefinedName
+    from openpyxl.worksheet.datavalidation import DataValidation
 except ImportError:
     print("請先安裝: pip install openpyxl")
     sys.exit(1)
@@ -32,6 +32,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 from excel.excel_import import build_signal_dropdown_entries
 from excel.excel_template_layout import apply_nodes_sheet_header_rows, node_sheet_headers
+
 OUT_PATH = os.path.join(ROOT, "templates", "powerseq_nodes_template.xlsm")
 TMP_XLSX = os.path.join(ROOT, "templates", "_powerseq_nodes_template_build.xlsx")
 
@@ -369,7 +370,6 @@ def _write_config_sheet(ws) -> str:
 
 def _write_nodes_sheet(wb: Workbook) -> None:
     ws = wb.create_sheet(SHEET_NODES)
-    headers = _node_headers()
     apply_nodes_sheet_header_rows(ws)
 
     for i, row_data in enumerate(NODE_ROWS):
