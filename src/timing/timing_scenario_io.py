@@ -6,29 +6,13 @@ from __future__ import annotations
 import json
 import os
 
-from core.config_models import PowerSeqConfig, apply_input_wave_dict, build_timing_scenario
-from core.timing_models import InputWaveSpec, TimingScenario
-
-
-def merge_scenario_for_config(
-    loaded: TimingScenario, config: PowerSeqConfig,
-) -> TimingScenario:
-    """Keep only input nodes that exist in the current project."""
-    defaults = build_timing_scenario(config)
-    inputs: dict[str, InputWaveSpec] = {}
-    for r in config.rails:
-        if r.seq_type != "input":
-            continue
-        spec = loaded.inputs.get(r.name) or defaults.inputs.get(
-            r.name, InputWaveSpec(),
-        )
-        inputs[r.name] = spec
-        apply_input_wave_dict(r, spec.to_dict())
-    return TimingScenario(
-        steps=loaded.steps,
-        inputs=inputs,
-        hscale=loaded.hscale,
-    )
+from core.config_models import (
+    PowerSeqConfig,
+    build_timing_scenario,
+    merge_scenario_for_config,
+)
+from core.timing_models import TimingScenario
+from excel import load_timing_scenario_from_excel
 
 
 def scenario_to_dict(scenario: TimingScenario) -> dict:
@@ -49,9 +33,6 @@ def scenario_from_dict(data: dict) -> TimingScenario:
 def load_scenario_file(path: str) -> TimingScenario:
     ext = os.path.splitext(path)[1].lower()
     if ext in (".xlsx", ".xlsm", ".xls"):
-        # 延後 import：timing 與 excel 互相依賴，模組層級 import 會造成循環
-        from excel import load_timing_scenario_from_excel
-
         return load_timing_scenario_from_excel(path)
     with open(path, encoding="utf-8") as f:
         return scenario_from_dict(json.load(f))

@@ -374,6 +374,27 @@ def build_timing_scenario(config: "PowerSeqConfig") -> TimingScenario:
     return TimingScenario(steps=steps, hscale=hscale, inputs=inputs)
 
 
+def merge_scenario_for_config(
+    loaded: TimingScenario, config: "PowerSeqConfig",
+) -> TimingScenario:
+    """Keep only input nodes that exist in the current project."""
+    defaults = build_timing_scenario(config)
+    inputs: dict[str, InputWaveSpec] = {}
+    for r in config.rails:
+        if r.seq_type != "input":
+            continue
+        spec = loaded.inputs.get(r.name) or defaults.inputs.get(
+            r.name, InputWaveSpec(),
+        )
+        inputs[r.name] = spec
+        apply_input_wave_dict(r, spec.to_dict())
+    return TimingScenario(
+        steps=loaded.steps,
+        inputs=inputs,
+        hscale=loaded.hscale,
+    )
+
+
 def _normalize_rail_after_load(rail: PowerRail) -> None:
     """載入後：groups 與扁平欄位互相同步（執行期用）。"""
     for kind in ("hi", "lo", "force"):

@@ -12,7 +12,6 @@ from timing.timing_export import (
     TimingExportOptions,
     timing_edge_kinds_from_choice,
 )
-from timing.timing_scenario_io import merge_scenario_for_config
 from timing.timing_sim import default_scenario_for_config
 
 __all__ = [
@@ -24,7 +23,6 @@ __all__ = [
     "export_schemdraw",
     "export_schemdraw_from_options",
     "generate_schemdraw_doc",
-    "merge_scenario_for_config",
     "render_schemdraw_png_bytes",
     "timing_edge_kinds_from_choice",
 ]

@@ -21,6 +21,7 @@ from core.config_models import (
     PowerRail,
     PowerSeqConfig,
     build_timing_scenario,
+    merge_scenario_for_config,
     normalize_pulse_name,
     rail_input_wave_spec,
 )
@@ -469,9 +470,6 @@ def _write_lists(wb, config: PowerSeqConfig, cond_signals: set[str]) -> None:
 def _resolve_scenario(config: PowerSeqConfig) -> TimingScenario:
     embedded = config.timing_scenario or {}
     if embedded.get("inputs"):
-        # 延後 import：excel 與 timing 互相依賴，模組層級 import 會造成循環
-        from timing import merge_scenario_for_config
-
         return merge_scenario_for_config(TimingScenario.from_dict(embedded), config)
     return build_timing_scenario(config)
 

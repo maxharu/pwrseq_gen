@@ -46,7 +46,6 @@ EXPECTED_API = {
         "export_schemdraw",
         "export_schemdraw_from_options",
         "generate_schemdraw_doc",
-        "merge_scenario_for_config",
         "render_schemdraw_png_bytes",
         "timing_edge_kinds_from_choice",
     ],
@@ -104,6 +103,66 @@ def test_cross_package_imports_go_through_the_package_api():
         "跨套件 import 必須指向套件而非模組，例如 `from drawio import generate_drawio`：\n"
         + "\n".join(violations)
     )
+
+
+def _imported_packages(node) -> list[str]:
+    if isinstance(node, ast.ImportFrom) and node.module:
+        return [node.module.split(".")[0]]
+    if isinstance(node, ast.Import):
+        return [a.name.split(".")[0] for a in node.names]
+    return []
+
+
+def _package_dependency_graph() -> dict[str, set[str]]:
+    """各套件相依哪些本專案套件。
+
+    走 `ast.walk`，所以**函式內的延後 import 也算**——用延後 import 繞開循環只是把
+    問題藏起來，相依關係並沒有變。
+    """
+    graph: dict[str, set[str]] = {}
+    for path in _python_files():
+        consumer = _top_package_of(path)
+        if not consumer:
+            continue
+        with open(path, encoding="utf-8") as f:
+            tree = ast.parse(f.read(), filename=path)
+        for node in ast.walk(tree):
+            for target in _imported_packages(node):
+                if target != consumer and _is_package(target):
+                    graph.setdefault(consumer, set()).add(target)
+    return graph
+
+
+def _find_cycle(graph: dict[str, set[str]]) -> list[str] | None:
+    """任一條環，回傳為可讀的路徑（頭尾同名）；無環則 None。"""
+    visiting: list[str] = []
+
+    def walk(pkg: str) -> list[str] | None:
+        if pkg in visiting:
+            return visiting[visiting.index(pkg):] + [pkg]
+        visiting.append(pkg)
+        for nxt in sorted(graph.get(pkg, ())):
+            found = walk(nxt)
+            if found:
+                return found
+        visiting.pop()
+        return None
+
+    for pkg in sorted(graph):
+        found = walk(pkg)
+        if found:
+            return found
+    return None
+
+
+def test_package_dependencies_are_acyclic():
+    """套件相依必須是單向的。
+
+    循環相依會逼出「延後 import」這種症狀式解法，而且會讓套件無法單獨理解或測試：
+    `excel` 與 `timing` 曾經互相 import，兩邊都靠函式內 import 才沒在 import 期炸掉。
+    """
+    cycle = _find_cycle(_package_dependency_graph())
+    assert cycle is None, "套件相依出現循環：" + " -> ".join(cycle or [])
 
 
 @pytest.mark.parametrize("pkg,names", sorted(EXPECTED_API.items()))

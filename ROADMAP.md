@@ -171,6 +171,7 @@
 |---|---|
 | `templates/` 含未追蹤的客戶檔案，打包只能逐一指名，**不可整包帶入** | `tests/test_packaging.py::test_templates_dir_is_never_bundled_wholesale` |
 | 跨套件呼叫只能走 `__init__.py` 宣告的介面 | `tests/test_package_api.py` |
+| 套件相依不得成環（延後 import 也算，否則只是把循環藏起來） | `tests/test_package_api.py::test_package_dependencies_are_acyclic` |
 | 條件編輯器的 inv / use 必須與 groups 同形狀（再加平行欄位時尤其容易漏） | `tests/test_cond_edit.py` 的 `assert_shape`，含 343 組三連操作 |
 
 ---

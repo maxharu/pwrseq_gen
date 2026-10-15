@@ -67,7 +67,12 @@ Lint 規則定義在 `pyproject.toml` 的 `[tool.ruff.lint]`：只納管 `F`（�
 `core` 是例外——它是共用詞彙表（`PowerRail` / `safe_name` / `DEP_HIGH` …），
 維持 `from core.config_models import PowerRail` 這種自我說明的深層 import。
 
-邊界由 `tests/test_package_api.py` 強制，不是靠慣例。測試本身不受規範：
+相依方向是單向的：`core` 不相依任何套件，其餘套件往 `core` 走，`gui` 在最外層。
+`excel` 與 `timing` 曾經互相 import、靠函式內的延後 import 才沒在 import 期炸掉，
+現在那條環已經斷開（`merge_scenario_for_config` 只操作 `core` 型別，已歸位到 `core`）。
+
+邊界由 `tests/test_package_api.py` 強制，不是靠慣例——包含「相依不得成環」這條，
+而且它走 AST，**函式內的延後 import 一樣算**。測試本身不受規範：
 白箱測試戳進實作細節是刻意的，那是測試不是契約。
 
 ## 專案結構
