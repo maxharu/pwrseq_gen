@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from core.cond_ir import CondVisitor, resolve_condition
 from core.config_models import PowerRail, PowerSeqConfig
 from core.constants import DEP_HIGH, DEP_LOW
 from core.naming import internal_sig, safe_name
@@ -73,42 +74,6 @@ def _lane_dict(name: str, bits: list[int], steps: int) -> dict:
     return {"name": name, "wave": values_to_wave(bits)}
 
 
-def format_rail_condition(rail: PowerRail, kind: str) -> str:
-    """Human-readable Hi/Lo condition for edge labels."""
-    groups = rail.get_hi_groups() if kind == "hi" else rail.get_lo_groups()
-    get_inv = rail.get_hi_inv if kind == "hi" else rail.get_lo_inv
-    get_use = rail.get_hi_use if kind == "hi" else rail.get_lo_use
-    if not groups or not any(groups):
-        return "1" if kind == "hi" else "0"
-
-    or_parts: list[str] = []
-    for gi, group in enumerate(groups):
-        if not group:
-            continue
-        terms = [
-            _dep_label(dep, get_inv(gi, ii, dep), get_use(gi, ii, dep))
-            for ii, dep in enumerate(group)
-        ]
-        or_parts.append(" & ".join(terms))
-    return " | ".join(or_parts) if or_parts else ("1" if kind == "hi" else "0")
-
-
-def _dep_label(dep: str, inv: bool, use: str) -> str:
-    if dep == DEP_HIGH:
-        return "0" if inv else "1"
-    if dep == DEP_LOW:
-        return "1" if inv else "0"
-    prefix = "!" if inv else ""
-    suffix = ""
-    if use == "hi":
-        suffix = ".hi"
-    elif use == "lo":
-        suffix = ".lo"
-    elif use == "force":
-        suffix = ".f"
-    return f"{prefix}{dep}{suffix}"
-
-
 def _first_transition_step(bits: list[int], rising: bool) -> int | None:
     for t in range(1, len(bits)):
         if rising and bits[t - 1] == 0 and bits[t] == 1:
@@ -118,77 +83,85 @@ def _first_transition_step(bits: list[int], rising: bool) -> int | None:
     return None
 
 
-def _unique_group_deps(groups: list[list[str]]) -> list[tuple[int, int, str]]:
-    """(group_idx, term_idx, dep) preserving order, skip constants."""
+@dataclass(frozen=True)
+class _EdgeItem:
+    """One dependency item as the arrow tracer sees it."""
+
+    name: str
+    cond_kind: str | None  # None -> read this node's level; else its hi/lo/force condition
+    inv: bool
+
+
+class _EdgeItems(CondVisitor):
+    """CondTree -> dependency items in order; constants carry no waveform to point at.
+
+    Arrow placement only follows per-item `inv`; `intra_op` and `group_inv` say how the
+    terms combine, which an arrow cannot express, so they are deliberately ignored.
+    """
+
+    def const(self, value: int) -> list[_EdgeItem]:
+        return []
+
+    def level(self, name: str) -> list[_EdgeItem]:
+        return [_EdgeItem(name, None, False)]
+
+    def cond(self, name: str, kind: str) -> list[_EdgeItem]:
+        return [_EdgeItem(name, kind, False)]
+
+    def invert(self, operand: list[_EdgeItem]) -> list[_EdgeItem]:
+        return [_EdgeItem(i.name, i.cond_kind, not i.inv) for i in operand]
+
+    def group(self, op: str, items: list[list[_EdgeItem]], inv: bool) -> list[_EdgeItem]:
+        return [item for terms in items for item in terms]
+
+    def any_group(self, groups: list[list[_EdgeItem]]) -> list[_EdgeItem]:
+        return [item for terms in groups for item in terms]
+
+
+def _condition_items(
+    rail: PowerRail, kind: str, name_to_rail: dict[str, PowerRail]
+) -> list[_EdgeItem]:
+    """Deduplicated by name, first occurrence wins (its inv/use is the one used)."""
+    items = resolve_condition(rail, kind, name_to_rail).accept(_EdgeItems())
     seen: set[str] = set()
-    out: list[tuple[int, int, str]] = []
-    for gi, group in enumerate(groups):
-        for ii, dep in enumerate(group):
-            if dep in (DEP_HIGH, DEP_LOW) or dep in seen:
-                continue
-            seen.add(dep)
-            out.append((gi, ii, dep))
-    return out
+    unique: list[_EdgeItem] = []
+    for item in items:
+        if item.name in seen:
+            continue
+        seen.add(item.name)
+        unique.append(item)
+    return unique
 
 
 def _leaf_deps_for_edge(
-    dep_name: str,
-    owner: PowerRail,
-    group_idx: int,
-    item_idx: int,
-    consumer_kind: str,
+    item: _EdgeItem,
     name_to_rail: dict[str, PowerRail],
-    chain: frozenset[str] | None = None,
+    chain: frozenset[str] = frozenset(),
 ) -> list[tuple[str, bool]]:
     """Leaf deps with inv relative to making this condition term true.
 
-    For use=self/force the leaf is ``dep_name`` with path_inv=False (caller
-    XORs the owner's term inv). For use=hi/lo, recurse into the dependency
-    rail's condition and accumulate per-term inv along the path.
+    Reading a node's level (or its Force condition, which the sim does not publish)
+    makes it the leaf. Referencing another rail's Hi/Lo condition recurses into that
+    rail and accumulates per-term inv along the path; a rail whose condition yields no
+    leaf -- or which closes a cycle -- falls back to being its own leaf.
     """
-    dep_rail = name_to_rail.get(dep_name)
-    if not dep_rail or dep_name in (DEP_HIGH, DEP_LOW):
+    rail = name_to_rail.get(item.name)
+    if rail is None:
         return []
-    if dep_rail.seq_type == "input":
-        return [(dep_name, False)]
+    if item.cond_kind in (None, "force") or item.name in chain:
+        return [(item.name, False)]
 
-    get_use = owner.get_hi_use if consumer_kind == "hi" else owner.get_lo_use
-    use = get_use(group_idx, item_idx, dep_name)
-    if use in ("self", "force"):
-        return [(dep_name, False)]
-    if use not in ("hi", "lo"):
-        return [(dep_name, False)]
-
-    visited = chain or frozenset()
-    if dep_name in visited:
-        return [(dep_name, False)]
-
-    cond_kind = use
-    groups = (
-        dep_rail.get_hi_groups() if cond_kind == "hi" else dep_rail.get_lo_groups()
-    )
-    if not groups or not any(groups):
-        return [(dep_name, False)]
-
-    get_inv = dep_rail.get_hi_inv if cond_kind == "hi" else dep_rail.get_lo_inv
     leaves: list[tuple[str, bool]] = []
     seen: set[str] = set()
-    for gi, ii, sub in _unique_group_deps(groups):
-        sub_inv = bool(get_inv(gi, ii, sub))
+    for sub in _condition_items(rail, item.cond_kind, name_to_rail):
         for leaf, path_inv in _leaf_deps_for_edge(
-            sub,
-            dep_rail,
-            gi,
-            ii,
-            cond_kind,
-            name_to_rail,
-            visited | {dep_name},
+            sub, name_to_rail, chain | {item.name}
         ):
-            effective = sub_inv ^ path_inv
+            effective = sub.inv ^ path_inv
             if leaf not in seen:
                 seen.add(leaf)
                 leaves.append((leaf, effective))
-    return leaves if leaves else [(dep_name, False)]
+    return leaves if leaves else [(item.name, False)]
 
 
 def _dep_bits_series(
@@ -283,16 +256,8 @@ def _collect_condition_edge_pending(
         for kind, _out_rising, out_step in specs:
             if out_step is None:
                 continue
-            groups = rail.get_hi_groups() if kind == "hi" else rail.get_lo_groups()
-            if not groups or not any(groups):
-                continue
-
-            for gi, ii, dep in _unique_group_deps(groups):
-                get_inv = rail.get_hi_inv if kind == "hi" else rail.get_lo_inv
-                term_inv = bool(get_inv(gi, ii, dep))
-                for leaf, path_inv in _leaf_deps_for_edge(
-                    dep, rail, gi, ii, kind, name_to_rail,
-                ):
+            for item in _condition_items(rail, kind, name_to_rail):
+                for leaf, path_inv in _leaf_deps_for_edge(item, name_to_rail):
                     dep_rail = name_to_rail.get(leaf)
                     if not dep_rail:
                         continue
@@ -301,7 +266,7 @@ def _collect_condition_edge_pending(
                         continue
                     dep_bits = _dep_bits_series(leaf, name_to_rail, result)
                     dep_step = _dep_trigger_step(
-                        dep_bits, inv=term_inv ^ path_inv,
+                        dep_bits, inv=item.inv ^ path_inv,
                     )
                     if dep_step is None:
                         continue

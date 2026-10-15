@@ -42,6 +42,8 @@ PowerSeqConfig + TimingScenario
   → simulate()
   → _build_export_lanes(include_rails?)
   → _collect_condition_edge_pending(edge_kinds?)
+      # core.cond_ir.resolve_condition → _EdgeItems → _leaf_deps_for_edge
+      # (recurses through referenced Hi/Lo conditions, accumulating per-term inv)
   → build_schemdraw_extended_edges()   # [dsi:dep_step]-~>[osi:out_step]
   → generate_schemdraw_doc()           # WaveJSON dict, no node fields
   → _TimingDiagramDualLabels.from_json()

@@ -17,6 +17,7 @@ from core.naming import internal_sig
 from codegen.c_generator import generate_c
 from codegen.verilog_generator import generate_verilog
 from drawio.drawio_cell_export import _exported_hilo_keys, _parse_path_group_terms
+from timing.timing_export import _condition_items, _leaf_deps_for_edge
 from timing.timing_sim import _SimCond
 
 SYNTH = PowerSeqConfig(
@@ -173,3 +174,103 @@ def test_drawio_no_condition_draws_no_gate():
 def test_drawio_exported_cond_signals_exclude_force():
     """只有被當成條件引用的 xxx_hi / xxx_lo 要拉線出來，Force 不畫所以不算。"""
     assert _exported_hilo_keys(SYNTH) == {("BASE", "hi"), ("BASE", "lo")}
+
+
+# ---- 時序圖箭頭追蹤 ----------------------------------------------------
+
+# 鏈：GATE.hi ← IN_A（反相）；RELAY.hi ← GATE.hi；TOP.hi ← RELAY.hi
+# 箭頭要一路追到 IN_A，因為只有它有波形可以當起點
+CHAIN = PowerSeqConfig(
+    module_name="chain",
+    rails=[
+        PowerRail(name="IN_A", seq_type="input"),
+        PowerRail(name="IN_B", seq_type="input"),
+        PowerRail(
+            name="GATE",
+            seq_type="output",
+            depends_on_hi=["IN_A"],
+            depends_on_hi_inv={"IN_A": True},
+            # 給 GATE 一個 Force 條件，才能分辨「引用 force 時有沒有誤遞迴進去」
+            depends_on_force=["IN_B"],
+        ),
+        PowerRail(
+            name="RELAY",
+            seq_type="output",
+            depends_on_hi=["GATE"],
+            depends_on_hi_use={"GATE": "hi"},
+        ),
+        PowerRail(
+            name="TOP",
+            seq_type="output",
+            depends_on_hi=["RELAY", "IN_B"],
+            depends_on_hi_inv={"RELAY": True},
+            depends_on_hi_use={"RELAY": "hi"},
+        ),
+        # 自我參照：條件引用自己的 Hi，追蹤時必須在成環處停下
+        PowerRail(
+            name="LOOP",
+            seq_type="output",
+            depends_on_hi=["LOOP"],
+            depends_on_hi_use={"LOOP": "hi"},
+        ),
+        # 引用 Force 條件：模擬器不發布它，所以只能指向 GATE 自己的波形
+        PowerRail(
+            name="FORCED",
+            seq_type="output",
+            depends_on_hi=["GATE"],
+            depends_on_hi_use={"GATE": "force"},
+        ),
+        # 同一個依賴出現在兩個 group，inv 不同 → 只能取第一次出現的那個
+        PowerRail(
+            name="DUPED",
+            seq_type="output",
+            depends_on_hi_groups=[["IN_A"], ["IN_A"]],
+            depends_on_hi_inv_groups=[[False], [True]],
+        ),
+    ],
+)
+CHAIN_RAILS = {r.name: r for r in CHAIN.rails}
+
+
+def _leaves(rail_name, kind):
+    rail = CHAIN_RAILS[rail_name]
+    return [
+        (leaf, item.inv ^ path_inv)
+        for item in _condition_items(rail, kind, CHAIN_RAILS)
+        for leaf, path_inv in _leaf_deps_for_edge(item, CHAIN_RAILS)
+    ]
+
+
+def test_edge_tracing_stops_at_an_input():
+    assert _leaves("GATE", "hi") == [("IN_A", True)]
+
+
+def test_edge_tracing_recurses_through_referenced_conditions():
+    """RELAY.hi 讀 GATE.hi，而 GATE.hi 的葉節點是反相的 IN_A，inv 要一路累積。"""
+    assert _leaves("RELAY", "hi") == [("IN_A", True)]
+    # TOP 對 RELAY 又加一層反相 → 與 GATE 那層的反相互相抵消
+    assert _leaves("TOP", "hi") == [("IN_A", False), ("IN_B", False)]
+
+
+def test_edge_tracing_treats_self_reference_as_its_own_leaf():
+    assert _leaves("LOOP", "hi") == [("LOOP", False)]
+
+
+def test_edge_tracing_does_not_recurse_through_force():
+    """模擬器不發布 force 條件，所以引用 force 時只能指向該節點自己的波形。
+
+    GATE 確實有 Force 條件（來自 IN_B），誤遞迴的話葉節點會變成 IN_B。
+    """
+    assert _leaves("FORCED", "hi") == [("GATE", False)]
+
+
+def test_edge_tracing_keeps_only_the_first_occurrence_of_a_dep():
+    """同一個依賴出現兩次時只畫一次箭頭，inv 取第一次出現的。"""
+    assert _leaves("DUPED", "hi") == [("IN_A", False)]
+
+
+def test_edge_tracing_drops_constants():
+    """常數沒有波形可以當箭頭起點。"""
+    rails = {"OUT": PowerRail(name="OUT", seq_type="output", depends_on_hi=[DEP_HIGH])}
+    assert _condition_items(rails["OUT"], "hi", rails) == []
+

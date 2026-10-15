@@ -39,7 +39,7 @@ TEMPLATES = os.path.join(
 )
 C_VAR = "power_var"
 
-# 模擬器沒有發布 per-rail 的 force 條件，`_eval_dep` 對 use="force" 一律回 0。
+# 模擬器沒有發布 per-rail 的 force 條件，`_SimCond.cond` 對 kind="force" 一律回 0。
 KNOWN_SIM_DIVERGENCE = {("OUT_CELL", "force")}
 
 FIXTURE_RAILS = [

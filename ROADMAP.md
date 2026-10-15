@@ -18,14 +18,14 @@
 | `codegen/c_generator.py` | C 運算式 | ✅ `_CCond` |
 | `timing/timing_sim.py` | 0/1 邏輯值 | ✅ `_SimCond` |
 | `drawio/drawio_cell_export.py` | AND/OR 閘圖 | ✅ `_DrawioCond` / `_CondSignalKeys` |
-| `timing/timing_export.py` | 時序箭頭的葉節點（`_dep_label`） | |
+| `timing/timing_export.py` | 時序箭頭的葉節點 | ✅ `_EdgeItems` |
 
-一致性目前靠文件維持（`.cursor/rules/timing-sim-behavior.mdc` 開頭就寫著「修改 `timing_sim.py`
+一致性原本靠文件維持（`.cursor/rules/timing-sim-behavior.mdc` 開頭就寫著「修改 `timing_sim.py`
 時必須與 `c_generator.py` / `verilog_generator.py` 對齊」）。**用文件維持五份實作的一致性，
 是架構在求救**：每新增一個語意，就要記得同步五個地方，漏一個就產生「只有某種匯出格式錯」的 bug。
 已修掉的兩個 Draw.io bug 都是這一類。
 
-`core/cond_ir.py` 已經是那份唯一實作，五份之中已收斂四份；只剩 `timing_export`（待辦第 1 項）。
+**此問題已解決**：`core/cond_ir.py` 是唯一實作，五個下游各自只寫一個 `CondVisitor` 渲染它。
 
 ---
 
@@ -61,13 +61,17 @@
   「`intra_op` 一律 and」兩個 bug，黃金測試照樣綠）。現用一份覆蓋多 group /
   xor / or / `group_inv` / 空 group / 舊格式扁平欄位的合成 config 補上，
   期望值取自接 IR 之前的輸出。**其餘後端接 IR 時要在這裡各加一組。**
-- **四個下游已接 IR** — `_VerilogCond`、`_CCond`、`_SimCond`、`_DrawioCond`
-  （外加 `_CondSignalKeys` 收 Draw.io 要拉線的條件訊號）。原本各自的走訪
+- **五個下游全部已接 IR** — `_VerilogCond`、`_CCond`、`_SimCond`、`_DrawioCond`、
+  `_EdgeItems`（外加 `_CondSignalKeys` 收 Draw.io 要拉線的條件訊號）。原本各自的走訪
   （`_dep_expr`、`_c_dep_expr` / `_groups_to_c_expr`、`_eval_dep` / `_eval_groups`、
-  `_resolve_term` / `_dep_has_cond_signal`）全部移除。
+  `_resolve_term` / `_dep_has_cond_signal`、`_unique_group_deps`）全部移除。
   驗證方式一致：合成 config 加三份真實 config，新舊輸出逐字元比對（Verilog 368 條
-  assign、C 80660 B、模擬 198623 B、Draw.io 570457 B 皆相同），再對每個 visitor
-  注入六個 bug 確認全部轉紅。
+  assign、C 80660 B、模擬 198623 B、Draw.io 570457 B、Schemdraw 32039 B / 427 條箭頭
+  皆相同），再對每個 visitor 注入六個 bug 確認全部轉紅。
+- **`timing_export.format_rail_condition` 已刪除** — 它是第五份實作，而且寫錯（忽略
+  `intra_op` 與 `group_inv`、`_dep_label` 沒檢查依賴是不是 output），但查證後發現
+  **整個 repo 沒有任何呼叫者**，那些錯誤標籤從未被輸出。連同只服務它的 `_dep_label`
+  一起刪掉，不改變任何行為。
 - **`timing_sim._eval_spec_groups` 的語意差異已記錄** — 那是 InputWaveSpec 的激勵條件
   （不是 `depends_on_*`），空 group 直接略過、`use=hi/lo` 查不到時 fallback 到該 rail
   的準位而非 0。只有葉節點借用 IR，output 分支維持原樣並在 docstring 註明。
@@ -79,23 +83,13 @@
 | 約束 | 護欄 |
 |---|---|
 | `templates/` 含未追蹤的客戶檔案，打包只能逐一指名，**不可整包帶入** | `tests/test_packaging.py::test_templates_dir_is_never_bundled_wholesale` |
-| 模擬器不模擬 Force（`_eval_dep` 對 `use="force"` 回定值 0） | `tests/test_condition_consistency.py` 的 `KNOWN_SIM_DIVERGENCE` |
+| 模擬器不模擬 Force（`_SimCond.cond` 對 `kind="force"` 回定值 0） | `tests/test_condition_consistency.py` 的 `KNOWN_SIM_DIVERGENCE` |
 
 ---
 
 ## 待辦
 
-### 1. `timing_export` 改成只負責渲染 `CondTree`
-
-最後一個還在自己走訪的後端。它跟前四個不同，**改完輸出會變**：
-`format_rail_condition` 目前完全忽略 `intra_op` 與 `group_inv`（一律輸出 `&`、
-不套整組反相），`_dep_label` 也沒檢查依賴是不是 output（input 帶 `use=hi` 會被標成
-`NAME.hi`）——跟已修掉的 Draw.io bug 同一類，只是出現在人讀的箭頭標籤上。
-
-- **verify**：先寫測試釘住現在的錯誤輸出並確認它反映 bug，改完後更新為正確輸出並重出黃金檔；
-  並在 `tests/test_cond_render.py` 加一組 `timing_export` 的 group 組裝期望值
-
-### 2. 四套 pulse 名稱解析器收進 `core`
+### 1. 四套 pulse 名稱解析器收進 `core`
 
 `config_models.normalize_pulse_name`、`c_generator._pulse_time_field`、
 `timing_sim._pulse_scale_units`、`drawio_geometry._parse_pulse_period`。
@@ -104,12 +98,12 @@
 
 - **verify**：加一支 `My.Pulse_1us` 的四套一致性測試
 
-### 3. 最小可行 CI
+### 2. 最小可行 CI
 
 `.github/workflows/` 目前是空的，根目錄沒有 `ci.bat`（但 user rule 要求 push 前跑）。
 內容只要三件事：`pytest` + `ruff`（兼管 import 排序）+ 黃金輸出比對。linter 要加進 `requirements-dev.txt`。
 
-### 4. 把套件邊界做成真的 API
+### 3. 把套件邊界做成真的 API
 
 除了 `gui/`（已宣告 `run_gui`），其餘七個 `__init__.py` 都只有一行 docstring，
 所有呼叫端都 import 深層路徑（`from drawio.drawio_cell_export import ...`）。
@@ -120,15 +114,15 @@
 私有符號的白箱測試可以留，但要清楚那是白箱測試，不是契約。
 同時清掉 `drawio_export.py` 對 `drawio_geometry` 的 34 個符號 re-export facade（大多無人使用）。
 
-### 5. 模擬器補上 Force
+### 4. 模擬器補上 Force
 
-`_eval_dep` 對 `use="force"` 目前回定值 0。模擬器內部其實算得出 force 條件（會傳進 `fsm.commit`），
+`_SimCond.cond` 對 `kind="force"` 目前回定值 0。模擬器內部其實算得出 force 條件（會傳進 `fsm.commit`），
 只是沒發布成 `out_force` 讓下游依賴讀取，所以是實作缺口而非設計決定——
 `timing-sim-behavior.mdc` 寫的是 `use="force"` 應該參考該 rail 的條件。
 
 - **verify**：移除 `KNOWN_SIM_DIVERGENCE` 後 `test_condition_consistency.py` 仍綠
 
-### 6. （最後）GUI 抽純函式
+### 5. （最後）GUI 抽純函式
 
 `app.py` + `widgets.py` + `panels.py` 約 4400 行，headless 下測試幾乎全 skip——
 等於這 4400 行沒有自動化保護。

@@ -8,7 +8,7 @@ alwaysApply: false
 
 時序模擬是**邏輯預覽（Logic sim, not RTL）**，呈現訊號之間的邏輯因果與串接順序，不模擬 RTL 的 cycle 級時序細節。修改 `timing_sim.py` 時必須維持以下語意。
 
-**依賴條件的語意現在只有一份**：`core/cond_ir.py` 的 `resolve_condition` 負責解析 groups / inv / use / group_inv / intra_op，`timing_sim` / `verilog_generator` / `c_generator` / `drawio_cell_export` 各自只寫一個 `CondVisitor` 渲染它。要改語意請改 `cond_ir`，不要在個別後端加判斷；一致性由 `tests/test_condition_consistency.py` 與 `tests/test_cond_render.py` 把關。
+**依賴條件的語意只有一份**：`core/cond_ir.py` 的 `resolve_condition` 負責解析 groups / inv / use / group_inv / intra_op，五個下游（`timing_sim`、`verilog_generator`、`c_generator`、`drawio_cell_export`、`timing_export`）各自只寫一個 `CondVisitor` 渲染它。要改語意請改 `cond_ir`，不要在個別後端加判斷；一致性由 `tests/test_condition_consistency.py` 與 `tests/test_cond_render.py` 把關。
 
 ## 1. 轉態時序：rise/fall 對稱，皆為「條件成立後下一 T」
 
