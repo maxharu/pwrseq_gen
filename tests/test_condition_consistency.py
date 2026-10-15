@@ -16,9 +16,12 @@ so a wrong IR cannot quietly make every backend agree here. Group assembly
 (intra_op -> group_inv -> OR-join) is shared via `core.group_logic` and is not
 re-checked here.
 
-Backends that legitimately differ are listed in the KNOWN_* sets below. Those
-sets are compared for *equality*, so fixing a divergence also fails the test
-until its entry is removed.
+Every backend now matches the oracle exactly, so each sweep asserts an empty
+disagreement set. Earlier versions carried KNOWN_* allow-lists for legitimate
+divergences; the last one went away when the simulator learned Force.
+
+Scope: this checks *leaf* rendering only. Gate topology (which Draw.io derives
+from group shape in `drawio_geometry`) is not covered here -- see doc/FUTURE.md.
 """
 import json
 import os
