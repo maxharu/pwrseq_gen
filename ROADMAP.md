@@ -119,30 +119,34 @@
   `excel` 與 `timing` 互相依賴，兩邊的 import 本來就寫在函式內以避開循環，改走套件介面後
   仍維持延後並補上註解說明原因。`excel/vba/__init__.py` 會 eager import COM 那支，但
   `win32com` 是在各函式內才 import，所以沒有 pywin32 的機器上仍可正常載入。
+- **模擬器已模擬 Force** — `SimResult` 新增 `output_force_cond`，`_SimCond.cond` 的三個
+  通道（hi / lo / force）改成統一查表。模擬器本來就算得出 force 條件（會傳進 `fsm.commit`），
+  只是沒發布出來，所以下游 `use="force"` 一律讀到 0。`KNOWN_SIM_DIVERGENCE` 已移除。
 
-### 三條已經是可執行護欄的約束
+  同一個缺口有第二處：`_eval_spec_groups` 的 output 分支只認 `use=hi/lo`，`force` 會悄悄
+  fallback 成讀該 rail 的**準位**。兩處一併修掉，InputWaveSpec 的激勵條件現在也讀得到
+  force 條件。
+
+  三個實際 config 的 `output_force_cond` 全為 0，所以這個分歧在出貨資料上是潛在的而非
+  已發生的：`demo_json.json` 的 `PCH_PWROK` 沒宣告 Force 條件（F-DEP-06 預設 0），整條
+  `PVCCDD2_EN.force` → `PSU_EN.force` 因此 AND 成 0。黃金基準只多了新鍵、既有內容零變動，
+  所以改用專門的端對端測試驗證傳播（`TestForceCondition` / `TestForceConditionInInputWaveSpec`），
+  八個注入退化全紅。
+
+### 兩條已經是可執行護欄的約束
 
 比文件可靠，改壞了會紅：
 
 | 約束 | 護欄 |
 |---|---|
 | `templates/` 含未追蹤的客戶檔案，打包只能逐一指名，**不可整包帶入** | `tests/test_packaging.py::test_templates_dir_is_never_bundled_wholesale` |
-| 模擬器不模擬 Force（`_SimCond.cond` 對 `kind="force"` 回定值 0） | `tests/test_condition_consistency.py` 的 `KNOWN_SIM_DIVERGENCE` |
 | 跨套件呼叫只能走 `__init__.py` 宣告的介面 | `tests/test_package_api.py` |
 
 ---
 
 ## 待辦
 
-### 1. 模擬器補上 Force
-
-`_SimCond.cond` 對 `kind="force"` 目前回定值 0。模擬器內部其實算得出 force 條件（會傳進 `fsm.commit`），
-只是沒發布成 `out_force` 讓下游依賴讀取，所以是實作缺口而非設計決定——
-`timing-sim-behavior.mdc` 寫的是 `use="force"` 應該參考該 rail 的條件。
-
-- **verify**：移除 `KNOWN_SIM_DIVERGENCE` 後 `test_condition_consistency.py` 仍綠
-
-### 2. （最後）GUI 抽純函式
+### GUI 抽純函式（僅剩這一項）
 
 `app.py` + `widgets.py` + `panels.py` 約 4400 行，headless 下測試幾乎全 skip——
 等於這 4400 行沒有自動化保護。

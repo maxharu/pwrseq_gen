@@ -106,6 +106,7 @@ def test_simulation_golden():
         "output_values": result.output_values,
         "output_hi_cond": result.output_hi_cond,
         "output_lo_cond": result.output_lo_cond,
+        "output_force_cond": result.output_force_cond,
         "output_states": result.output_states,
     }))
 

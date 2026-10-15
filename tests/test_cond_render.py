@@ -109,10 +109,13 @@ NAME_TO_RAIL = {r.name: r for r in SYNTH.rails}
 BASE = internal_sig("BASE")
 
 
-def _sim(rail_name, kind, raw=None, out_hi=None, out_lo=None, out_val=None):
+def _sim(rail_name, kind, raw=None, out_hi=None, out_lo=None, out_force=None, out_val=None):
     tree = resolve_condition(NAME_TO_RAIL[rail_name], kind, NAME_TO_RAIL)
     return tree.accept(
-        _SimCond(NAME_TO_RAIL, raw or {}, out_hi or {}, out_lo or {}, out_val or {})
+        _SimCond(
+            NAME_TO_RAIL, raw or {}, out_hi or {}, out_lo or {},
+            out_force or {}, out_val or {},
+        )
     )
 
 
@@ -130,10 +133,19 @@ def test_sim_mixed_lo_is_pinned_high_by_the_inverted_empty_group(base_lo, in_raw
     assert _sim("MIXED", "lo", raw={"IN_RAW": in_raw}, out_lo={BASE: base_lo}) == 1
 
 
-@pytest.mark.parametrize("in_deb", [0, 1])
-def test_sim_mixed_force_follows_in_deb_only(in_deb):
-    """(BASE.force | IN_DEB)，而模擬器的 force 條件恆為 0（KNOWN_SIM_DIVERGENCE）。"""
-    assert _sim("MIXED", "force", raw={"IN_DEB": in_deb}, out_val={BASE: 1}) == in_deb
+@pytest.mark.parametrize("in_deb,base_force,want", [(0, 0, 0), (1, 0, 1), (0, 1, 1), (1, 1, 1)])
+def test_sim_mixed_force_is_the_or_of_base_force_and_in_deb(in_deb, base_force, want):
+    """`(BASE.force | IN_DEB)`——IN_DEB 是 input，`use=force` 退化為讀準位。
+
+    `out_val` 刻意給相反值，確認 BASE 讀的是 force 條件而不是輸出準位。
+    """
+    got = _sim(
+        "MIXED", "force",
+        raw={"IN_DEB": in_deb},
+        out_force={BASE: base_force},
+        out_val={BASE: 1 - base_force},
+    )
+    assert got == want
 
 
 @pytest.mark.parametrize("base_lo,in_raw,want", [(0, 0, 0), (0, 1, 1), (1, 0, 0), (1, 1, 0)])

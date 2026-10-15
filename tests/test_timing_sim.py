@@ -304,6 +304,114 @@ class TestSimulate:
             assert result.output_values[sig][45] == 0
 
 
+class TestForceCondition:
+    """Force 條件會發布成 output_force_cond，下游 use="force" 讀得到。
+
+    這條路徑原本整條是斷的：`_SimCond.cond` 對 kind="force" 一律回 0，所以
+    `SINK` 的 Hi 條件永遠不成立、GPIO 永遠是 0。
+    """
+
+    CFG = PowerSeqConfig(
+        pulses=["Pulse_1us"],
+        rails=[
+            PowerRail("IN_F", seq_type="input", deb_enable=False, deb_init=0),
+            PowerRail(
+                "SRC",
+                depends_on_hi=["__HIGH__"],
+                depends_on_force=["IN_F"],
+                init=1,
+                force_val=0,
+            ),
+            PowerRail(
+                "SINK",
+                depends_on_hi=["SRC"],
+                depends_on_hi_use={"SRC": "force"},
+                init=0,
+            ),
+        ],
+    )
+    SCENARIO = TimingScenario(
+        steps=12,
+        inputs={"IN_F": InputWaveSpec(hi_mode="custom", hi_wave="0000111111111111")},
+    )
+
+    @pytest.fixture(scope="class")
+    def result(self):
+        return simulate(self.CFG, self.SCENARIO)
+
+    def test_force_condition_follows_its_dependency(self, result):
+        assert result.output_force_cond["src"] == result.raw_inputs["IN_F"]
+        assert sum(result.output_force_cond["src"]) == 7
+
+    def test_force_overrides_the_output_on_the_same_step(self, result):
+        """Force 即時覆寫成 force_val，不像 hi/lo 要等下一拍。"""
+        rise = result.raw_inputs["IN_F"].index(1)
+        assert result.output_values["src"][rise - 1] == 1
+        assert result.output_values["src"][rise] == 0
+
+    def test_downstream_reads_the_force_condition_not_the_level(self, result):
+        """SRC 的準位與 force 條件此時正好相反，足以分辨讀到的是哪一個。"""
+        assert result.output_hi_cond["sink"] == result.output_force_cond["src"]
+        assert result.output_hi_cond["sink"] != result.output_values["src"]
+
+    def test_downstream_output_rises_one_step_after(self, result):
+        rise = result.output_hi_cond["sink"].index(1)
+        assert result.output_values["sink"][rise] == 0
+        assert result.output_values["sink"][rise + 1] == 1
+
+    def test_a_rail_without_a_force_condition_stays_zero(self, result):
+        """F-DEP-06：沒有 Force 條件時恆為 0——demo config 的鏈就是斷在這裡。"""
+        assert set(result.output_force_cond["sink"]) == {0}
+
+
+class TestForceConditionInInputWaveSpec:
+    """InputWaveSpec 的激勵條件也能讀 output 的 Force 條件。
+
+    這是同一個缺口的第二處：`_eval_spec_groups` 的 output 分支原本只認 hi/lo，
+    `use="force"` 會悄悄 fallback 成讀該 rail 的準位。
+    """
+
+    CFG = PowerSeqConfig(
+        pulses=["Pulse_1us"],
+        rails=[
+            PowerRail("IN_F", seq_type="input", deb_enable=False, deb_init=0),
+            PowerRail("PROBE", seq_type="input", deb_enable=False, deb_init=0),
+            PowerRail(
+                "SRC",
+                depends_on_hi=["__HIGH__"],
+                depends_on_force=["IN_F"],
+                init=1,
+                force_val=0,
+            ),
+        ],
+    )
+    SCENARIO = TimingScenario(
+        steps=12,
+        inputs={
+            "IN_F": InputWaveSpec(hi_mode="custom", hi_wave="0000111111111111"),
+            "PROBE": InputWaveSpec(
+                hi_mode="depends",
+                hi_groups=[["SRC"]],
+                hi_use_groups=[["force"]],
+            ),
+        },
+    )
+
+    @pytest.fixture(scope="class")
+    def result(self):
+        return simulate(self.CFG, self.SCENARIO)
+
+    def test_spec_reads_the_force_condition_not_the_level(self, result):
+        """SRC 的 force 條件與準位此時互補，足以分辨讀到的是哪一個。
+
+        PROBE 的 Hi 條件成立後要下一拍才真的拉高，所以比對時平移一格。
+        """
+        force = result.output_force_cond["src"]
+        probe = result.raw_inputs["PROBE"]
+        assert probe[1:] == force[:-1]
+        assert probe != result.output_values["src"]
+
+
 class TestValuesToWave:
     def test_all_high_bookended(self):
         w = values_to_wave([1] * 200)

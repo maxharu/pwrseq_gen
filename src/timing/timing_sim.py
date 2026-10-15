@@ -26,6 +26,7 @@ class SimResult:
     raw_inputs: dict[str, list[int]]
     output_hi_cond: dict[str, list[int]]
     output_lo_cond: dict[str, list[int]]
+    output_force_cond: dict[str, list[int]]
     output_values: dict[str, list[int]]
     output_states: dict[str, list[str]]
 
@@ -167,6 +168,7 @@ def _eval_spec_groups(
     raw: dict[str, int],
     out_hi: dict[str, int],
     out_lo: dict[str, int],
+    out_force: dict[str, int],
     out_val: dict[str, int],
     group_inv: list[bool] | None = None,
     intra_op: list[str] | None = None,
@@ -174,14 +176,14 @@ def _eval_spec_groups(
     """評估 input 的 hi/lo 訊號條件（group 內 Operation、groups 間 OR）。
 
     注意這不是 `depends_on_*`，而是 InputWaveSpec 的激勵條件，語意也不同：
-    空 group 直接略過（不當成 0），且 `use=hi/lo` 查不到時 fallback 到該 rail 的準位
-    而非 0。因此只有葉節點借用 `core.cond_ir`，output 分支維持原樣。
+    空 group 直接略過（不當成 0），且 `use=hi/lo/force` 查不到時 fallback 到該 rail 的
+    準位而非 0。因此只有葉節點借用 `core.cond_ir`，output 分支維持原樣。
     """
     if not groups:
         return 0
     group_inv = group_inv or []
     intra_op = intra_op or []
-    leaf_eval = _SimCond(name_to_rail, raw, out_hi, out_lo, out_val)
+    leaf_eval = _SimCond(name_to_rail, raw, out_hi, out_lo, out_force, out_val)
     group_results = []
     for gi, group in enumerate(groups):
         if not group:
@@ -197,6 +199,8 @@ def _eval_spec_groups(
                     v = out_hi.get(sig, fallback)
                 elif use == "lo":
                     v = out_lo.get(sig, fallback)
+                elif use == "force":
+                    v = out_force.get(sig, fallback)
                 else:
                     v = fallback
                 if inv:
@@ -222,13 +226,14 @@ def _input_inst_hi_lo(
     raw: dict[str, int],
     out_hi: dict[str, int],
     out_lo: dict[str, int],
+    out_force: dict[str, int],
     out_val: dict[str, int],
 ) -> tuple[int, int]:
     """當步 hi/lo 條件是否成立（供下一格延遲用）。"""
     if spec.hi_mode == "depends" and spec.hi_groups:
         hi = _eval_spec_groups(
             spec.hi_groups, spec.hi_inv_groups, spec.hi_use_groups, "hi",
-            name_to_rail, raw, out_hi, out_lo, out_val,
+            name_to_rail, raw, out_hi, out_lo, out_force, out_val,
             spec.hi_group_inv, spec.hi_intra_op,
         )
     elif spec.hi_mode == "constant_1":
@@ -244,7 +249,7 @@ def _input_inst_hi_lo(
     if spec.lo_mode == "depends" and spec.lo_groups:
         lo = _eval_spec_groups(
             spec.lo_groups, spec.lo_inv_groups, spec.lo_use_groups, "lo",
-            name_to_rail, raw, out_hi, out_lo, out_val,
+            name_to_rail, raw, out_hi, out_lo, out_force, out_val,
             spec.lo_group_inv, spec.lo_intra_op,
         )
     elif spec.lo_mode == "constant_1":
@@ -309,12 +314,14 @@ class _SimCond(CondVisitor):
         raw: dict[str, int],
         out_hi: dict[str, int],
         out_lo: dict[str, int],
+        out_force: dict[str, int],
         out_val: dict[str, int],
     ):
         self.name_to_rail = name_to_rail
         self.raw = raw
         self.out_hi = out_hi
         self.out_lo = out_lo
+        self.out_force = out_force
         self.out_val = out_val
 
     def const(self, value: int) -> int:
@@ -327,10 +334,7 @@ class _SimCond(CondVisitor):
         return self.raw.get(name, 0)
 
     def cond(self, name: str, kind: str) -> int:
-        if kind == "force":
-            # 模擬器沒有發布 per-rail 的 force 條件（KNOWN_SIM_DIVERGENCE）
-            return 0
-        channel = self.out_hi if kind == "hi" else self.out_lo
+        channel = {"hi": self.out_hi, "lo": self.out_lo, "force": self.out_force}[kind]
         return channel.get(internal_sig(name), 0)
 
     def invert(self, operand: int) -> int:
@@ -584,6 +588,7 @@ def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
 
     out_hi: dict[str, list[int]] = {s: [] for s in fsms}
     out_lo: dict[str, list[int]] = {s: [] for s in fsms}
+    out_force: dict[str, list[int]] = {s: [] for s in fsms}
     out_val: dict[str, list[int]] = {s: [] for s in fsms}
     out_state: dict[str, list[str]] = {s: [] for s in fsms}
 
@@ -627,7 +632,7 @@ def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
             changed = False
             for rail in output_order:
                 sig = internal_sig(rail.name)
-                evaluator = _SimCond(name_to_rail, raw_t, hi_t, lo_t, cur_val)
+                evaluator = _SimCond(name_to_rail, raw_t, hi_t, lo_t, force_t, cur_val)
                 new_hi = resolve_condition(rail, "hi", name_to_rail).accept(evaluator)
                 new_lo = resolve_condition(rail, "lo", name_to_rail).accept(evaluator)
                 new_force = resolve_condition(rail, "force", name_to_rail).accept(evaluator)
@@ -647,6 +652,7 @@ def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
             sig = internal_sig(rail.name)
             out_hi[sig].append(hi_t[sig])
             out_lo[sig].append(lo_t[sig])
+            out_force[sig].append(force_t[sig])
             v = fsms[sig].commit(hi_t[sig], lo_t[sig], force_t[sig])
             cur_val[sig] = v
             out_val[sig].append(v)
@@ -659,7 +665,7 @@ def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
             spec = input_specs[rail.name]
             inst_hi, inst_lo = _input_inst_hi_lo(
                 spec, t, input_hi_waves[rail.name], input_lo_waves[rail.name],
-                name_to_rail, raw_t, hi_t, lo_t, out_val_prev,
+                name_to_rail, raw_t, hi_t, lo_t, force_t, out_val_prev,
             )
             _input_rearm(spec, inst_hi, inst_lo, input_fsms[rail.name])
 
@@ -672,6 +678,7 @@ def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
         raw_inputs=raw_inputs,
         output_hi_cond=out_hi,
         output_lo_cond=out_lo,
+        output_force_cond=out_force,
         output_values=out_val,
         output_states=out_state,
     )

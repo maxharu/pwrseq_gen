@@ -39,9 +39,6 @@ TEMPLATES = os.path.join(
 )
 C_VAR = "power_var"
 
-# 模擬器沒有發布 per-rail 的 force 條件，`_SimCond.cond` 對 kind="force" 一律回 0。
-KNOWN_SIM_DIVERGENCE = {("OUT_CELL", "force")}
-
 FIXTURE_RAILS = [
     PowerRail(name="IN_PLAIN", seq_type="input", deb_enable=False),
     PowerRail(name="IN_DEB", seq_type="input", deb_enable=True),
@@ -119,7 +116,7 @@ def _want_drawio(leaf, inv):
 def _sim_actual(dep, use, inv, name_to_rail, bit):
     """Drive `bit` into whichever channel the leaf should read, then evaluate."""
     leaf = _spec_leaf(dep, use, name_to_rail)
-    raw, out_hi, out_lo, out_val = {}, {}, {}, {}
+    raw, out_hi, out_lo, out_force, out_val = {}, {}, {}, {}, {}
     if leaf[0] == "level":
         rail = name_to_rail.get(leaf[1])
         if rail is not None and rail.seq_type == "output":
@@ -127,9 +124,9 @@ def _sim_actual(dep, use, inv, name_to_rail, bit):
         else:
             raw[leaf[1]] = bit
     elif leaf[0] == "cond":
-        channel = {"hi": out_hi, "lo": out_lo, "force": out_val}[leaf[2]]
+        channel = {"hi": out_hi, "lo": out_lo, "force": out_force}[leaf[2]]
         channel[internal_sig(leaf[1])] = bit
-    evaluator = _SimCond(name_to_rail, raw, out_hi, out_lo, out_val)
+    evaluator = _SimCond(name_to_rail, raw, out_hi, out_lo, out_force, out_val)
     return resolve_item(dep, inv, use, name_to_rail).accept(evaluator)
 
 
@@ -180,8 +177,7 @@ def test_drawio_matches_spec():
 
 
 def test_simulator_matches_spec():
-    """The simulator does not model Force — see KNOWN_SIM_DIVERGENCE."""
-    assert _sweep("sim") == KNOWN_SIM_DIVERGENCE
+    assert _sweep("sim") == set()
 
 
 def _load(path):

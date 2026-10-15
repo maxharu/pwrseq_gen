@@ -28,7 +28,8 @@ fsm.commit(hi_c, lo_c, force) # Pass B：評估條件、arm 下一拍
   - 模擬器：`out_val[sig]`（`_SimCond.level`），inv 則 `1 - v`
   - C：`oemgpio_DI_Get(MACRO)`
   - Verilog：該 rail 的 wire `s`
-- `use="hi"/"lo"/"force"` 才參考該 rail 的 `.condition` 欄位（C）/ `s_hi`/`s_lo`（Verilog）。
+- `use="hi"/"lo"/"force"` 才參考該 rail 的 `.condition` 欄位（C）/ `s_hi`/`s_lo`（Verilog）/
+  `SimResult.output_{hi,lo,force}_cond`（模擬器）。三個通道一律讀**條件**，不是準位。
 - 不要把 self-on-output 對應到 `.condition` 欄位（這是舊 bug，會略過該 rail 的延遲）。
 
 ## 3. 兩段式評估消除回授迴路 eval lag
