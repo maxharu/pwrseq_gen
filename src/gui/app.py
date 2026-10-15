@@ -1065,7 +1065,10 @@ class PowerSeqGUI(ctk.CTk):
                     ),
                 )
             except Exception as e:
-                self.after(0, lambda: self._apply_schemdraw_preview_error(gen, str(e)))
+                # lambda 是延後執行的，但 except 區塊結束時 Python 會 del e，
+                # 所以訊息必須在這裡就取出來
+                msg = str(e)
+                self.after(0, lambda: self._apply_schemdraw_preview_error(gen, msg))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1119,7 +1122,8 @@ class PowerSeqGUI(ctk.CTk):
                     code = generate_verilog(cfg, output_filename=v_path)
                 self.after(0, lambda: self._apply_code_preview(gen, code, status))
             except Exception as e:
-                self.after(0, lambda: self._apply_code_preview_error(gen, str(e)))
+                msg = str(e)
+                self.after(0, lambda: self._apply_code_preview_error(gen, msg))
 
         threading.Thread(target=worker, daemon=True).start()
 
