@@ -15,7 +15,7 @@ if sys.platform == "win32":
         except Exception:
             pass
 
-from applog import setup_logging
+from core.applog import setup_logging
 from gui import run_gui
 
 if __name__ == "__main__":

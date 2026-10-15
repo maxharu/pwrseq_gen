@@ -5,8 +5,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 import pytest
-from config_models import PowerSeqConfig, PowerRail
-from validator import (
+from core.config_models import PowerSeqConfig, PowerRail
+from core.validator import (
     check_duplicate_names,
     check_missing_deps,
     check_circular_dependency,

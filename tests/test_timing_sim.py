@@ -5,16 +5,15 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 import pytest
-from config_models import PowerSeqConfig, PowerRail
-from timing_sim import (
-    InputWaveSpec,
-    TimingScenario,
-    _internal_sig,
+from core.config_models import PowerSeqConfig, PowerRail
+from core.naming import internal_sig
+from core.timing_models import InputWaveSpec, TimingScenario
+from timing.timing_sim import (
     expand_wave_pattern,
     simulate,
     values_to_wave,
 )
-from timing_sim import expand_binary_wave
+from timing.timing_sim import expand_binary_wave
 
 
 class TestExpandWave:
@@ -288,8 +287,8 @@ class TestSimulate:
         reason="templates/x15dot-f.xlsm missing",
     )
     def test_pwrgd_drops_when_lo_references_reset_lo_cond(self):
-        from config_models import build_timing_scenario
-        from excel_import import load_powerseq_from_excel
+        from core.config_models import build_timing_scenario
+        from excel.excel_import import load_powerseq_from_excel
 
         path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -299,7 +298,7 @@ class TestSimulate:
         cfg = load_powerseq_from_excel(path)
         result = simulate(cfg, build_timing_scenario(cfg))
         for name in ("PWRGD_CPU1_OD", "PWRGD_CPU2_OD"):
-            sig = _internal_sig(name)
+            sig = internal_sig(name)
             assert result.output_lo_cond[sig][44] == 1
             assert result.output_values[sig][45] == 0
 

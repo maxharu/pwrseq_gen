@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from snapshot_history import SnapshotHistory
+from core.snapshot_history import SnapshotHistory
 
 
 class TestWriteConfigFile:
@@ -11,7 +11,7 @@ class TestWriteConfigFile:
         import json
 
         pytest.importorskip("customtkinter")
-        from config_models import PowerRail, PowerSeqConfig
+        from core.config_models import PowerRail, PowerSeqConfig
         from gui.app import _write_config_file
 
         cfg = PowerSeqConfig(rails=[PowerRail("A", seq_type="input")])

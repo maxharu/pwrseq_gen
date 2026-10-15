@@ -2,7 +2,7 @@
 import json
 import os
 
-from applog import get_logger
+from core.applog import get_logger
 from gui.theme import _PWRSEQ_USER_DIR, PREVIEW_FONT_SIZE_DEFAULT, PREVIEW_FONT_SIZES
 
 logger = get_logger(__name__)

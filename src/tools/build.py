@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_ROOT = os.path.dirname(SRC_DIR)
 MAIN_SCRIPT = os.path.join(SRC_DIR, "main.py")
 OUTPUT_NAME = "PowerSeqGen"
@@ -53,9 +53,9 @@ def run_build(*, onefile: bool) -> int:
         "--add-data",
         f"{reference_dir}{os.pathsep}reference",
         "--hidden-import",
-        "app_expiry",
+        "core.app_expiry",
         "--hidden-import",
-        "timing_scenario_io",
+        "timing.timing_scenario_io",
         MAIN_SCRIPT,
     ]
 

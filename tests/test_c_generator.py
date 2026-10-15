@@ -5,8 +5,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 import pytest
-from config_models import PowerSeqConfig, PowerRail
-from c_generator import (
+from core.config_models import PowerSeqConfig, PowerRail
+from codegen.c_generator import (
     generate_c,
     _filename_to_c_names,
     _pulse_time_field,

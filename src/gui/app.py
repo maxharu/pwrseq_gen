@@ -4,46 +4,38 @@ import threading
 import tkinter as tk
 from io import BytesIO
 from tkinter import filedialog, messagebox
-from typing import Any, Callable, Optional
+from typing import Optional
 
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import Image
 
-from app_expiry import EXPIRY_LAST_VALID, ensure_not_expired
-from config_models import (
+from core.app_expiry import ensure_not_expired
+from core.config_models import (
     PowerRail,
     PowerSeqConfig,
     DEFAULT_PULSE,
-    apply_input_wave_dict,
     build_timing_scenario,
-    normalize_pulse_name,
     rail_input_wave_spec,
 )
-from drawio_export import generate_drawio
-from group_logic import INTRA_OP_LABELS, intra_op_label, normalize_intra_op
-from validator import validate
-from verilog_generator import generate_verilog
-from c_generator import generate_c
-from timing_export import (
+from drawio.drawio_export import generate_drawio
+from core.validator import validate
+from codegen.verilog_generator import generate_verilog
+from codegen.c_generator import generate_c
+from timing.timing_export import (
     TIMING_EDGE_BOTH,
     TIMING_EDGE_HI_ONLY,
     TIMING_EDGE_LO_ONLY,
     TimingExportOptions,
-    timing_edge_kinds_from_choice,
 )
-from timing_sim import (
-    InputWaveSpec,
-    TimingScenario,
-    _norm_hscale,
-)
-from schemdraw_export import (
+from core.timing_models import InputWaveSpec, TimingScenario
+from timing.schemdraw_export import (
     export_schemdraw_from_options,
     generate_schemdraw_doc,
     render_schemdraw_png_bytes,
 )
 
-from applog import get_logger
-from snapshot_history import SnapshotHistory
+from core.applog import get_logger
+from core.snapshot_history import SnapshotHistory
 from gui.theme import *
 from gui.widgets import *
 from gui.dialogs import *
@@ -57,7 +49,7 @@ def _write_config_file(cfg: PowerSeqConfig, path: str) -> None:
     """Write config to disk by extension. Pure I/O; safe to call off-main-thread."""
     ext = os.path.splitext(path)[1].lower()
     if ext in (".xlsx", ".xlsm", ".xls"):
-        from excel_export import export_powerseq_to_excel
+        from excel.excel_export import export_powerseq_to_excel
 
         export_powerseq_to_excel(cfg, path)
     else:
@@ -1238,7 +1230,7 @@ class PowerSeqGUI(ctk.CTk):
         try:
             ext = os.path.splitext(path)[1].lower()
             if ext in (".xlsx", ".xlsm", ".xls"):
-                from excel_import import load_powerseq_from_excel
+                from excel.excel_import import load_powerseq_from_excel
 
                 self.config_obj = load_powerseq_from_excel(path)
             else:

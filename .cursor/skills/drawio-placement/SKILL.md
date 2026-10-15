@@ -15,9 +15,9 @@ Placement is **deterministic**; there is no separate auto-layout engine.
 
 | Entry | Source |
 |-------|--------|
-| `generate_drawio()` | `src/drawio_cell_export.py` (thin wrapper in `src/drawio_export.py`) |
-| Options | `src/drawio_export_options.py` (`grid_columns`, `margin`) |
-| Shared geometry | `src/drawio_geometry.py` (`GRID`, PSEQCELL, gate styles, intra-op) |
+| `generate_drawio()` | `src/drawio/drawio_cell_export.py` (thin wrapper in `src/drawio/drawio_export.py`) |
+| Options | `src/drawio/drawio_export_options.py` (`grid_columns`, `margin`) |
+| Shared geometry | `src/drawio/drawio_geometry.py` (`GRID`, PSEQCELL, gate styles, intra-op) |
 
 `drawio_export.generate_drawio()` delegates to `drawio_cell_export.generate_drawio`.
 
@@ -222,7 +222,7 @@ Stack height uses `_effective_stack_inputs` (not raw input count) for block sizi
 | `EXPORT_CHAR_PT` / `EXPORT_WIRE_PAD` / `EXPORT_WIRE_MIN` | 8 / 0 / 0 | Purple export-name wire reserve |
 | `AND_TREE_THRESHOLD` | 8 | ≥8 inputs/branches → 2-level cascade |
 
-**`GRID`** is in `src/drawio_geometry.py` (`GRID = 40`). Change `BLOCK_PAD` locally unless the whole project grid should change.
+**`GRID`** is in `src/drawio/drawio_geometry.py` (`GRID = 40`). Change `BLOCK_PAD` locally unless the whole project grid should change.
 
 All spacing constants live at the top of `drawio_cell_export.py` — not in `DrawioExportOptions`.
 

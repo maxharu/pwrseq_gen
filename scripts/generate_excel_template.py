@@ -30,8 +30,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(ROOT, "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
-from excel_import import build_signal_dropdown_entries
-from excel_template_layout import apply_nodes_sheet_header_rows, node_sheet_headers
+from excel.excel_import import build_signal_dropdown_entries
+from excel.excel_template_layout import apply_nodes_sheet_header_rows, node_sheet_headers
 OUT_PATH = os.path.join(ROOT, "templates", "powerseq_nodes_template.xlsm")
 TMP_XLSX = os.path.join(ROOT, "templates", "_powerseq_nodes_template_build.xlsx")
 

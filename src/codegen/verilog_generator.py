@@ -6,8 +6,10 @@
 - 無 Lo 依賴時 iLo 接 1'b0
 """
 import os
-from config_models import PowerSeqConfig, PowerRail, DEFAULT_PULSE, pulse_verilog_name
-from group_logic import verilog_intra_expr
+from core.config_models import PowerSeqConfig, PowerRail, DEFAULT_PULSE, pulse_verilog_name
+from core.constants import DEP_HIGH, DEP_LOW
+from core.naming import internal_sig, safe_name
+from core.group_logic import verilog_intra_expr
 
 
 def _filename_to_module_and_guard(filepath: str) -> tuple[str, str]:
@@ -20,20 +22,10 @@ def _filename_to_module_and_guard(filepath: str) -> tuple[str, str]:
     name = base
     if name.lower().endswith(".v"):
         name = name[:-2]
-    name = _verilog_safe_name(name)
+    name = safe_name(name)
     if not name:
         return "PWRSEQ_TOP", "PWRSEQ_TOP_V"
     return name, f"{name.upper()}_V"
-
-
-def _verilog_safe_name(name: str) -> str:
-    """將名稱轉為 Verilog 合法識別子"""
-    return name.replace(".", "_").replace("-", "_").replace(" ", "_")
-
-
-def _internal_sig(name: str) -> str:
-    """內部訊號名稱：全小寫，供 wire/assign 使用"""
-    return _verilog_safe_name(name).lower()
 
 
 def _aligned_hash_params(param_rows: list[list[tuple[str, int]]]) -> list[str]:
@@ -94,13 +86,9 @@ def _topological_sort(rails: list) -> list:
     return result
 
 
-DEP_HIGH = "__HIGH__"
-DEP_LOW = "__LOW__"
-
-
 def _port_name(name: str, prefix: str) -> str:
     """依需求表：oXXX / iXXX（無底線）"""
-    return prefix + _verilog_safe_name(name)
+    return prefix + safe_name(name)
 
 
 def _pulse_signal(pulse_name: str) -> str:
@@ -114,7 +102,7 @@ def _get_input_signal(dep_name: str, name_to_rail: dict[str, PowerRail]) -> str:
     if not dep:
         return _port_name(dep_name, "i")
     if dep.seq_type == "input" and getattr(dep, "deb_enable", False):
-        return f"{_internal_sig(dep_name)}_deb"
+        return f"{internal_sig(dep_name)}_deb"
     return _port_name(dep_name, "i")
 
 
@@ -142,7 +130,7 @@ def _dep_expr(
         base = _port_name(dep_name, "i")  # input
     else:
         if dep.seq_type == "output":
-            s = _internal_sig(dep_name)
+            s = internal_sig(dep_name)
             if use_mode == "hi" and dep.has_pseqcell:
                 base = f"{s}_hi"
             elif use_mode == "lo" and dep.has_pseqcell:
@@ -255,14 +243,14 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
     lines.extend(_section("Internal Signal Declare"))
     for r in node_order_rails:
         if r.has_pseqcell:
-            lines.append(f"wire {_internal_sig(r.name)};")
+            lines.append(f"wire {internal_sig(r.name)};")
         elif r.seq_type == "input" and getattr(r, "deb_enable", False):
-            lines.append(f"wire {_internal_sig(r.name)}_deb;")
+            lines.append(f"wire {internal_sig(r.name)}_deb;")
     lines.append("")
 
     if sequenced:
         lines.append("// Condition signals (iHi, iLo, iForce) for PSEQCELL")
-        cond_sigs = [_internal_sig(r.name) for r in node_order_rails if r.has_pseqcell]
+        cond_sigs = [internal_sig(r.name) for r in node_order_rails if r.has_pseqcell]
         w_hi = max(len(s) + 3 for s in cond_sigs)     # "_hi"
         w_lo = max(len(s) + 3 for s in cond_sigs)     # "_lo"
         w_fc = max(len(s) + 6 for s in cond_sigs)     # "_force"
@@ -285,7 +273,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
     if inputs_with_deb:
         deb_specs = []
         for r in inputs_with_deb:
-            s = _internal_sig(r.name)
+            s = internal_sig(r.name)
             deb_specs.append({
                 "rail": r,
                 "u": f"u_deb_{s}",
@@ -322,7 +310,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
     if sequenced:
         # iHi, iLo assignments (F-DEP-08: group 內 &，group 間 |)
         for r in sequenced:
-            s = _internal_sig(r.name)
+            s = internal_sig(r.name)
             hi_groups = r.get_hi_groups()
             if hi_groups:
                 group_exprs = []
@@ -386,7 +374,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
         # Parameter order per src/reference/PSEQCELL.v
         ps_specs = []
         for r in sequenced:
-            s = _internal_sig(r.name)
+            s = internal_sig(r.name)
             ps_specs.append({
                 "rail": r,
                 "s": s,
@@ -438,7 +426,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
 
     lines.append("///// Continuous Assignment ////////////////////////////////////////////////////")
     out_specs = [
-        (_port_name(r.name, "o"), _internal_sig(r.name))
+        (_port_name(r.name, "o"), internal_sig(r.name))
         for r in node_order_rails if r.seq_type != "input"
     ]
     if out_specs:

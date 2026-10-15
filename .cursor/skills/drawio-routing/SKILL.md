@@ -14,8 +14,8 @@ description: >-
 
 | Source | Role |
 |--------|------|
-| `src/drawio_cell_export.py` | Emit all edges via `_Builder.edge` / `_STYLE_O_OUT` |
-| `src/drawio_geometry.py` | Stroke colors, gate entry defaults |
+| `src/drawio/drawio_cell_export.py` | Emit all edges via `_Builder.edge` / `_STYLE_O_OUT` |
+| `src/drawio/drawio_geometry.py` | Stroke colors, gate entry defaults |
 
 Placement (block grid, gate columns, export wire reserve): [drawio-placement](../drawio-placement/SKILL.md).
 

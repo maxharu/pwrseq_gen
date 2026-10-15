@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from schemdraw_export import (
+from timing.schemdraw_export import (
     _TimingDiagramDualLabels,
     build_schemdraw_extended_edges,
     generate_schemdraw_doc,
@@ -15,7 +15,7 @@ from schemdraw_export import (
     render_schemdraw_png_bytes,
     schemdraw_edges_forward_in_time,
 )
-from timing_export import TIMING_EDGE_HI_ONLY, TIMING_EDGE_LO_ONLY
+from timing.timing_export import TIMING_EDGE_HI_ONLY, TIMING_EDGE_LO_ONLY
 
 _DEMO_JSON = Path(__file__).resolve().parents[1] / "templates" / "demo_json.json"
 
@@ -64,7 +64,7 @@ def test_render_schemdraw_pdf(tmp_path):
     pytest.importorskip("schemdraw")
     pytest.importorskip("matplotlib")
 
-    from config_models import PowerSeqConfig
+    from core.config_models import PowerSeqConfig
 
     cfg = PowerSeqConfig.from_dict(json.loads(_DEMO_JSON.read_text(encoding="utf-8")))
     doc = generate_schemdraw_doc(cfg)
@@ -81,7 +81,7 @@ def test_render_schemdraw_png_bytes(tmp_path):
     del schemdraw
     pytest.importorskip("PIL")
 
-    from config_models import PowerSeqConfig
+    from core.config_models import PowerSeqConfig
 
     cfg = PowerSeqConfig.from_dict(json.loads(_DEMO_JSON.read_text(encoding="utf-8")))
     doc = generate_schemdraw_doc(cfg)
@@ -91,7 +91,7 @@ def test_render_schemdraw_png_bytes(tmp_path):
 
 @pytest.mark.skipif(not _DEMO_JSON.is_file(), reason="demo_json.json missing")
 def test_generate_schemdraw_doc_edges_never_go_backward_in_time():
-    from config_models import PowerSeqConfig
+    from core.config_models import PowerSeqConfig
 
     cfg = PowerSeqConfig.from_dict(json.loads(_DEMO_JSON.read_text(encoding="utf-8")))
     doc = generate_schemdraw_doc(cfg)
@@ -103,7 +103,7 @@ def test_generate_schemdraw_doc_edges_never_go_backward_in_time():
 
 @pytest.mark.skipif(not _DEMO_JSON.is_file(), reason="demo_json.json missing")
 def test_generate_schemdraw_include_rails_subset():
-    from config_models import PowerRail, PowerSeqConfig
+    from core.config_models import PowerRail, PowerSeqConfig
 
     cfg = PowerSeqConfig.from_dict(json.loads(_DEMO_JSON.read_text(encoding="utf-8")))
     first_out = next(r.name for r in cfg.rails if r.has_pseqcell)
@@ -115,7 +115,7 @@ def test_generate_schemdraw_include_rails_subset():
 
 @pytest.mark.skipif(not _DEMO_JSON.is_file(), reason="demo_json.json missing")
 def test_generate_schemdraw_edge_kinds():
-    from config_models import PowerSeqConfig
+    from core.config_models import PowerSeqConfig
 
     cfg = PowerSeqConfig.from_dict(json.loads(_DEMO_JSON.read_text(encoding="utf-8")))
     doc_hi = generate_schemdraw_doc(cfg, edge_kinds=TIMING_EDGE_HI_ONLY)

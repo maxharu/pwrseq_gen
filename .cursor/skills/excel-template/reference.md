@@ -5,10 +5,10 @@
 | Path | Purpose |
 |------|---------|
 | `scripts/generate_excel_template.py` | Main builder: sheets, validations, sample rows, orchestration |
-| `src/excel_import.py` | Load `PowerSeqConfig` / `TimingScenario`; shared constants & signal parsing |
-| `src/excel_export.py` | Export config back to workbook; preserves VBA via golden xlsm or zip inject |
-| `src/excel_template_layout.py` | Shared Nodes sheet header rows 1–3 |
-| `src/group_logic.py` | AND/OR/XOR labels ↔ internal ops; legacy group_inv detection |
+| `src/excel/excel_import.py` | Load `PowerSeqConfig` / `TimingScenario`; shared constants & signal parsing |
+| `src/excel/excel_export.py` | Export config back to workbook; preserves VBA via golden xlsm or zip inject |
+| `src/excel/excel_template_layout.py` | Shared Nodes sheet header rows 1–3 |
+| `src/core/group_logic.py` | AND/OR/XOR labels ↔ internal ops; legacy group_inv detection |
 | `scripts/embed_excel_vba.py` | COM: import VBA modules, add sync button, `refresh_vba_inplace` |
 | `scripts/inject_vba_zip.py` | Merge `vbaProject.bin` into xlsx → xlsm without Excel |
 | `scripts/rebuild_vba_project.py` | Helper to refresh bin after VBA edits (wraps generate + COM) |

@@ -23,7 +23,7 @@ python -c "import PyInstaller" 2>nul || (
 )
 
 echo 開始打包 onedir...
-python src\build_onedir.py
+python src\tools\build_onedir.py
 
 echo.
 pause

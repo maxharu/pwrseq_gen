@@ -14,11 +14,11 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from xml.dom import minidom
 
-from config_models import PowerSeqConfig, PowerRail
-from drawio_export_options import DrawioExportOptions
-from verilog_generator import _internal_sig
+from core.config_models import PowerSeqConfig, PowerRail
+from core.naming import internal_sig
+from drawio.drawio_export_options import DrawioExportOptions
 
-from drawio_geometry import (  # noqa: E402
+from drawio.drawio_geometry import (  # noqa: E402
     AND_GATE_H,
     AND_GATE_W,
     CELL_GROUP_H,
@@ -232,7 +232,7 @@ def _resolve_term(
     if use == "force":
         return None
     if use in ("hi", "lo"):
-        text = f"{_internal_sig(dep)}_{use}"
+        text = f"{internal_sig(dep)}_{use}"
         if inv:
             text = f"~{text}"
         return _Term(text, is_cond=True)
@@ -421,7 +421,7 @@ def _max_export_wire_extra(
     for hl in ("hi", "lo"):
         if (rail.name, hl) not in exported_hilo:
             continue
-        name = f"{_internal_sig(rail.name)}_{hl}"
+        name = f"{internal_sig(rail.name)}_{hl}"
         extra = max(extra, _export_wire_extra_for_name(name))
     return extra
 
@@ -700,7 +700,7 @@ def _wire_path_v2(
     has_export = (rail.name, hl) in exported_hilo
     if has_export:
         gate_right -= _export_wire_extra_for_name(
-            f"{_internal_sig(rail.name)}_{hl}"
+            f"{internal_sig(rail.name)}_{hl}"
         )
 
     multi_group = len(parsed_groups) >= 2
@@ -734,7 +734,7 @@ def _wire_path_v2(
 
     edge_val = ""
     if has_export:
-        edge_val = _export_edge_label(f"{_internal_sig(rail.name)}_{hl}")
+        edge_val = _export_edge_label(f"{internal_sig(rail.name)}_{hl}")
 
     if multi_group:
         _wire_or_fanin(

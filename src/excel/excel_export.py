@@ -17,7 +17,7 @@ try:
 except ImportError as e:
     raise ImportError("Excel export requires openpyxl: pip install openpyxl") from e
 
-from config_models import (
+from core.config_models import (
     DEFAULT_PULSE,
     PowerRail,
     PowerSeqConfig,
@@ -25,9 +25,12 @@ from config_models import (
     normalize_pulse_name,
     rail_input_wave_spec,
 )
-from group_logic import intra_op_label
-from excel_template_layout import apply_nodes_sheet_header_rows
-from excel_import import (
+from core.constants import DEP_HIGH, DEP_LOW
+from core.paths import SCRIPTS_DIR, TEMPLATES_DIR
+from core.timing_models import InputWaveSpec, TimingScenario
+from core.group_logic import intra_op_label
+from excel.excel_template_layout import apply_nodes_sheet_header_rows
+from excel.excel_import import (
     COND_META_COLS,
     COND_SIGNAL_MAX_COLS,
     DATA_START_ROW,
@@ -40,7 +43,6 @@ from excel_import import (
     data_area_end_row,
     last_used_row,
 )
-from timing_sim import DEP_HIGH, DEP_LOW, InputWaveSpec, TimingScenario
 SHEET_LISTS = "Lists"
 
 INPUT_FILL = PatternFill("solid", fgColor="F3E8FF")
@@ -57,21 +59,19 @@ INPUT_MODE_LABELS = {
     "depends": "Signal cond.",
 }
 
-_PKG_DIR = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(_PKG_DIR)
-DEFAULT_TEMPLATE_XLSX = os.path.join(_ROOT, "templates", "powerseq_nodes_template.xlsx")
-VBA_BIN = os.path.join(_ROOT, "templates", "vba", "vbaProject.bin")
+DEFAULT_TEMPLATE_XLSX = os.path.join(TEMPLATES_DIR, "powerseq_nodes_template.xlsx")
+VBA_BIN = os.path.join(TEMPLATES_DIR, "vba", "vbaProject.bin")
 
 _TEMPLATE_CANDIDATES = (
     DEFAULT_TEMPLATE_XLSX,
-    os.path.join(_ROOT, "templates", "powerseq_nodes_template_new.xlsm"),
-    os.path.join(_ROOT, "templates", "powerseq_nodes_template_fixed.xlsm"),
-    os.path.join(_ROOT, "templates", "powerseq_nodes_template.xlsm"),
+    os.path.join(TEMPLATES_DIR, "powerseq_nodes_template_new.xlsm"),
+    os.path.join(TEMPLATES_DIR, "powerseq_nodes_template_fixed.xlsm"),
+    os.path.join(TEMPLATES_DIR, "powerseq_nodes_template.xlsm"),
 )
 
 _XLSM_GOLDEN_CANDIDATES = (
-    os.path.join(_ROOT, "templates", "powerseq_nodes_template_new.xlsm"),
-    os.path.join(_ROOT, "templates", "powerseq_nodes_template_fixed.xlsm"),
+    os.path.join(TEMPLATES_DIR, "powerseq_nodes_template_new.xlsm"),
+    os.path.join(TEMPLATES_DIR, "powerseq_nodes_template_fixed.xlsm"),
 )
 
 
@@ -108,7 +108,7 @@ def _finalize_xlsm(tmp_xlsx: str, xlsm_path: str) -> None:
     """Embed VBA + Sync button; re-bind sheet modules so Config pulse edits sync."""
     if not os.path.isfile(VBA_BIN):
         raise FileNotFoundError(f"VBA project not found: {VBA_BIN}")
-    scripts = os.path.join(_ROOT, "scripts")
+    scripts = str(SCRIPTS_DIR)
     if scripts not in sys.path:
         sys.path.insert(0, scripts)
 
@@ -473,7 +473,7 @@ def _write_lists(wb, config: PowerSeqConfig, cond_signals: set[str]) -> None:
 def _resolve_scenario(config: PowerSeqConfig) -> TimingScenario:
     embedded = config.timing_scenario or {}
     if embedded.get("inputs"):
-        from timing_scenario_io import merge_scenario_for_config
+        from timing.timing_scenario_io import merge_scenario_for_config
 
         return merge_scenario_for_config(TimingScenario.from_dict(embedded), config)
     return build_timing_scenario(config)

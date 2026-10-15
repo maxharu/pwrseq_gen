@@ -4,11 +4,10 @@ Power Sequence Configuration Data Models
 """
 from dataclasses import dataclass, field
 
+from core.naming import safe_name
+from core.timing_models import InputWaveSpec, TimingScenario, norm_hscale
+
 DEFAULT_PULSE = "Pulse_1us"
-
-
-def _pulse_safe_name(name: str) -> str:
-    return name.replace(".", "_").replace("-", "_").replace(" ", "_")
 
 
 def normalize_pulse_name(name: str) -> str:
@@ -17,7 +16,7 @@ def normalize_pulse_name(name: str) -> str:
         return DEFAULT_PULSE
     if name == "High":
         return "High"
-    s = _pulse_safe_name(name)
+    s = safe_name(name)
     if s.startswith("iPulse_"):
         return s[1:]
     return s
@@ -197,7 +196,7 @@ class PowerRail:
             return False
 
     def _get_intra_op(self, kind: str, group_idx: int) -> str:
-        from group_logic import normalize_intra_op
+        from core.group_logic import normalize_intra_op
 
         attr = f"depends_on_{kind}_intra_op"
         ops = getattr(self, attr, [])
@@ -261,7 +260,7 @@ def input_wave_to_dict(rail: PowerRail) -> dict:
     if any(rail.hi_group_inv):
         d["hi_group_inv"] = rail.hi_group_inv
     if rail.hi_intra_op:
-        from group_logic import normalize_intra_op
+        from core.group_logic import normalize_intra_op
 
         normed = [normalize_intra_op(o) for o in rail.hi_intra_op]
         if any(o != "and" for o in normed):
@@ -275,7 +274,7 @@ def input_wave_to_dict(rail: PowerRail) -> dict:
     if any(rail.lo_group_inv):
         d["lo_group_inv"] = rail.lo_group_inv
     if rail.lo_intra_op:
-        from group_logic import normalize_intra_op
+        from core.group_logic import normalize_intra_op
 
         normed = [normalize_intra_op(o) for o in rail.lo_intra_op]
         if any(o != "and" for o in normed):
@@ -314,10 +313,8 @@ def _timing_globals_from_dict(wd: dict | None) -> dict | None:
     return out or None
 
 
-def rail_input_wave_spec(rail: PowerRail):
+def rail_input_wave_spec(rail: PowerRail) -> InputWaveSpec:
     """PowerRail → InputWaveSpec（input 節點 Timing 設定）。"""
-    from timing_sim import InputWaveSpec
-
     return InputWaveSpec(
         hi_mode=rail.hi_mode,
         hi_wave=rail.hi_wave,
@@ -336,13 +333,11 @@ def rail_input_wave_spec(rail: PowerRail):
     )
 
 
-def build_timing_scenario(config: "PowerSeqConfig"):
+def build_timing_scenario(config: "PowerSeqConfig") -> TimingScenario:
     """由 config（rails + 全域 timing_scenario）組出 TimingScenario。"""
-    from timing_sim import TimingScenario, _norm_hscale
-
     wd = config.timing_scenario or {}
     steps = int(wd.get("steps", 50))
-    hscale = _norm_hscale(int(wd.get("hscale", wd.get("cond_step_delay", 1))))
+    hscale = norm_hscale(int(wd.get("hscale", wd.get("cond_step_delay", 1))))
     inputs = {
         r.name: rail_input_wave_spec(r)
         for r in config.rails
@@ -400,7 +395,7 @@ def _cond_kind_to_dict(rail: PowerRail, kind: str) -> dict:
     if any(g_inv):
         out[f"depends_on_{kind}_group_inv"] = g_inv
     if intra:
-        from group_logic import normalize_intra_op
+        from core.group_logic import normalize_intra_op
 
         normed = [normalize_intra_op(o) for o in intra]
         if any(o != "and" for o in normed) or len(normed) == len(groups):

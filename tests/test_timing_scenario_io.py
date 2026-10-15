@@ -5,9 +5,9 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from config_models import PowerSeqConfig, PowerRail
-from timing_sim import InputWaveSpec, TimingScenario
-from timing_scenario_io import (
+from core.config_models import PowerSeqConfig, PowerRail
+from core.timing_models import InputWaveSpec, TimingScenario
+from timing.timing_scenario_io import (
     load_scenario_file,
     resolve_scenario,
     save_scenario_file,

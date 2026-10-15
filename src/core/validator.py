@@ -4,7 +4,7 @@ Power Sequence 配置驗證
 - 名稱唯一性
 - 依賴存在性
 """
-from config_models import PowerSeqConfig
+from core.config_models import PowerSeqConfig
 
 
 def check_duplicate_names(config: PowerSeqConfig) -> list[str]:

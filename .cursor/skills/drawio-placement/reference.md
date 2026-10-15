@@ -120,10 +120,10 @@ col_x[c+1] = col_x[c] + col_widths[c] + COL_GAP
 
 | Path | Role |
 |------|------|
-| `src/drawio_cell_export.py` | Cell-centric placement + emit |
-| `src/drawio_geometry.py` | `GRID`, PSEQCELL/gate constants, intra-op styles |
-| `src/drawio_export.py` | `generate_drawio` wrapper + re-exports |
-| `src/drawio_export_options.py` | `DrawioExportOptions` |
+| `src/drawio/drawio_cell_export.py` | Cell-centric placement + emit |
+| `src/drawio/drawio_geometry.py` | `GRID`, PSEQCELL/gate constants, intra-op styles |
+| `src/drawio/drawio_export.py` | `generate_drawio` wrapper + re-exports |
+| `src/drawio/drawio_export_options.py` | `DrawioExportOptions` |
 | `tests/test_drawio_cell.py` | Cell export tests |
 | `tests/test_integration.py` | `test_cell_centric_drawio_from_demo` |
 

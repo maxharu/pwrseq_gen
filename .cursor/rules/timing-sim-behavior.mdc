@@ -1,6 +1,6 @@
 ---
 description: 時序模擬器的行為語意（轉態時序、self 依賴、與 C/Verilog 的對齊）
-globs: src/timing_sim.py,src/timing_export.py,src/c_generator.py,src/verilog_generator.py,tests/test_timing_sim.py
+globs: src/timing/timing_sim.py,src/timing/timing_export.py,src/codegen/c_generator.py,src/codegen/verilog_generator.py,tests/test_timing_sim.py
 alwaysApply: false
 ---
 

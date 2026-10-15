@@ -52,20 +52,28 @@ pytest
 
 ```
 src/
-  main.py                進入點（設定 DPI 後啟動 GUI）
-  version.py             版本／作者等單一來源
-  gui/                   CustomTkinter GUI（拆分為 theme/widgets/panels/dialogs/settings/app）
-  config_models.py       資料模型（PowerSeqConfig / PowerRail）
-  validator.py           設定驗證
-  verilog_generator.py   Verilog 產生
-  c_generator.py         C 產生
-  drawio_*.py            Draw.io 匯出（geometry / options / cell_export）
-  timing_sim.py          時序邏輯模擬引擎
-  timing_export.py       時序匯出共用選項／edge helper（供 Schemdraw 使用）
-  timing_scenario_io.py  時序 scenario JSON I/O / merge
-  schemdraw_export.py    Schemdraw 時序圖
-  excel_*.py             Excel 匯入／匯出與版面
-  app_expiry.py          試用期限檢查
+  main.py                  進入點（設定 DPI 後啟動 GUI）
+  core/                    資料模型與共用基礎
+    config_models.py         PowerSeqConfig / PowerRail
+    timing_models.py         InputWaveSpec / TimingScenario
+    naming.py                safe_name / internal_sig
+    constants.py             DEP_HIGH / DEP_LOW
+    paths.py                 templates/ scripts/ reference/ 路徑單一來源
+    validator.py             設定驗證
+    group_logic.py           群組 intra-op AND/OR/XOR
+    version.py               版本／作者等單一來源
+    applog.py  snapshot_history.py  app_expiry.py
+  timing/                  時序模擬與時序圖
+    timing_sim.py            時序邏輯模擬引擎
+    timing_export.py         匯出共用選項／edge helper
+    timing_scenario_io.py    scenario JSON I/O / merge
+    schemdraw_export.py      Schemdraw 時序圖
+  codegen/                 verilog_generator.py / c_generator.py
+  drawio/                  Draw.io 匯出（export / cell_export / geometry / options）
+  excel/                   Excel 匯入／匯出與版面
+  gui/                     CustomTkinter GUI（theme/widgets/panels/dialogs/settings/app）
+  tools/                   json2drawio.py / build.py / build_onedir.py
+  reference/               PSEQCELL 版面等匯出資產
 tests/                   pytest 測試（邏輯層）
 scripts/                 範本／資產產生與 VBA 工具
 templates/               Excel／Draw.io／時序圖範本與資產

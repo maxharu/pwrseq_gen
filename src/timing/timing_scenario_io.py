@@ -6,8 +6,8 @@ from __future__ import annotations
 import json
 import os
 
-from config_models import PowerSeqConfig, apply_input_wave_dict, build_timing_scenario
-from timing_sim import InputWaveSpec, TimingScenario, default_scenario_for_config
+from core.config_models import PowerSeqConfig, apply_input_wave_dict, build_timing_scenario
+from core.timing_models import InputWaveSpec, TimingScenario
 
 
 def merge_scenario_for_config(
@@ -49,7 +49,7 @@ def scenario_from_dict(data: dict) -> TimingScenario:
 def load_scenario_file(path: str) -> TimingScenario:
     ext = os.path.splitext(path)[1].lower()
     if ext in (".xlsx", ".xlsm", ".xls"):
-        from excel_import import load_timing_scenario_from_excel
+        from excel.excel_import import load_timing_scenario_from_excel
 
         return load_timing_scenario_from_excel(path)
     with open(path, encoding="utf-8") as f:

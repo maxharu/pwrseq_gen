@@ -24,5 +24,5 @@ if "%~1"=="" (
     exit /b 1
 )
 
-python src\json2drawio.py %*
+python src\tools\json2drawio.py %*
 if errorlevel 1 pause

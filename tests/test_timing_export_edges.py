@@ -1,13 +1,14 @@
 """Condition-edge pending: dep trigger polarity follows Inv, not Hi/Lo kind."""
 from __future__ import annotations
 
-from config_models import PowerRail, PowerSeqConfig
-from timing_export import (
+from core.config_models import PowerRail, PowerSeqConfig
+from timing.timing_export import (
     _build_export_lanes,
     _collect_condition_edge_pending,
     _dep_trigger_step,
 )
-from timing_sim import InputWaveSpec, TimingScenario, simulate
+from core.timing_models import InputWaveSpec, TimingScenario
+from timing.timing_sim import simulate
 
 
 def test_dep_trigger_step_uses_inv_not_kind():

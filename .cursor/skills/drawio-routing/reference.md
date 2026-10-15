@@ -2,7 +2,7 @@
 
 ## Implementation file
 
-All routing: `src/drawio_cell_export.py`. No separate routing pass.
+All routing: `src/drawio/drawio_cell_export.py`. No separate routing pass.
 
 ## Edge styles
 

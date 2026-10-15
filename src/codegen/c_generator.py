@@ -8,22 +8,13 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from config_models import PowerSeqConfig, PowerRail, normalize_pulse_name
-
-DEP_HIGH = "__HIGH__"
-DEP_LOW = "__LOW__"
-
-
-def _safe_name(name: str) -> str:
-    return name.replace(".", "_").replace("-", "_").replace(" ", "_")
-
-
-def _internal_sig(name: str) -> str:
-    return _safe_name(name).lower()
+from core.config_models import PowerSeqConfig, PowerRail, normalize_pulse_name
+from core.constants import DEP_HIGH, DEP_LOW
+from core.naming import internal_sig, safe_name
 
 
 def _gpio_macro(name: str) -> str:
-    return _safe_name(name).upper()
+    return safe_name(name).upper()
 
 
 def _filename_to_c_names(filepath: str) -> tuple[str, str, str]:
@@ -34,7 +25,7 @@ def _filename_to_c_names(filepath: str) -> tuple[str, str, str]:
     """
     base = os.path.basename(filepath)
     stem = base[:-2] if base.lower().endswith(".c") else base
-    stem = _safe_name(stem) or "power"
+    stem = safe_name(stem) or "power"
     guard = f"{stem.upper()}_C"
     var_name = f"{stem}_var" if stem != "power" else "power_var"
     return guard, stem, var_name
@@ -99,7 +90,7 @@ def _c_dep_expr(
     if not dep or dep.seq_type == "input":
         base = f"oemgpio_DI_Get({_gpio_macro(dep_name)})"
     else:
-        sig = _internal_sig(dep_name)
+        sig = internal_sig(dep_name)
         if use_mode == "hi":
             base = f"{var_name}.{sig}.hi.condition"
         elif use_mode == "lo":
@@ -117,7 +108,7 @@ def _c_dep_expr(
     return base
 
 
-from group_logic import c_intra_expr
+from core.group_logic import c_intra_expr
 
 
 def _groups_to_c_expr(
@@ -262,9 +253,9 @@ def generate_c(
     lines.append("typedef struct")
     lines.append("{")
 
-    w_member = max((len(_internal_sig(r.name)) for r in sequenced), default=0)
+    w_member = max((len(internal_sig(r.name)) for r in sequenced), default=0)
     for r in sequenced:
-        m = _internal_sig(r.name)
+        m = internal_sig(r.name)
         lines.append(f"    pwrcell_t {m.ljust(w_member)};")
 
     if time_fields:
@@ -285,12 +276,12 @@ def generate_c(
 
     # Static initializer
     lines.append(f"{type_name} {var_name} = {{")
-    w_init = max((len(_internal_sig(r.name)) for r in sequenced), default=0)
+    w_init = max((len(internal_sig(r.name)) for r in sequenced), default=0)
     w_chi = max((len(str(r.cycle_hi)) for r in sequenced), default=1)
     w_clo = max((len(str(r.cycle_lo)) for r in sequenced), default=1)
     w_polar = max((len(str(getattr(r, "force_val", 0))) for r in sequenced), default=1)
     for i, r in enumerate(sequenced):
-        m = _internal_sig(r.name)
+        m = internal_sig(r.name)
         comma = "," if i < len(sequenced) - 1 else ""
         hi_c = str(r.cycle_hi).rjust(w_chi)
         lo_c = str(r.cycle_lo).rjust(w_clo)
@@ -313,9 +304,9 @@ def generate_c(
     ))
     lines.append(f"void {prefix}_Init(void)")
     lines.append("{")
-    w_init_call = max((len(_internal_sig(r.name)) for r in sequenced), default=0)
+    w_init_call = max((len(internal_sig(r.name)) for r in sequenced), default=0)
     for r in sequenced:
-        m = _internal_sig(r.name)
+        m = internal_sig(r.name)
         lines.append(f"    pwrcell_Init(&{var_name}.{m.ljust(w_init_call)});")
     if time_fields:
         lines.append("")
@@ -350,9 +341,9 @@ def generate_c(
 
     lines.append(_C_HANDLER_BEGIN)
 
-    w_cell = max((len(_internal_sig(r.name)) for r in sequenced), default=0)
+    w_cell = max((len(internal_sig(r.name)) for r in sequenced), default=0)
     for r in sequenced:
-        s = _internal_sig(r.name)
+        s = internal_sig(r.name)
         hi_expr = _groups_to_c_expr(r.get_hi_groups(), r, "hi", name_to_rail, var_name)
         lo_expr = _groups_to_c_expr(r.get_lo_groups(), r, "lo", name_to_rail, var_name)
         force_expr = _groups_to_c_expr(r.get_force_groups(), r, "force", name_to_rail, var_name)
@@ -364,7 +355,7 @@ def generate_c(
     # pwrcell_handle — align args
     handle_specs = []
     for r in sequenced:
-        s = _internal_sig(r.name)
+        s = internal_sig(r.name)
         ph = getattr(r, "pulse_hi", "default") or "default"
         pl = getattr(r, "pulse_lo", "default") or "default"
         arg_hi = _pulse_time_expr(ph, var_name)

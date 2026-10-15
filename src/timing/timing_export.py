@@ -8,12 +8,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from config_models import PowerRail, PowerSeqConfig
-from timing_sim import (
-    DEP_HIGH,
-    DEP_LOW,
+from core.config_models import PowerRail, PowerSeqConfig
+from core.constants import DEP_HIGH, DEP_LOW
+from core.naming import internal_sig, safe_name
+from timing.timing_sim import (
     SimResult,
-    _internal_sig,
     expand_binary_wave,
     values_to_wave,
 )
@@ -40,8 +39,7 @@ class TimingExportOptions:
 
 
 def _port_name(name: str, prefix: str) -> str:
-    safe = name.replace(".", "_").replace("-", "_").replace(" ", "_")
-    return prefix + safe
+    return prefix + safe_name(name)
 
 
 def _port_for_rail(rail: PowerRail) -> str:
@@ -203,7 +201,7 @@ def _dep_bits_series(
         return None
     if dep_rail.seq_type == "input":
         return result.raw_inputs.get(dep_name)
-    sig = _internal_sig(dep_name)
+    sig = internal_sig(dep_name)
     return result.output_values.get(sig)
 
 
@@ -240,7 +238,7 @@ def _build_export_lanes(
             signals.append(lane)
             lanes_by_port[lane["name"]] = lane
         elif r.has_pseqcell:
-            sig = _internal_sig(r.name)
+            sig = internal_sig(r.name)
             lane = _lane_dict(
                 _port_name(r.name, "o"),
                 result.output_values.get(sig, []),
@@ -271,7 +269,7 @@ def _collect_condition_edge_pending(
     for rail in config.rails:
         if not rail.has_pseqcell:
             continue
-        sig = _internal_sig(rail.name)
+        sig = internal_sig(rail.name)
         out_lane = lanes_by_port.get(_port_for_rail(rail))
         if not out_lane:
             continue

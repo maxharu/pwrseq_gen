@@ -29,9 +29,9 @@ Same simulation + lane building as the shared timing export helpers; **extended 
 
 | File | Role |
 |------|------|
-| `src/schemdraw_export.py` | Doc generation, render, export API |
-| `src/timing_export.py` | Shared: `_build_export_lanes`, `_collect_condition_edge_pending`, `TimingExportOptions` |
-| `src/timing_sim.py` | `simulate()`, scenario, step indices for edges |
+| `src/timing/schemdraw_export.py` | Doc generation, render, export API |
+| `src/timing/timing_export.py` | Shared: `_build_export_lanes`, `_collect_condition_edge_pending`, `TimingExportOptions` |
+| `src/timing/timing_sim.py` | `simulate()`, scenario, step indices for edges |
 | `src/gui.py` | `PreviewPanel` (Schemdraw mode), `TimingNodeSelectDialog`, export menu |
 | `tests/test_schemdraw_export.py` | Extended edges, dual labels, PDF/PNG render |
 

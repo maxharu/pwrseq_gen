@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
-from pathlib import Path
 
-from config_models import PowerRail
-from group_logic import normalize_intra_op
+from core.config_models import PowerRail
+from core.constants import DEP_HIGH, DEP_LOW
+from core.paths import reference_dir
+from core.group_logic import normalize_intra_op
 
-DEP_HIGH = "__HIGH__"
-DEP_LOW = "__LOW__"
 CONST_DEPS = {DEP_HIGH, DEP_LOW}
 
 CELL_GROUP_W = 80
@@ -48,16 +47,7 @@ _PSEQCELL_STYLE_L_DEB = "rounded=1;whiteSpace=wrap;html=1;"
 _PSEQCELL_STYLE_O = "rounded=1;whiteSpace=wrap;html=1;"
 
 
-def _reference_dir() -> Path:
-    """PyInstaller onefile 時資源在 sys._MEIPASS/reference。"""
-    import sys
-
-    if getattr(sys, "frozen", False):
-        return Path(sys._MEIPASS) / "reference"
-    return Path(__file__).resolve().parent / "reference"
-
-
-_REFERENCE_DIR = _reference_dir()
+_REFERENCE_DIR = reference_dir()
 
 
 def _parse_pulse_period(pulse_name: str) -> tuple[int, str] | None:

@@ -1,9 +1,9 @@
 """Draw.io export entry point (cell-centric grid)."""
 from __future__ import annotations
 
-from config_models import PowerSeqConfig
-from drawio_export_options import DrawioExportOptions
-from drawio_geometry import (  # noqa: F401 — re-export for callers
+from core.config_models import PowerSeqConfig
+from drawio.drawio_export_options import DrawioExportOptions
+from drawio.drawio_geometry import (  # noqa: F401 — re-export for callers
     AND_GATE_H,
     AND_GATE_W,
     CELL_GROUP_H,
@@ -46,6 +46,6 @@ def generate_drawio(
     options: DrawioExportOptions | None = None,
 ) -> str:
     """Generate cell-centric Draw.io XML (single-page grid)."""
-    from drawio_cell_export import generate_drawio as _generate
+    from drawio.drawio_cell_export import generate_drawio as _generate
 
     return _generate(config, options=options)

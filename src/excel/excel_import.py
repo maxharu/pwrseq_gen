@@ -14,9 +14,16 @@ try:
 except ImportError as e:
     raise ImportError("Excel import requires openpyxl: pip install openpyxl") from e
 
-from config_models import DEFAULT_PULSE, PowerRail, PowerSeqConfig, normalize_pulse_name
-from group_logic import is_legacy_group_inv_cell, parse_intra_op_cell
-from timing_sim import DEP_HIGH, DEP_LOW
+from core.config_models import (
+    DEFAULT_PULSE,
+    PowerRail,
+    PowerSeqConfig,
+    apply_input_wave_dict,
+    normalize_pulse_name,
+)
+from core.constants import DEP_HIGH, DEP_LOW
+from core.timing_models import TimingScenario
+from core.group_logic import is_legacy_group_inv_cell, parse_intra_op_cell
 
 DATA_START_ROW = 4
 MAX_DATA_ROW_CAP = 5000
@@ -553,8 +560,6 @@ def _open_excel_workbook(path: str):
 
 def load_timing_scenario_from_excel(path: str) -> TimingScenario:
     """Load TimingScenario from Excel Input Conditions + Config timing fields."""
-    from timing_sim import TimingScenario
-
     if not os.path.isfile(path):
         raise FileNotFoundError(path)
     wb = _open_excel_workbook(path)
@@ -618,8 +623,6 @@ def load_powerseq_from_excel(path: str) -> PowerSeqConfig:
             in_rows = _data_sheet_rows(ws_in, max_col=INPUT_COND_MAX_COL)
             inputs = _parse_input_conditions(in_rows, input_names)
             if inputs:
-                from config_models import apply_input_wave_dict
-
                 for name, spec in inputs.items():
                     rail = rails_by_name.get(name)
                     if rail is not None and rail.seq_type == "input":

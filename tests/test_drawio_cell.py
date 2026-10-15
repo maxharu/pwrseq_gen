@@ -8,8 +8,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from config_models import PowerSeqConfig, PowerRail
-from drawio_cell_export import (
+from core.config_models import PowerSeqConfig, PowerRail
+from drawio.drawio_cell_export import (
     AND_TREE_THRESHOLD,
     EXPORT_WIRE_MIN,
     LABEL_STACK_STEP,
@@ -19,7 +19,7 @@ from drawio_cell_export import (
     _merge_lane_label_w,
     _resolve_term,
 )
-from drawio_export import (
+from drawio.drawio_export import (
     AND_GATE_H,
     AND_GATE_W,
     CELL_O_H,
@@ -38,7 +38,7 @@ from drawio_export import (
 
 DEMO_JSON = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "doc",
+    "templates",
     "demo_json.json",
 )
 

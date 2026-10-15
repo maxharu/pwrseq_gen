@@ -4,7 +4,8 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-from version import APP_NAME, APP_AUTHOR, APP_VERSION, APP_COPYRIGHT_YEAR
+from core.constants import DEP_HIGH, DEP_LOW
+from core.version import APP_NAME, APP_AUTHOR, APP_VERSION, APP_COPYRIGHT_YEAR
 
 # 關閉自動 DPI 縮放，避免縮放時 dropdown 出現 TclError。
 ctk.deactivate_automatic_dpi_awareness()
@@ -17,8 +18,6 @@ ctk.set_default_color_theme("blue")
 # ============================================================
 
 SEQ_TYPE_LABELS = {"output": "Output", "input": "Input"}
-DEP_HIGH = "__HIGH__"
-DEP_LOW = "__LOW__"
 
 # spacing
 S_XS, S_SM, S_MD, S_LG = 2, 4, 8, 16

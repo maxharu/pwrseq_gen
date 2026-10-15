@@ -4,7 +4,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from group_logic import (
+from core.group_logic import (
     c_intra_expr,
     eval_intra_op,
     is_legacy_group_inv_cell,

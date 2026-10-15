@@ -3,123 +3,18 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from config_models import PowerSeqConfig, PowerRail, DEFAULT_PULSE, normalize_pulse_name
-from group_logic import eval_intra_op
-
-DEP_HIGH = "__HIGH__"
-DEP_LOW = "__LOW__"
-
-
-@dataclass
-class InputWaveSpec:
-    """單一 input 於匯出對話框的 hi/lo 設定（僅供模擬，不寫入 PowerRail）。"""
-
-    hi_mode: str = "depends"  # constant_0 | constant_1 | custom | depends
-    hi_wave: str = "0"
-    hi_groups: list[list[str]] = field(default_factory=list)
-    hi_inv_groups: list[list[bool]] = field(default_factory=list)
-    hi_use_groups: list[list[str]] = field(default_factory=list)
-    hi_group_inv: list[bool] = field(default_factory=list)
-    hi_intra_op: list[str] = field(default_factory=list)
-    lo_mode: str = "constant_0"
-    lo_wave: str = "0"
-    lo_groups: list[list[str]] = field(default_factory=list)
-    lo_inv_groups: list[list[bool]] = field(default_factory=list)
-    lo_use_groups: list[list[str]] = field(default_factory=list)
-    lo_group_inv: list[bool] = field(default_factory=list)
-    lo_intra_op: list[str] = field(default_factory=list)
-
-    @classmethod
-    def from_dict(cls, d: dict) -> InputWaveSpec:
-        return cls(
-            hi_mode=d.get("hi_mode", "depends"),
-            hi_wave=d.get("hi_wave", "0"),
-            hi_groups=d.get("hi_groups") or [],
-            hi_inv_groups=d.get("hi_inv_groups") or [],
-            hi_use_groups=d.get("hi_use_groups") or [],
-            hi_group_inv=d.get("hi_group_inv") or [],
-            hi_intra_op=d.get("hi_intra_op") or [],
-            lo_mode=d.get("lo_mode", "constant_0"),
-            lo_wave=d.get("lo_wave", "0"),
-            lo_groups=d.get("lo_groups") or [],
-            lo_inv_groups=d.get("lo_inv_groups") or [],
-            lo_use_groups=d.get("lo_use_groups") or [],
-            lo_group_inv=d.get("lo_group_inv") or [],
-            lo_intra_op=d.get("lo_intra_op") or [],
-        )
-
-    def to_dict(self) -> dict:
-        d = {"hi_mode": self.hi_mode, "lo_mode": self.lo_mode}
-        if self.hi_mode == "custom":
-            d["hi_wave"] = self.hi_wave
-        if self.lo_mode == "custom":
-            d["lo_wave"] = self.lo_wave
-        if self.hi_groups:
-            d["hi_groups"] = self.hi_groups
-        if self.hi_inv_groups:
-            d["hi_inv_groups"] = self.hi_inv_groups
-        if self.hi_use_groups:
-            d["hi_use_groups"] = self.hi_use_groups
-        if any(self.hi_group_inv):
-            d["hi_group_inv"] = self.hi_group_inv
-        if self.hi_intra_op:
-            d["hi_intra_op"] = self.hi_intra_op
-        if self.lo_groups:
-            d["lo_groups"] = self.lo_groups
-        if self.lo_inv_groups:
-            d["lo_inv_groups"] = self.lo_inv_groups
-        if self.lo_use_groups:
-            d["lo_use_groups"] = self.lo_use_groups
-        if any(self.lo_group_inv):
-            d["lo_group_inv"] = self.lo_group_inv
-        if self.lo_intra_op:
-            d["lo_intra_op"] = self.lo_intra_op
-        return d
-
-
-def _norm_hscale(value: int) -> int:
-    """Timing config.hscale — horizontal pixels per time step (min 1)."""
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        n = 1
-    return max(1, min(100, n))
-
-
-@dataclass
-class TimingScenario:
-    steps: int = 200
-    inputs: dict[str, InputWaveSpec] = field(default_factory=dict)
-    hscale: int = 1
-    cond_step_delay: int = 1
-
-    @classmethod
-    def from_dict(cls, d: dict) -> TimingScenario:
-        inputs = {}
-        for name, spec in (d.get("inputs") or {}).items():
-            inputs[name] = InputWaveSpec.from_dict(spec) if isinstance(spec, dict) else InputWaveSpec()
-        if "hscale" in d:
-            hscale = _norm_hscale(d["hscale"])
-        elif "cond_step_delay" in d:
-            hscale = _norm_hscale(d["cond_step_delay"])
-        else:
-            hscale = 1
-        return cls(
-            steps=int(d.get("steps", 200)),
-            inputs=inputs,
-            hscale=hscale,
-            cond_step_delay=1,
-        )
-
-    def to_dict(self) -> dict:
-        d: dict = {
-            "steps": self.steps,
-            "inputs": {k: v.to_dict() for k, v in self.inputs.items()},
-        }
-        if self.hscale != 1:
-            d["hscale"] = self.hscale
-        return d
+from dataclasses import dataclass
+from core.config_models import (
+    PowerSeqConfig,
+    PowerRail,
+    DEFAULT_PULSE,
+    build_timing_scenario,
+    normalize_pulse_name,
+)
+from core.constants import DEP_HIGH, DEP_LOW
+from core.naming import internal_sig
+from core.timing_models import InputWaveSpec, TimingScenario
+from core.group_logic import eval_intra_op
 
 
 @dataclass
@@ -131,14 +26,6 @@ class SimResult:
     output_lo_cond: dict[str, list[int]]
     output_values: dict[str, list[int]]
     output_states: dict[str, list[str]]
-
-
-def _safe_name(name: str) -> str:
-    return name.replace(".", "_").replace("-", "_").replace(" ", "_")
-
-
-def _internal_sig(name: str) -> str:
-    return _safe_name(name).lower()
 
 
 def _pulse_scale_units(pulse_name: str) -> int:
@@ -306,7 +193,7 @@ def _eval_spec_groups(
             inv, use = _get_inv_use(gi, ii, d, inv_groups, use_groups)
             dep = name_to_rail.get(d)
             if dep and dep.seq_type == "output":
-                sig = _internal_sig(d)
+                sig = internal_sig(d)
                 fallback = out_val.get(sig, 0)
                 if use == "hi":
                     v = out_hi.get(sig, fallback)
@@ -436,7 +323,7 @@ def _eval_dep(
     if not dep or dep.seq_type == "input":
         v = raw.get(dep_name, 0)
     else:
-        sig = _internal_sig(dep_name)
+        sig = internal_sig(dep_name)
         if use_mode == "hi":
             v = out_hi.get(sig, 0)
         elif use_mode == "lo":
@@ -689,8 +576,6 @@ def _outputs_topo_order(
 
 def default_scenario_for_config(config: PowerSeqConfig) -> TimingScenario:
     """為所有 input 建立 scenario（優先使用 rail 上 Timing 欄位）。"""
-    from config_models import build_timing_scenario
-
     return build_timing_scenario(config)
 
 
@@ -727,7 +612,7 @@ def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
         input_fsms[r.name] = _PermitGpioFsm(1 if r.deb_init else 0)
 
     fsms = {
-        _internal_sig(r.name): _OutputFsm(r) for r in outputs
+        internal_sig(r.name): _OutputFsm(r) for r in outputs
     }
 
     out_hi: dict[str, list[int]] = {s: [] for s in fsms}
@@ -736,7 +621,7 @@ def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
     out_state: dict[str, list[str]] = {s: [] for s in fsms}
 
     out_val_prev: dict[str, int] = {
-        _internal_sig(r.name): 1 if r.init else 0 for r in outputs
+        internal_sig(r.name): 1 if r.init else 0 for r in outputs
     }
 
     _instant_hi_modes = ("constant_0", "constant_1")
@@ -765,7 +650,7 @@ def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
         output_order = _outputs_topo_order(outputs, name_to_rail, input_specs)
         cur_val: dict[str, int] = dict(out_val_prev)
         for rail in outputs:
-            sig = _internal_sig(rail.name)
+            sig = internal_sig(rail.name)
             cur_val[sig] = fsms[sig].apply_step()
 
         force_t: dict[str, int] = {}
@@ -774,7 +659,7 @@ def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
         for _ in range(len(outputs) + 1):
             changed = False
             for rail in output_order:
-                sig = _internal_sig(rail.name)
+                sig = internal_sig(rail.name)
                 new_hi = _eval_groups(
                     rail.get_hi_groups(), rail, "hi", name_to_rail,
                     raw_t, hi_t, lo_t, cur_val,
@@ -800,7 +685,7 @@ def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
                 break
 
         for rail in output_order:
-            sig = _internal_sig(rail.name)
+            sig = internal_sig(rail.name)
             out_hi[sig].append(hi_t[sig])
             out_lo[sig].append(lo_t[sig])
             v = fsms[sig].commit(hi_t[sig], lo_t[sig], force_t[sig])

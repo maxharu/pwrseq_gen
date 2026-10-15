@@ -12,8 +12,9 @@ import json
 import os
 import re
 
-from config_models import PowerSeqConfig
-from timing_export import (
+from core.config_models import PowerSeqConfig
+from core.timing_models import TimingScenario, norm_hscale
+from timing.timing_export import (
     ConditionEdgePending,
     TimingExportOptions,
     TIMING_AUTHOR,
@@ -26,9 +27,7 @@ from timing_export import (
     _head_title_from_filename,
     validate_timing_doc,
 )
-from timing_sim import (
-    TimingScenario,
-    _norm_hscale,
+from timing.timing_sim import (
     default_scenario_for_config,
     simulate,
 )
@@ -144,7 +143,7 @@ def generate_schemdraw_doc(
         "head": {
             "text": (
                 f"{head_title} ({steps} steps, hscale="
-                f"{_norm_hscale(scenario.hscale)}, i*=in o*=out{lane_note}{edge_note})\n"
+                f"{norm_hscale(scenario.hscale)}, i*=in o*=out{lane_note}{edge_note})\n"
                 f"Author: {TIMING_AUTHOR}"
             ),
             "tick": 0,
@@ -159,7 +158,7 @@ def generate_schemdraw_doc(
         "signal": signals,
         "config": {
             "skin": "narrow",
-            "hscale": _norm_hscale(scenario.hscale),
+            "hscale": norm_hscale(scenario.hscale),
         },
     }
     if edges:

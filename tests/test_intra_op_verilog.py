@@ -4,8 +4,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from config_models import PowerRail, PowerSeqConfig
-from verilog_generator import generate_verilog
+from core.config_models import PowerRail, PowerSeqConfig
+from codegen.verilog_generator import generate_verilog
 
 
 def test_lo_xor_group_in_verilog():
