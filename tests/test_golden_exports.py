@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 from codegen.c_generator import generate_c
 from codegen.verilog_generator import generate_verilog
 from core.config_models import PowerSeqConfig
-from drawio.drawio_export import generate_drawio
+from drawio import generate_drawio
 from timing.schemdraw_export import generate_schemdraw_doc
 from timing.timing_scenario_io import resolve_scenario
 from timing.timing_sim import simulate

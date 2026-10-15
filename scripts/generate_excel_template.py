@@ -30,8 +30,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(ROOT, "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
-from excel.excel_import import build_signal_dropdown_entries
-from excel.excel_template_layout import apply_nodes_sheet_header_rows, node_sheet_headers
+from excel import (
+    apply_nodes_sheet_header_rows,
+    build_signal_dropdown_entries,
+    node_sheet_headers,
+)
 
 OUT_PATH = os.path.join(ROOT, "templates", "powerseq_nodes_template.xlsm")
 TMP_XLSX = os.path.join(ROOT, "templates", "_powerseq_nodes_template_build.xlsx")
@@ -617,11 +620,7 @@ def _extract_vba_bin(xlsm_path: str, bin_path: str) -> None:
 
 
 def _embed_vba_macros(xlsx_path: str, xlsm_path: str) -> None:
-    from excel.vba.embed_excel_vba import (
-        add_sync_button_inplace,
-        embed_vba,
-        refresh_vba_inplace,
-    )
+    from excel.vba import add_sync_button_inplace, embed_vba, refresh_vba_inplace
 
     try:
         embed_vba(xlsx_path, xlsm_path)
@@ -631,7 +630,7 @@ def _embed_vba_macros(xlsx_path: str, xlsm_path: str) -> None:
         print(f"COM embed failed ({exc}); trying zip inject...")
 
     if os.path.isfile(VBA_BIN):
-        from excel.vba.inject_vba_zip import inject_vba_zip
+        from excel.vba import inject_vba_zip
 
         inject_vba_zip(xlsx_path, xlsm_path, VBA_BIN)
         try:

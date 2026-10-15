@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from core.config_models import PowerSeqConfig
-from drawio.drawio_export import generate_drawio
+from drawio import generate_drawio
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEMO_JSON = os.path.join(PROJECT_ROOT, "templates", "demo_json.json")

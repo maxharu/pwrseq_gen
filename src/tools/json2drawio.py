@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.config_models import PowerSeqConfig
-from drawio.drawio_export import generate_drawio
+from drawio import generate_drawio
 
 
 def convert(json_path: str, xml_path: str) -> None:

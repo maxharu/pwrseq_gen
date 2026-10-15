@@ -39,5 +39,6 @@ select = ["F", "E9", "I", "RUF100"]
 [tool.ruff.lint.per-file-ignores]
 # GUI 用 `from gui.theme import *` 匯入配色常數，星號 import 無法靜態追蹤
 "src/gui/*.py" = ["F403", "F405"]
-# facade 模組的用途就是 re-export
-"src/drawio/drawio_export.py" = ["F401"]
+# __init__.py 宣告對外介面，re-export 就是它的用途
+"src/*/__init__.py" = ["F401"]
+"src/*/*/__init__.py" = ["F401"]

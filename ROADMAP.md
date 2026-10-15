@@ -102,8 +102,25 @@
   `except Exception as e: self.after(0, lambda: ...str(e))`，但 Python 在 except 區塊
   結束時會隱含 `del e`，lambda 延後執行時 `str(e)` 丟 NameError，使用者什麼都看不到。
   由 ruff `F821` 發現，現在也由 CI 的 `F` 規則守住。
+- **套件邊界已成為真的 API** — `codegen` / `drawio` / `excel` / `excel.vba` / `timing`
+  各自在 `__init__.py` 宣告 `__all__`，`gui` / `tools` / `scripts` 與跨套件呼叫全部改走
+  這層介面。`core` 刻意維持深層 import：它是共用詞彙表（`PowerRail` / `safe_name` /
+  `DEP_HIGH` …），性質接近 stdlib，收成單一扁平命名空間反而讓
+  `from core.config_models import PowerRail` 這種自我說明的寫法更難讀。
 
-### 兩條已經是可執行護欄的約束
+  `drawio_export.py` 已刪除。它 51 行裡有 35 行是從 `drawio_geometry` re-export 34 個
+  符號，實際被引用的只有 8 個、且全部只有 `tests/test_drawio_cell.py` 在用（本來就能直接
+  從 `drawio_geometry` 拿）；產品程式從它只取 `generate_drawio` 一個名字。`generate_drawio`
+  改由 `drawio/__init__.py` 直接提供。
+
+  邊界由 `tests/test_package_api.py` 強制（AST 掃 `src/` 與 `scripts/`，跨套件 import 必須
+  指向套件而非模組），六個注入違規全紅。`tests/` 明文豁免：白箱測試戳進實作細節是刻意的。
+
+  `excel` 與 `timing` 互相依賴，兩邊的 import 本來就寫在函式內以避開循環，改走套件介面後
+  仍維持延後並補上註解說明原因。`excel/vba/__init__.py` 會 eager import COM 那支，但
+  `win32com` 是在各函式內才 import，所以沒有 pywin32 的機器上仍可正常載入。
+
+### 三條已經是可執行護欄的約束
 
 比文件可靠，改壞了會紅：
 
@@ -111,23 +128,13 @@
 |---|---|
 | `templates/` 含未追蹤的客戶檔案，打包只能逐一指名，**不可整包帶入** | `tests/test_packaging.py::test_templates_dir_is_never_bundled_wholesale` |
 | 模擬器不模擬 Force（`_SimCond.cond` 對 `kind="force"` 回定值 0） | `tests/test_condition_consistency.py` 的 `KNOWN_SIM_DIVERGENCE` |
+| 跨套件呼叫只能走 `__init__.py` 宣告的介面 | `tests/test_package_api.py` |
 
 ---
 
 ## 待辦
 
-### 1. 把套件邊界做成真的 API
-
-除了 `gui/`（已宣告 `run_gui`），其餘七個 `__init__.py` 都只有一行 docstring，
-所有呼叫端都 import 深層路徑（`from drawio.drawio_cell_export import ...`）。
-測試跨進內部的程度也不低：8 個測試檔 import 了 21 個私有符號。
-這代表「套件內部」實際上沒有內部可言，任何內部重構都會打破測試。
-
-讓 `gui/` 與 `tools/` 只依賴 `from drawio import generate_drawio`。
-私有符號的白箱測試可以留，但要清楚那是白箱測試，不是契約。
-同時清掉 `drawio_export.py` 對 `drawio_geometry` 的 34 個符號 re-export facade（大多無人使用）。
-
-### 2. 模擬器補上 Force
+### 1. 模擬器補上 Force
 
 `_SimCond.cond` 對 `kind="force"` 目前回定值 0。模擬器內部其實算得出 force 條件（會傳進 `fsm.commit`），
 只是沒發布成 `out_force` 讓下游依賴讀取，所以是實作缺口而非設計決定——
@@ -135,7 +142,7 @@
 
 - **verify**：移除 `KNOWN_SIM_DIVERGENCE` 後 `test_condition_consistency.py` 仍綠
 
-### 3. （最後）GUI 抽純函式
+### 2. （最後）GUI 抽純函式
 
 `app.py` + `widgets.py` + `panels.py` 約 4400 行，headless 下測試幾乎全 skip——
 等於這 4400 行沒有自動化保護。

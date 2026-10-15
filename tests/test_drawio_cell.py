@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from core.cond_ir import resolve_item
 from core.config_models import PowerRail, PowerSeqConfig
+from drawio import generate_drawio
 from drawio.drawio_cell_export import (
     AND_TREE_THRESHOLD,
     EXPORT_WIRE_MIN,
@@ -18,7 +19,7 @@ from drawio.drawio_cell_export import (
     _merge_lane_label_w,
     _Term,
 )
-from drawio.drawio_export import (
+from drawio.drawio_geometry import (
     _PSEQCELL_STYLE_H_DEB,
     _PSEQCELL_STYLE_INNER,
     AND_GATE_H,
@@ -27,7 +28,6 @@ from drawio.drawio_export import (
     GRID,
     STROKE_HI,
     STROKE_LO,
-    generate_drawio,
 )
 
 DEMO_JSON = os.path.join(

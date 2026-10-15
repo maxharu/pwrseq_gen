@@ -49,7 +49,7 @@ Stroke colors (`drawio_geometry.py`):
 
 ## Cross-block / feedback (not implemented)
 
-The following existed in the **removed** layer-column exporter (`drawio_export.py` legacy). **Do not document as active:**
+The following existed in the **removed** layer-column exporter (the legacy `drawio_export.py`, which no longer exists). **Do not document as active:**
 
 - `feedback_auto_edge_ids`, `_apply_feedback_routing`
 - `FB_Q_RIGHT`, `FB_NQ_UP`, `_first_clear_up_y`

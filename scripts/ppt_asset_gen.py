@@ -23,12 +23,10 @@ DOC = ROOT / "doc"
 
 sys.path.insert(0, str(SRC))
 
-from codegen.c_generator import generate_c
-from codegen.verilog_generator import generate_verilog
+from codegen import generate_c, generate_verilog
 from core.config_models import PowerSeqConfig
-from drawio.drawio_export import generate_drawio
-from timing.schemdraw_export import export_schemdraw
-from timing.timing_sim import default_scenario_for_config
+from drawio import generate_drawio
+from timing import default_scenario_for_config, export_schemdraw
 
 # Theme (matches deck)
 BG = "#0F172A"

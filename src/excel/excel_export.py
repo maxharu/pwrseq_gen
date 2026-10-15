@@ -469,7 +469,8 @@ def _write_lists(wb, config: PowerSeqConfig, cond_signals: set[str]) -> None:
 def _resolve_scenario(config: PowerSeqConfig) -> TimingScenario:
     embedded = config.timing_scenario or {}
     if embedded.get("inputs"):
-        from timing.timing_scenario_io import merge_scenario_for_config
+        # 延後 import：excel 與 timing 互相依賴，模組層級 import 會造成循環
+        from timing import merge_scenario_for_config
 
         return merge_scenario_for_config(TimingScenario.from_dict(embedded), config)
     return build_timing_scenario(config)

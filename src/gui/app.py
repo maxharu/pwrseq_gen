@@ -9,8 +9,7 @@ from typing import Optional
 import customtkinter as ctk
 from PIL import Image
 
-from codegen.c_generator import generate_c
-from codegen.verilog_generator import generate_verilog
+from codegen import generate_c, generate_verilog
 from core.app_expiry import ensure_not_expired
 from core.applog import get_logger
 from core.config_models import (
@@ -23,22 +22,20 @@ from core.config_models import (
 from core.snapshot_history import SnapshotHistory
 from core.timing_models import InputWaveSpec, TimingScenario
 from core.validator import validate
-from drawio.drawio_export import generate_drawio
+from drawio import generate_drawio
 from gui.dialogs import *
 from gui.panels import *
 from gui.settings import GuiSettings, RecentFiles
 from gui.theme import *
 from gui.widgets import *
-from timing.schemdraw_export import (
-    export_schemdraw_from_options,
-    generate_schemdraw_doc,
-    render_schemdraw_png_bytes,
-)
-from timing.timing_export import (
+from timing import (
     TIMING_EDGE_BOTH,
     TIMING_EDGE_HI_ONLY,
     TIMING_EDGE_LO_ONLY,
     TimingExportOptions,
+    export_schemdraw_from_options,
+    generate_schemdraw_doc,
+    render_schemdraw_png_bytes,
 )
 
 logger = get_logger(__name__)
@@ -48,7 +45,7 @@ def _write_config_file(cfg: PowerSeqConfig, path: str) -> None:
     """Write config to disk by extension. Pure I/O; safe to call off-main-thread."""
     ext = os.path.splitext(path)[1].lower()
     if ext in (".xlsx", ".xlsm", ".xls"):
-        from excel.excel_export import export_powerseq_to_excel
+        from excel import export_powerseq_to_excel
 
         export_powerseq_to_excel(cfg, path)
     else:
@@ -1233,7 +1230,7 @@ class PowerSeqGUI(ctk.CTk):
         try:
             ext = os.path.splitext(path)[1].lower()
             if ext in (".xlsx", ".xlsm", ".xls"):
-                from excel.excel_import import load_powerseq_from_excel
+                from excel import load_powerseq_from_excel
 
                 self.config_obj = load_powerseq_from_excel(path)
             else:

@@ -2,7 +2,7 @@
 
 ## Cell-centric export (`drawio_cell_export.py`) — default
 
-`generate_drawio()` in `drawio_export.py` delegates here. Shared geometry from `drawio_geometry.py`; options from `drawio_export_options.py`.
+`generate_drawio()` lives here and is re-exported by `drawio/__init__.py`. Shared geometry from `drawio_geometry.py`; options from `drawio_export_options.py`.
 
 ### Key constants (cell export)
 
@@ -122,7 +122,7 @@ col_x[c+1] = col_x[c] + col_widths[c] + COL_GAP
 |------|------|
 | `src/drawio/drawio_cell_export.py` | Cell-centric placement + emit |
 | `src/drawio/drawio_geometry.py` | `GRID`, PSEQCELL/gate constants, intra-op styles |
-| `src/drawio/drawio_export.py` | `generate_drawio` wrapper + re-exports |
+| `src/drawio/__init__.py` | Public API: `generate_drawio`, `DrawioExportOptions` |
 | `src/drawio/drawio_export_options.py` | `DrawioExportOptions` |
 | `tests/test_drawio_cell.py` | Cell export tests |
 | `tests/test_integration.py` | `test_cell_centric_drawio_from_demo` |

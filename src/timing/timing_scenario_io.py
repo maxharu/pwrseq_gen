@@ -49,7 +49,8 @@ def scenario_from_dict(data: dict) -> TimingScenario:
 def load_scenario_file(path: str) -> TimingScenario:
     ext = os.path.splitext(path)[1].lower()
     if ext in (".xlsx", ".xlsm", ".xls"):
-        from excel.excel_import import load_timing_scenario_from_excel
+        # 延後 import：timing 與 excel 互相依賴，模組層級 import 會造成循環
+        from excel import load_timing_scenario_from_excel
 
         return load_timing_scenario_from_excel(path)
     with open(path, encoding="utf-8") as f:

@@ -15,11 +15,12 @@ Placement is **deterministic**; there is no separate auto-layout engine.
 
 | Entry | Source |
 |-------|--------|
-| `generate_drawio()` | `src/drawio/drawio_cell_export.py` (thin wrapper in `src/drawio/drawio_export.py`) |
+| `generate_drawio()` | `src/drawio/drawio_cell_export.py` |
 | Options | `src/drawio/drawio_export_options.py` (`grid_columns`, `margin`) |
 | Shared geometry | `src/drawio/drawio_geometry.py` (`GRID`, PSEQCELL, gate styles, intra-op) |
 
-`drawio_export.generate_drawio()` delegates to `drawio_cell_export.generate_drawio`.
+Callers use the package API: `from drawio import generate_drawio, DrawioExportOptions`.
+The module paths above are implementation detail — `tests/test_package_api.py` enforces this.
 
 **Wire rules:** all edges are Draw.io **orthogonal auto** — no frozen waypoints. See [drawio-routing](../drawio-routing/SKILL.md).
 

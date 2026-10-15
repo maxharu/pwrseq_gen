@@ -6,7 +6,7 @@ import customtkinter as ctk
 
 from core.config_models import PowerRail
 from gui.theme import *
-from timing.timing_export import (
+from timing import (
     TIMING_EDGE_HI_ONLY,
     TIMING_EDGE_LO_ONLY,
     TimingExportOptions,

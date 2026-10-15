@@ -60,6 +60,16 @@ Lint 規則定義在 `pyproject.toml` 的 `[tool.ruff.lint]`：只納管 `F`（�
 
 已盤點的技術債與改善順序見 [`ROADMAP.md`](ROADMAP.md)。
 
+## 套件邊界
+
+`codegen` / `drawio` / `excel` / `excel.vba` / `timing` 各自在 `__init__.py` 宣告 `__all__`，
+跨套件呼叫只走這層介面（`from drawio import generate_drawio`），套件內的模組是實作細節。
+`core` 是例外——它是共用詞彙表（`PowerRail` / `safe_name` / `DEP_HIGH` …），
+維持 `from core.config_models import PowerRail` 這種自我說明的深層 import。
+
+邊界由 `tests/test_package_api.py` 強制，不是靠慣例。測試本身不受規範：
+白箱測試戳進實作細節是刻意的，那是測試不是契約。
+
 ## 專案結構
 
 ```
@@ -82,7 +92,7 @@ src/
     timing_scenario_io.py    scenario JSON I/O / merge
     schemdraw_export.py      Schemdraw 時序圖
   codegen/                 verilog_generator.py / c_generator.py
-  drawio/                  Draw.io 匯出（export / cell_export / geometry / options）
+  drawio/                  Draw.io 匯出（cell_export / geometry / options）
   excel/                   Excel 匯入／匯出與版面
     vba/                     VBA 嵌入（COM 需 Excel／zip 注入不需）
   gui/                     CustomTkinter GUI（theme/widgets/panels/dialogs/settings/app）

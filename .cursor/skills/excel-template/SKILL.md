@@ -164,7 +164,7 @@ set PYTHONPATH=src && python -m excel.vba.embed_excel_vba templates/_powerseq_no
 ### Refresh VBA on user's existing xlsm (keep their data)
 
 ```bash
-set PYTHONPATH=src && python -c "from excel.vba.embed_excel_vba import refresh_vba_inplace; refresh_vba_inplace('templates/powerseq_nodes_template.xlsm')"
+set PYTHONPATH=src && python -c "from excel.vba import refresh_vba_inplace; refresh_vba_inplace('templates/powerseq_nodes_template.xlsm')"
 ```
 
 ## Verification checklist
