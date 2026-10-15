@@ -6,12 +6,26 @@ from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = SRC_DIR.parent
-TEMPLATES_DIR = PROJECT_ROOT / "templates"
-SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+
+
+def _bundle_dir() -> Path | None:
+    """PyInstaller 的解壓目錄；未打包時回 None。"""
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", SRC_DIR))
+    return None
+
+
+def _data_dir(name: str) -> Path:
+    """打包後資源平鋪在解壓目錄下，開發樹則在專案根目錄。"""
+    bundle = _bundle_dir()
+    return (bundle / name) if bundle else (PROJECT_ROOT / name)
+
+
+# PyInstaller 在載入任何應用模組前就設好 sys.frozen，所以這裡 import 期取值是正確的
+TEMPLATES_DIR = _data_dir("templates")
+SCRIPTS_DIR = _data_dir("scripts")
 
 
 def reference_dir() -> Path:
-    """PyInstaller onefile 時資源在 sys._MEIPASS/reference。"""
-    if getattr(sys, "frozen", False):
-        return Path(sys._MEIPASS) / "reference"
-    return SRC_DIR / "reference"
+    bundle = _bundle_dir()
+    return (bundle / "reference") if bundle else (SRC_DIR / "reference")
