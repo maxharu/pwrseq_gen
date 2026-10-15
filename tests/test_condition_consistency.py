@@ -25,12 +25,12 @@ import os
 
 import pytest
 
-from core.cond_ir import CondVisitor, resolve_dep
+from core.cond_ir import CondVisitor, resolve_dep, resolve_item
 from core.config_models import PowerRail, PowerSeqConfig
 from core.constants import DEP_HIGH, DEP_LOW
 from core.naming import internal_sig, safe_name
 from codegen.c_generator import _c_dep_expr
-from codegen.verilog_generator import _dep_expr
+from codegen.verilog_generator import _VerilogCond
 from drawio.drawio_cell_export import _resolve_term
 from timing.timing_sim import _eval_dep
 
@@ -140,7 +140,8 @@ def _disagreements(backend, deps, uses, name_to_rail):
             leaf = _spec_leaf(dep, use, name_to_rail)
             for inv in (False, True):
                 if backend == "verilog":
-                    ok = _dep_expr(dep, name_to_rail, inv, use) == _want_verilog(
+                    item = resolve_item(dep, inv, use, name_to_rail)
+                    ok = item.accept(_VerilogCond(name_to_rail)) == _want_verilog(
                         leaf, name_to_rail, inv
                     )
                 elif backend == "c":

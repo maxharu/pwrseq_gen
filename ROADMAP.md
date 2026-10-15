@@ -12,20 +12,20 @@
 `PowerRail` 的 `depends_on_{hi,lo,force}_groups` 加上 `inv` / `use` / `group_inv` / `intra_op`
 是整個專案的核心資料結構。目前有五個模組各自從頭走訪它一遍：
 
-| 模組 | 把群組翻譯成 |
-|---|---|
-| `timing/timing_sim.py` | 0/1 邏輯值（`_eval_dep` / `_eval_groups`） |
-| `codegen/verilog_generator.py` | Verilog 運算式（`_dep_expr`） |
-| `codegen/c_generator.py` | C 運算式（`_c_dep_expr`） |
-| `drawio/drawio_cell_export.py` | AND/OR 閘圖（`_resolve_term`） |
-| `timing/timing_export.py` | 時序箭頭的葉節點 |
+| 模組 | 把群組翻譯成 | 已接 IR |
+|---|---|---|
+| `codegen/verilog_generator.py` | Verilog 運算式 | ✅ `_VerilogCond` |
+| `timing/timing_sim.py` | 0/1 邏輯值（`_eval_dep` / `_eval_groups`） | |
+| `codegen/c_generator.py` | C 運算式（`_c_dep_expr`） | |
+| `drawio/drawio_cell_export.py` | AND/OR 閘圖（`_resolve_term`） | |
+| `timing/timing_export.py` | 時序箭頭的葉節點 | |
 
 一致性目前靠文件維持（`.cursor/rules/timing-sim-behavior.mdc` 開頭就寫著「修改 `timing_sim.py`
 時必須與 `c_generator.py` / `verilog_generator.py` 對齊」）。**用文件維持五份實作的一致性，
 是架構在求救**：每新增一個語意，就要記得同步五個地方，漏一個就產生「只有某種匯出格式錯」的 bug。
 已修掉的兩個 Draw.io bug 都是這一類。
 
-`core/cond_ir.py` 已經是那份唯一實作，但**五個下游還沒接上**（待辦第 1 項），
+`core/cond_ir.py` 已經是那份唯一實作，Verilog 已接上，**其餘四個下游還沒**（待辦第 1 項）。
 在那之前一致性仍只由 `tests/test_condition_consistency.py` 事後把關。
 
 ---
@@ -56,6 +56,17 @@
   沒跟上的下游在**建構當下**就 `TypeError`。`test_condition_consistency.py` 的 oracle 已改成
   透過 visitor 讀 IR，IR 本身則由 `tests/test_cond_ir.py` 對照手寫期望值把關
   （否則 IR 寫錯會讓所有後端「一致地錯」）。
+- **group 組裝的回歸保護** `tests/test_cond_render.py` — `tests/golden/` 只鎖
+  `templates/demo_json.json`，而那份 config 全是單一 group、`intra_op` 預設 and、
+  沒有 `group_inv`，所以 group 組裝那層原本毫無保護（注入「group 間改成 &」與
+  「`intra_op` 一律 and」兩個 bug，黃金測試照樣綠）。現用一份覆蓋多 group /
+  xor / or / `group_inv` / 空 group / 舊格式扁平欄位的合成 config 補上，
+  期望值取自接 IR 之前的輸出。**其餘後端接 IR 時要在這裡各加一組。**
+- **`verilog_generator` 已接 IR** — `_VerilogCond` 取代 `_dep_expr` 與三段幾乎一樣的
+  assign 迴圈（-92 +46 行）。驗證：合成 config 加三份真實 config 共 368 條 assign
+  與改動前逐字元相同；另注入六個 bug（`cond` 一律回 `_hi`、`group` 忽略 inv、
+  group 間改成 `&`、output 準位改用埠名、拿掉 No-condition 註解、`intra_op` 一律 and）
+  確認全部轉紅。
 
 ### 兩條已經是可執行護欄的約束
 
@@ -70,16 +81,17 @@
 
 ## 待辦
 
-### 1. 五個下游改成只負責渲染 `CondTree`
+### 1. 剩下四個下游改成只負責渲染 `CondTree`
 
-`timing_sim`、`verilog_generator`、`c_generator`、`drawio_cell_export`、`timing_export`，
-各寫一個 `CondVisitor` 取代自己那套走訪。
+`c_generator`、`timing_sim`、`drawio_cell_export`、`timing_export`，各寫一個
+`CondVisitor` 取代自己那套走訪（`verilog_generator` 已完成，照它的做法）。
 
 注意 `timing_export.format_rail_condition` 目前**完全忽略** `intra_op` 與 `group_inv`
 （一律 `&`、不套整組反相），`_dep_label` 也沒檢查依賴是不是 output——同一類 bug，
 只是出現在人讀的標籤上。改用 IR 會順帶修掉，所以預期這支的輸出會變，黃金檔要重出。
 
-- **一次只改一個**，verify：每改完一個，黃金輸出仍 byte 不變（`timing_export` 除外，見上）
+- **一次只改一個**，verify：每改完一個，黃金輸出仍 byte 不變（`timing_export` 除外，見上），
+  並在 `tests/test_cond_render.py` 加一組該後端的 group 組裝期望值
 
 ### 2. 四套 pulse 名稱解析器收進 `core`
 

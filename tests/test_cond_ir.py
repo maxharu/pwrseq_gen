@@ -16,6 +16,7 @@ from core.cond_ir import (
     Not,
     resolve_condition,
     resolve_dep,
+    resolve_item,
 )
 from core.config_models import PowerRail
 from core.constants import DEP_HIGH, DEP_LOW
@@ -54,6 +55,19 @@ def test_output_with_use_is_a_condition_signal(use):
     assert resolve_dep("OUT", use, RAILS) == Cond("OUT", use)
 
 
+# ---- 單項 inv ----------------------------------------------------------
+
+def test_inv_wraps_a_signal_in_not():
+    assert resolve_item("IN", True, "self", RAILS) == Not(Level("IN"))
+    assert resolve_item("OUT", True, "hi", RAILS) == Not(Cond("OUT", "hi"))
+
+
+def test_inv_folds_into_a_constant():
+    """四個後端都不輸出 `~1'b1` 這種東西，所以 IR 直接摺掉。"""
+    assert resolve_item(DEP_HIGH, True, "self", RAILS) == Const(0)
+    assert resolve_item(DEP_LOW, True, "self", RAILS) == Const(1)
+
+
 # ---- 樹的組裝 ----------------------------------------------------------
 
 @pytest.mark.parametrize("kind,value", [("hi", 1), ("lo", 0), ("force", 0)])
@@ -80,7 +94,8 @@ def test_groups_are_or_joined_and_items_use_intra_op():
     ))
 
 
-def test_item_inv_and_group_inv_are_separate_nots():
+def test_item_inv_is_a_not_but_group_inv_is_a_group_flag():
+    """兩者在 Verilog / C 的括號寫法不同，所以不共用 Not。"""
     rail = PowerRail(
         name="R",
         depends_on_lo_groups=[["IN", "OUT"]],
@@ -88,7 +103,7 @@ def test_item_inv_and_group_inv_are_separate_nots():
         depends_on_lo_group_inv=[True],
     )
     assert resolve_condition(rail, "lo", RAILS) == AnyGroup((
-        Not(Group("and", (Not(Level("IN")), Level("OUT")))),
+        Group("and", (Not(Level("IN")), Level("OUT")), True),
     ))
 
 
@@ -125,8 +140,9 @@ class _Renderer(CondVisitor):
     def invert(self, operand):
         return f"!{operand}"
 
-    def group(self, op, items):
-        return "(" + f" {op} ".join(items) + ")"
+    def group(self, op, items, inv):
+        expr = "(" + f" {op} ".join(items) + ")"
+        return f"!{expr}" if inv else expr
 
     def any_group(self, groups):
         return " | ".join(groups)
@@ -160,7 +176,7 @@ def test_visitor_missing_a_node_type_cannot_be_instantiated():
         def invert(self, operand):
             return ""
 
-        def group(self, op, items):
+        def group(self, op, items, inv):
             return ""
 
         # any_group 故意不實作

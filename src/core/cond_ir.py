@@ -6,7 +6,9 @@ Verilog / C / Draw.io / 模擬器 / 時序圖各自重刻過同一套依賴語�
 下游只負責渲染。
 
 樹的形狀刻意對齊 F-DEP-08 的兩層結構（group 內 intra_op、group 間 OR），
-而不是任意的布林樹，所以渲染端不會把兩層搞混。
+而不是任意的布林樹，所以渲染端不會把兩層搞混。同理，整組反相是 `Group.inv` 旗標
+而不是外包一層 `Not`——Verilog 把單項 inv 寫成 `(~x)`、整組寫成 `!(a & b)`，
+共用同一個 hook 只會逼渲染端去猜自己正在處理哪一層。
 """
 from __future__ import annotations
 
@@ -43,11 +45,12 @@ class CondVisitor(ABC):
 
     @abstractmethod
     def invert(self, operand: Any) -> Any:
-        """單項 inv 或整組 group_inv。"""
+        """單項 inv。整組反相走 `group(..., inv=True)`，兩者在 Verilog / C 的
+        括號寫法不同，刻意不共用同一個 hook。"""
 
     @abstractmethod
-    def group(self, op: str, items: list[Any]) -> Any:
-        """單一 group 內以 and / or / xor 結合。"""
+    def group(self, op: str, items: list[Any], inv: bool) -> Any:
+        """單一 group 內以 and / or / xor 結合，inv 為整組反相（group_inv）。"""
 
     @abstractmethod
     def any_group(self, groups: list[Any]) -> Any:
@@ -97,9 +100,10 @@ class Not(CondTree):
 class Group(CondTree):
     op: str
     items: tuple[CondTree, ...]
+    inv: bool = False
 
     def accept(self, visitor: CondVisitor) -> Any:
-        return visitor.group(self.op, [i.accept(visitor) for i in self.items])
+        return visitor.group(self.op, [i.accept(visitor) for i in self.items], self.inv)
 
 
 @dataclass(frozen=True)
@@ -127,19 +131,23 @@ def resolve_condition(rail, kind: str, name_to_rail: dict) -> CondTree:
     nodes: list[CondTree] = []
     for gi, group in enumerate(groups):
         items = tuple(
-            _item(dep, get_inv(gi, ii, dep), get_use(gi, ii, dep), name_to_rail)
+            resolve_item(dep, get_inv(gi, ii, dep), get_use(gi, ii, dep), name_to_rail)
             for ii, dep in enumerate(group)
         )
-        node: CondTree = Group(get_intra_op(gi), items)
-        if get_group_inv(gi):
-            node = Not(node)
-        nodes.append(node)
+        nodes.append(Group(get_intra_op(gi), items, get_group_inv(gi)))
     return AnyGroup(tuple(nodes))
 
 
-def _item(dep: str, inv: bool, use: str, name_to_rail: dict) -> CondTree:
+def resolve_item(dep: str, inv: bool, use: str, name_to_rail: dict) -> CondTree:
+    """單一依賴項（含 inv）。"""
     leaf = resolve_dep(dep, use, name_to_rail)
-    return Not(leaf) if inv else leaf
+    if not inv:
+        return leaf
+    # 反相常數在這裡就摺掉：四個下游本來各自做這件事（Verilog `~1'b1` 不會出現），
+    # 留在下游就是四份重複。
+    if isinstance(leaf, Const):
+        return Const(1 - leaf.value)
+    return Not(leaf)
 
 
 def resolve_dep(dep: str, use: str, name_to_rail: dict) -> CondTree:

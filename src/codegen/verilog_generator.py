@@ -7,6 +7,7 @@
 """
 import os
 from core.config_models import PowerSeqConfig, PowerRail, DEFAULT_PULSE, pulse_verilog_name
+from core.cond_ir import Const, CondVisitor, resolve_condition
 from core.constants import DEP_HIGH, DEP_LOW
 from core.naming import internal_sig, safe_name
 from core.group_logic import verilog_intra_expr
@@ -106,42 +107,46 @@ def _get_input_signal(dep_name: str, name_to_rail: dict[str, PowerRail]) -> str:
     return _port_name(dep_name, "i")
 
 
-def _dep_expr(
-    dep_name: str,
-    name_to_rail: dict[str, PowerRail],
-    inverted: bool = False,
-    use_mode: str = "self",
-) -> str:
+# 完全沒有該 kind 的 group 時，assign 行尾註明預設值的由來
+_NO_CONDITION_NOTES = {
+    "hi": "// No Hi condition",
+    "lo": "// No Lo condition (F-DEP-06)",
+    "force": "// No Force condition",
+}
+
+
+class _VerilogCond(CondVisitor):
+    """把 CondTree 渲染成 Verilog 運算式。
+
+    - 常數：1'b1 / 1'b0（反相已由 cond_ir 摺掉）
+    - 條件訊號：xxx_hi / xxx_lo / xxx_force（F-DEP-07）
+    - 準位：output 為內部線 xxx，input 為 iXXX 或 xxx_deb（有 Debounce 時）
     """
-    取得依賴項的條件表示式
-    - __HIGH__: 1'b1
-    - __LOW__: 1'b0
-    - output: wOut (輸出) / wHi (iHi) / wLo (iLo) / wForce (iForce) 依 use_mode
-    - input: iXXX 或 xxx_deb（有 Debounce 時）
-    - use_mode: "self"=節點本身, "hi"=該節點iHi, "lo"=該節點iLo, "force"=該節點iForce (F-DEP-07)
-    - inverted: True 時回傳 ~expr
-    """
-    if dep_name == DEP_HIGH:
-        return "1'b0" if inverted else "1'b1"
-    if dep_name == DEP_LOW:
-        return "1'b1" if inverted else "1'b0"
-    dep = name_to_rail.get(dep_name)
-    if not dep:
-        base = _port_name(dep_name, "i")  # input
-    else:
-        if dep.seq_type == "output":
-            s = internal_sig(dep_name)
-            if use_mode == "hi" and dep.has_pseqcell:
-                base = f"{s}_hi"
-            elif use_mode == "lo" and dep.has_pseqcell:
-                base = f"{s}_lo"
-            elif use_mode == "force" and dep.has_pseqcell:
-                base = f"{s}_force"
-            else:
-                base = s
-        else:  # input
-            base = _get_input_signal(dep_name, name_to_rail)
-    return f"(~{base})" if inverted else base
+
+    def __init__(self, name_to_rail: dict[str, PowerRail]):
+        self.name_to_rail = name_to_rail
+
+    def const(self, value: int) -> str:
+        return "1'b1" if value else "1'b0"
+
+    def level(self, name: str) -> str:
+        dep = self.name_to_rail.get(name)
+        if dep is not None and dep.seq_type == "output":
+            return internal_sig(name)
+        return _get_input_signal(name, self.name_to_rail)
+
+    def cond(self, name: str, kind: str) -> str:
+        return f"{internal_sig(name)}_{kind}"
+
+    def invert(self, operand: str) -> str:
+        return f"(~{operand})"
+
+    def group(self, op: str, items: list[str], inv: bool) -> str:
+        expr = verilog_intra_expr(items, op)
+        return f"!{expr}" if inv else expr
+
+    def any_group(self, groups: list[str]) -> str:
+        return " | ".join(groups)
 
 
 def _sep() -> str:
@@ -309,65 +314,14 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
 
     if sequenced:
         # iHi, iLo assignments (F-DEP-08: group 內 &，group 間 |)
+        renderer = _VerilogCond(name_to_rail)
         for r in sequenced:
             s = internal_sig(r.name)
-            hi_groups = r.get_hi_groups()
-            if hi_groups:
-                group_exprs = []
-                for gi, group in enumerate(hi_groups):
-                    terms = [
-                        _dep_expr(
-                            d, name_to_rail,
-                            r.get_hi_inv(gi, ii, d),
-                            r.get_hi_use(gi, ii, d),
-                        )
-                        for ii, d in enumerate(group)
-                    ]
-                    g_expr = verilog_intra_expr(terms, r.get_hi_intra_op(gi))
-                    if r.get_hi_group_inv(gi):
-                        g_expr = f"!{g_expr}"
-                    group_exprs.append(g_expr)
-                lines.append(f"    assign {s}_hi = {' | '.join(group_exprs)};")
-            else:
-                lines.append(f"    assign {s}_hi = 1'b1;  // No Hi condition")
-            lo_groups = r.get_lo_groups()
-            if lo_groups:
-                group_exprs = []
-                for gi, group in enumerate(lo_groups):
-                    terms = [
-                        _dep_expr(
-                            d, name_to_rail,
-                            r.get_lo_inv(gi, ii, d),
-                            r.get_lo_use(gi, ii, d),
-                        )
-                        for ii, d in enumerate(group)
-                    ]
-                    g_expr = verilog_intra_expr(terms, r.get_lo_intra_op(gi))
-                    if r.get_lo_group_inv(gi):
-                        g_expr = f"!{g_expr}"
-                    group_exprs.append(g_expr)
-                lines.append(f"    assign {s}_lo = {' | '.join(group_exprs)};")
-            else:
-                lines.append(f"    assign {s}_lo = 1'b0;  // No Lo condition (F-DEP-06)")
-            force_groups = r.get_force_groups()
-            if force_groups:
-                group_exprs = []
-                for gi, group in enumerate(force_groups):
-                    terms = [
-                        _dep_expr(
-                            d, name_to_rail,
-                            r.get_force_inv(gi, ii, d),
-                            r.get_force_use(gi, ii, d),
-                        )
-                        for ii, d in enumerate(group)
-                    ]
-                    g_expr = verilog_intra_expr(terms, r.get_force_intra_op(gi))
-                    if r.get_force_group_inv(gi):
-                        g_expr = f"!{g_expr}"
-                    group_exprs.append(g_expr)
-                lines.append(f"    assign {s}_force = {' | '.join(group_exprs)};")
-            else:
-                lines.append(f"    assign {s}_force = 1'b0;  // No Force condition")
+            for kind, no_cond_note in _NO_CONDITION_NOTES.items():
+                tree = resolve_condition(r, kind, name_to_rail)
+                expr = tree.accept(renderer)
+                note = f"  {no_cond_note}" if isinstance(tree, Const) else ""
+                lines.append(f"    assign {s}_{kind} = {expr};{note}")
             lines.append("")
 
         # PSEQCELL instances (per-rail pulse selection)
