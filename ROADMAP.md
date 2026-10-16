@@ -5,21 +5,25 @@
 排序原則：**先建立安全網，再動結構，GUI 放最後**。GUI 是最大也最沒有自動化保護的區塊，
 而前面幾步（條件 IR、pulse 解析收斂）正好會把它需要的純函式準備好。
 
-**本輪盤點的項目已全部完成**，只剩下方「待確認」一項需要決定。
+條件 IR 那一輪的項目已全部完成（見「已完成（安全網）」）。下方「待辦」是之後再次架構審視
+盤點出來的新一輪。
 
 ---
 
-## 核心問題：同一套條件語意有五份獨立實作
+## 核心問題（大部分已解決）：同一套條件語意曾有五份獨立實作
+
+保留這一段是為了說明 `core/cond_ir.py` 為什麼存在。拿掉之後，下一個讀的人會看到一層
+沒人解釋得清楚的 IR，然後很合理地想把它拆掉。
 
 `PowerRail` 的 `depends_on_{hi,lo,force}_groups` 加上 `inv` / `use` / `group_inv` / `intra_op`
-是整個專案的核心資料結構。目前有五個模組各自從頭走訪它一遍：
+是整個專案的核心資料結構。曾經有五個模組各自從頭走訪它一遍：
 
 | 模組 | 把群組翻譯成 | 已接 IR |
 |---|---|---|
 | `codegen/verilog_generator.py` | Verilog 運算式 | ✅ `_VerilogCond` |
 | `codegen/c_generator.py` | C 運算式 | ✅ `_CCond` |
 | `timing/timing_sim.py` | 0/1 邏輯值 | ✅ `_SimCond` |
-| `drawio/drawio_cell_export.py` | AND/OR 閘圖 | ✅ `_DrawioCond` / `_CondSignalKeys` |
+| `drawio/drawio_cell_export.py` | AND/OR 閘圖 | ✅ `_DrawioCond` / `_CondSignalKeys`（葉節點 + 閘拓樸） |
 | `timing/timing_export.py` | 時序箭頭的葉節點 | ✅ `_EdgeItems` |
 
 一致性原本靠文件維持（`.cursor/rules/timing-sim-behavior.mdc` 開頭就寫著「修改 `timing_sim.py`
@@ -27,7 +31,15 @@
 是架構在求救**：每新增一個語意，就要記得同步五個地方，漏一個就產生「只有某種匯出格式錯」的 bug。
 已修掉的兩個 Draw.io bug 都是這一類。
 
-**此問題已解決**：`core/cond_ir.py` 是唯一實作，五個下游各自只寫一個 `CondVisitor` 渲染它。
+**已解決**：`core/cond_ir.py` 是唯一實作，五個下游各自只寫一個 `CondVisitor` 渲染它。
+
+Draw.io 的閘拓樸是最後補上的（待辦第 2 項）。在那之前，`drawio_geometry` 的閘形狀函式
+簽名都是 `(r: PowerRail, hl: str, gi: int)`，直接從原始模型讀 `intra_op` 與 `group_inv`，
+完全沒碰 `CondTree`——同一支匯出器的葉節點走 IR、閘走原始欄位，同一份資料解讀兩次。
+現在改由 `_GroupPlan` 把 `op` / `inv` 跟著樹一起帶下去。
+
+（`drawio_cell_export` 另外還有幾處直接讀 `get_hi_groups()`，但那是 `len(g)` 算區塊高度、
+`_max_group_inputs` 算寬度，純版面計算，不算重複實作。）
 
 ---
 
@@ -63,8 +75,9 @@
   「`intra_op` 一律 and」兩個 bug，黃金測試照樣綠）。現用一份覆蓋多 group /
   xor / or / `group_inv` / 空 group / 舊格式扁平欄位的合成 config 補上，
   期望值取自接 IR 之前的輸出。**其餘後端接 IR 時要在這裡各加一組。**
-- **五個下游全部已接 IR** — `_VerilogCond`、`_CCond`、`_SimCond`、`_DrawioCond`、
-  `_EdgeItems`（外加 `_CondSignalKeys` 收 Draw.io 要拉線的條件訊號）。原本各自的走訪
+- **五個下游的葉節點全部已接 IR** — `_VerilogCond`、`_CCond`、`_SimCond`、`_DrawioCond`、
+  `_EdgeItems`（外加 `_CondSignalKeys` 收 Draw.io 要拉線的條件訊號）。Draw.io 的**閘拓樸
+  不在這一輪範圍內**，是在待辦第 2 項才補上的。原本各自的走訪
   （`_dep_expr`、`_c_dep_expr` / `_groups_to_c_expr`、`_eval_dep` / `_eval_groups`、
   `_resolve_term` / `_dep_has_cond_signal`、`_unique_group_deps`）全部移除。
   驗證方式一致：合成 config 加三份真實 config，新舊輸出逐字元比對（Verilog 368 條
@@ -176,24 +189,188 @@
 
 ---
 
-## X15 專有檔案已自歷史清除
+## 待辦
 
-`src/x15_pseq.v` 等 X15 專有檔曾被 git 追蹤，而 remote 是公開 repo，已用
-`git filter-repo` 連歷史一併清除（80 個 commit 全數重寫）。清除範圍：
+延續同一條排序原則：先建立安全網，再動結構，GUI 放最後。
 
-| 範圍 | 檔案 |
-|---|---|
-| `x15_pseq.v` 的全部歷史路徑 | `x15_pseq.v`、`v1.0/`、`v1.1/`、`src/` 四處**同一個 blob** |
-| 同一份設計的 JSON 形式 | `v1.0/x15_pseq_example.json`（`module_name: x15_pseq`，完整訊號拓撲） |
-| X15SNW 產出 | `output/x15snw_pseq.{v,c,json,drawio,xml}`、`_wavedrom_scenario.json` |
-| x15dot 設定與衍生圖 | `templates/x15dot*` 共 30 個路徑 |
+### 1. 閘拓樸的真值表 oracle ✅ 已完成（`tests/test_drawio_gate_topology.py`）
 
-只清 `src/x15_pseq.v` 是不夠的：同樣的內容在歷史中有四個路徑，而且還有一份等價的
-JSON——清掉 `.v` 卻留著 JSON 等於沒清。
+`tests/test_condition_consistency.py` 只比對**葉節點**的渲染文字，閘的形狀完全在覆蓋範圍外。
+這就是 `doc/FUTURE.md`「Draw.io 條件繪圖缺口」那三項能長期存在的結構性原因。
 
-這些檔案仍留在本機工作目錄供測試使用，並已加進 `.gitignore`。引用
-`templates/x15dot-f.xlsm` 的兩支測試本來就寫了「檔案不存在就 skip」，所以在乾淨的
-clone 或 CI 上會自動跳過，不會紅。
+守門方式不要做成「比對閘樣式」——那只是把現行行為當成規格封存，這三個 bug 當初會一起被
+封進去。要比的是**真值表**：匯出器反正已經決定了閘形狀、哪些標籤帶 `~`、哪幾項餵進哪個閘，
+把這些收成描述結構，寫個小求值器，在所有輸入組合下對照 `resolve_condition()` 的布林求值。
 
-**歷史重寫不等於沒公開過**：fork、既有 clone、GitHub 在 GC 前仍可用舊 SHA 直接存取的
-物件、第三方程式碼搜尋快取都不受影響。若內容確實敏感，仍應以「已外洩」看待。
+- **好處**：「畫出來的圖與資料不符」這類 bug 從「只能靠人看出來」變成「CI 會紅」。
+  這類 bug 的失效模式是所有失效裡最糟的一種——不會當掉、不會報錯，使用者會照著錯的圖
+  去接板子。而且它掃全組合，不依賴「剛好有人做出那種設定」：`FUTURE.md` 前兩項在現有
+  16 份設定上零命中，正是它們能一直沒被發現的原因。
+  順帶替 `FUTURE.md` 的 `combine_op` 鋪路——那份文件自己點出「收集型 visitor 會完全
+  合法地忽略新的 `op` 而不報錯」，真值表是唯一擋得住這件事的東西。
+- **verify**：這支測試對 `FUTURE.md` 那三項都要是紅的——前兩項是真值表不符，
+  第三項（Force 不畫）是少了一整個條件項
+
+**落地結果**：1416 個組合（group 形狀 × intra_op × group_inv × 單項 inv × hi/lo，含 n≥8 的
+兩層閘樹）。修正前 948 紅 / 396 綠，且失敗全部來自 `group_inv`，與「只有單項群組壞掉」的
+手算預測完全吻合。`FUTURE.md` 第 3 項（Force）這支抓不到：畫不出來的項在 `_DrawioCond` 就被丟掉，
+匯出端與期望端都看不到它，不構成真值表差異。
+
+注入退化驗證（5 項全紅）：merge 閘忽略整組反相 / merge 閘永遠反相 / child 閘一律當 AND /
+merge 閘一律當 OR / 單項 `group_inv` 又被吞掉。第三項一開始是**綠的**——當時 fixture 沒有
+任何群組滿 8 項，兩層閘樹那條路徑根本沒被畫出來，補上 `TREE_SHAPES` 才蓋到。
+
+### 2. Draw.io 的閘拓樸改由 `CondTree` 驅動 ✅ 已完成
+
+`doc/FUTURE.md` 列的三個 Draw.io 缺口有共同根因：**閘拓樸從來沒有遷移到條件 IR**。
+`drawio_geometry` 裡每一支閘形狀函式的簽名都是 `(r: PowerRail, hl: str, gi: int)`——原始模型、
+通道字串、群組索引，沒有任何一支碰過 `CondTree`；但同一支匯出器的葉節點是走 `resolve_condition`
+的（`_DrawioCond`）。同一份資料被解讀了兩次，走兩條互不相干的路徑。
+
+這也解釋了為什麼 Force 畫不出來：`hl` 從頭到尾只會是 `"hi"` 或 `"lo"`，Force 在閘這一層
+**結構上無法表達**，不是忘了畫。
+
+`FUTURE.md` 的第 1、2 項其實是同一個 bug，一次修掉：
+
+- `FUTURE.md` 第 1 項的 `len(groups[gi]) < 2` 不是隨便寫的——單項群組根本不會畫 merge 閘，bubble 沒地方掛，
+  而 `src/reference/` 只有 AND/NAND/OR/NOR/XOR/XNOR 六種圖形，**沒有 NOT**。但不需要新圖形：
+  單項群組的 `¬(op(A))` 對 and / or / xor 三種 op 都等於 `¬A`，而這支匯出器**已經會**把單項
+  反相畫成標籤前綴 `~`（`_DrawioCond.invert`）。把 bubble 從不存在的閘下推到標籤即可，
+  零新圖形、零版面變動。
+- 修好上一點之後，`¬a ∨ ¬b` 會畫成兩個 `~` 標籤餵進一個普通 OR 閘——這是對的。於是
+`_or_output_not` 再無存在理由，**刪掉它就修好 `FUTURE.md` 第 2 項**。它本來就只是針對
+前一項的補償，而且 De Morgan 推反了（`¬a∨¬b` 是 NAND，不是 NOR）。
+
+有個更乾淨的判準可以證明 `_or_output_not` 本來就錯：IR 的根節點 `AnyGroup` **連 `inv` 欄位
+都沒有**，沒有任何資料能授權「把根 OR 畫成 NOR」。輸出在 IR 裡找不到對應欄位的函式，
+定義上就是在自己發明語意。
+
+- **好處**：直接修掉兩個會畫出錯誤電路圖的 bug，而且程式是**變少**的——`_or_output_not`
+  整支刪掉、`_group_output_not` 的特例消失。但真正的收益是消滅「同一份資料兩條解讀路徑」：
+  之後語意再擴充（`FUTURE.md` 的 `combine_op`）只要改 IR 加一個 `any_group`，不必記得
+  還有第二條路徑要同步——而「忘記同步」正是本檔開頭那一段講的整類 bug 來源。
+  同時解開 Force 的死結：`hl` 只有 hi/lo 是結構性阻擋，改走 `CondTree` 之後三個通道
+  一視同仁，`FUTURE.md` 第 3 項才有辦法做。
+- **verify**：已掃過 `doc/` / `templates/` / `output/` 全部 16 份設定，這兩條路徑**零命中**，
+  所以 `tests/golden/demo.drawio.xml` 不會變。可以安心落地，但**黃金測試證明不了它有效**
+  ——必須另外加一份專門踩這兩條路徑的 fixture，並確認上一項的真值表 oracle 在修正前是紅的
+
+**落地結果**：`golden/demo.drawio.xml` 如預期 byte 不變。做法是新增 `_GroupPlan`
+（`op` / `inv` / `terms`），讓閘的種類與反相跟著樹一起傳下去，取代「拿 group 索引回查
+`PowerRail`」——順帶修掉一個 `FUTURE.md` 沒記的 bug：`any_group` 會丟掉畫不出來的整組，
+丟掉之後 `gi` 就對不回原始模型，會讀到**別組**的 `intra_op` / `group_inv`。
+`tests/test_cond_render.py` 的 `MIXED` fixture 本來就踩在這個條件上。
+
+刪掉的函式：`_get_intra_op`、`_group_output_not`、`_or_output_not`、`_or_gate_style`，
+以及早就沒人用的 `_and_gate_style`。單項群組的反相改下推到標籤，`¬¬A` 摺回 `A`。
+
+### 3. 匯出流程抽出應用服務層（`pipeline/export.py`）✅ 已完成
+
+**這一項有已確認、使用者可見的 bug，不是預防性重構。**
+
+`gui` 是 4700 行、佔 `src` 的 47%，裡面 288 個 method 綁在 Tk 類別上、只有 9 個
+module-level 函式，而整個 `tests/` 只有 `test_gui_logic.py` 碰得到它。問題不是「GUI 很大」，
+是**匯出流程的編排邏輯住在 Tk callback 裡**——因此沒有第二個呼叫者，三條匯出路徑的前置
+檢查不一致就這樣活了下來：
+
+| 方法 | `validate()` | `_collect_config()` |
+|---|---|---|
+| `_generate_code`（Verilog / C） | 有 | 1 次 |
+| `_export_schemdraw` | 有 | 1 次 |
+| `_export_drawio` | **沒有** | **2 次** |
+
+後果已實測，不是推論。一份 `depends_on` 打錯字的設定：
+
+```
+validate -> False ["'OUT' depends on non-existent rail: 'TYPO_RAIL'"]
+generate_drawio 成功，長度 2997
+圖裡有 IN_A 嗎  : True
+圖裡有 TYPO_RAIL: False
+```
+
+Verilog 會被擋下來，Draw.io 會**成功匯出一張少了那個條件項的圖，而且不出任何警告**——因為
+`_DrawioCond` 本來就會把不在 `valid` 集合裡的項默默丟掉。這跟待辦第 1、2 項修的閘拓樸 bug
+是同一種失效模式（不當掉、不報錯、使用者照著錯的圖接板子），差別只在入口是 GUI，所以連
+真值表 oracle 都攔不到：oracle 餵進去的設定是合法的。
+
+`src/tools/json2drawio.py`（65 行）的存在本身就是這個缺口的證據——想在沒有 Tk 的情況下跑
+一次匯出，唯一的辦法是重寫一遍。
+
+做法是在 `core` 之上、`gui` 之下加一層 use-case 模組，把「驗證 → 產生 → 寫檔」變成可呼叫的
+純函式：
+
+```python
+# src/pipeline/export.py
+@dataclass(frozen=True)
+class ExportResult:
+    path: str
+    summary: str                      # GUI 拿去餵 _status_msg
+    errors: tuple[str, ...] = ()      # 非空代表沒寫檔
+
+def export(cfg: PowerSeqConfig, kind: str, path: str, *, opts=None) -> ExportResult:
+    """所有匯出共用同一套前置檢查——verilog / c / drawio / schemdraw 不得各寫一份。"""
+```
+
+`gui` 縮成「收集設定 → 選路徑 → 呼叫 → 把 `ExportResult` 畫出來」，`tools/json2drawio.py`
+改成呼叫同一支。
+
+- **好處**：先修掉上面那個會讓使用者拿到錯誤電路圖的 bug。但結構上的收益是**讓「前置檢查
+  一致性」變成可測的**——目前它完全不可測，因為那段邏輯在 Tk method 裡，而且每新增一種
+  匯出格式就要有人記得補 `validate()`，漏掉不會有任何東西擋。抽出來之後可以直接斷言
+  「每一種 `kind` 對同一份無效設定都回非空 `errors`」，新格式漏檢查會紅。
+  順帶解決「無頭匯出只能重寫一遍」：`tools/` 不必再是 `gui` 的影子實作。
+- **跟第 4 項的關係**：那一項抽的是 `ProjectSession`（文件狀態——path、dirty、history），
+  這一項抽的是 use case（動作序列），不同軸向、不衝突。這項排在前面是因為它有已確認的
+  bug，第 4 項目前是預防性的。
+- **verify**：`test_export_pipeline.py` 不需要 Tk 就能跑。最低門檻是參數化掃過所有 `kind`：
+  無效設定一律回非空 `errors` 且**不得寫出檔案**；有效設定寫出的內容要與直接呼叫
+  `generate_verilog` / `generate_drawio` 等逐字元相同（證明這層只做編排、沒改語意）。
+  落地前先確認「`_export_drawio` 對無效設定仍會匯出」這條是紅的。
+  另外要記得在 `tests/test_package_api.py` 的 `EXPECTED_API` 加 `pipeline` 一項——那支測試
+  是參數化跑 `EXPECTED_API` 的鍵，少一個鍵不會失敗、只會沒人守，新套件的對外介面就脫韁了。
+
+**落地結果**：新增 `pipeline` 套件（`export(cfg, kind, path, *, opts=None) -> ExportResult`），
+四種 `kind`（verilog / c / drawio / schemdraw）共用同一個 validate 閘。`gui` 的四個匯出
+method 全部改走它，`tools/json2drawio.py` 也是。`test_export_pipeline.py` 參數化掃過每種
+`kind`：無效設定一律回非空 `errors` 且 `tmp_path` 下不產生檔案；有效設定的 verilog / c /
+drawio 與直接呼叫產生器逐字元相同（drawio 只正規化掉每次隨機的 diagram id，schemdraw 因
+matplotlib SVG metadata 含日期不穩定，只驗有寫出、非空）。`EXPECTED_API` 已加 `pipeline`。
+
+一個刻意的取捨：**validate 現在只在 pipeline 這一個閘，GUI 不再逐路徑自己 validate。**
+代價是無效設定會先選完存檔路徑才跳錯（以前 code-gen 路徑是先擋再開對話框），但即時預覽本來
+就一直顯示「N errors」，使用者按匯出前就看得到，所以實務上不算退步；換來的是「有沒有先
+驗證」不再是每條路徑各自記得的事。`app.py` 的「no rails 不開對話框」仍是 GUI 的 UX 前置
+（drawio / schemdraw 有、code-gen 沒有，沿用原行為，用 `require_rails` 旗標表示）。
+
+### 4. （最後）`app.py` 抽出 `ProjectSession` ✅ 已完成
+
+`PowerSeqGUI(ctk.CTk)` 有 45 個不同的 `self.*`。要抽的不是「再多幾個純函式」，而是其中
+真正可分離的那 7 個：`config_obj`、`_current_path`、`_dirty`、`_history`、`_saving`、
+`_recent`、`_base_title`。這是一個 document / session 物件；其餘 38 個是 widget、算繪世代
+計數器、分隔拖曳狀態，那些是貨真價實的 UI，抽出來沒有意義。
+
+`core/snapshot_history.py` 已經把 undo/redo 的**機制**抽出去了，留在 `app.py` 的是**政策**：
+什麼時候該壓一個快照、什麼算「改過」、path 與 dirty 怎麼合成標題。這些正好是會造成
+「使用者工作遺失」的那類 bug，而且目前一行測試都沒有。
+
+- **好處**：「使用者工作遺失」那類 bug 從不可測變成可測。這些邏輯目前綁在 Tk 上，等於
+  沒有辦法測，所以一行測試都沒有——具體會被守住的是：存檔後 dirty 沒消、undo 回到存檔點
+  時 dirty 狀態不對、存檔途中重入。這是整份清單裡唯一直接影響「使用者會不會弄丟工作」的項目。
+  另一個效果是 `app.py` 剩下的 38 個 `self.*` 全是真 UI，之後改預覽或版面不會再誤觸文件狀態。
+- **verify**：`open` / `save` / `mark_edited` / `undo` / `redo` / `title` / `is_dirty`
+  不需要 Tk 就能測；重點放在 dirty 與 history 的交互（存檔後 dirty 要消、undo 回到存檔點
+  時 dirty 的狀態、`_saving` 期間的重入）
+
+**落地結果**：新增 `core/project_session.py` 的 `ProjectSession`，接管七個文件狀態
+（`config` / `path` / `dirty` / `saving` / `history` / `base_title` / `recent`）與政策
+（存檔點、undo 回存檔點後 dirty、存檔重入）。`PowerSeqGUI` 保留 `config_obj` 當指向
+`session.config` 的 property alias，所以約 40 個 node 編輯 handler 一行都不用改。放 `core/`
+而非 `gui/`：`recent` 以依賴注入傳入（只需要 `.add`），core 不反向 import gui。
+`tests/test_project_session.py`（11 個）不需要 Tk。
+
+**一個刻意的行為變更**：undo/redo 回到「上次存檔／載入時的內容」時，dirty 現在會消、標題
+的 `*` 跟著不見——以前是無條件 `dirty=True`。做法是 session 記一個「存檔點快照」，還原後
+比對目前內容是否偏離它。存檔點用**正規化後的顯示內容**（`_collect_config`）錨定，和 undo
+比對用的是同一把尺，否則 `_collect_config` 補預設／清空 `timing_scenario` 造成的差異會讓
+undo 回到載入狀態時 dirty 誤判。`_saving` 改走 `begin_save()` 的原子 check-and-set，比原本
+「先讀旗標、collect、再設旗標」少一個 collect 失敗會卡住存檔鎖的窗口。

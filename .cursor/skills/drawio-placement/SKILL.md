@@ -190,15 +190,17 @@ Functions: `_exported_hilo_keys`, `_export_wire_extra_for_name`, `_max_export_wi
 
 Per group (`depends_on_*_intra_op` from Excel / JSON):
 
-| Op | Normal | `group_inv` (multi-input group) |
-|----|--------|----------------------------------|
-| AND | AND | NAND |
-| OR | OR | NOR |
-| XOR | XOR | XNOR |
+| Op | Normal | `group_inv` (multi-input group) | `group_inv` (single-input group) |
+|----|--------|----------------------------------|----------------------------------|
+| AND | AND | NAND | `~` on the label (no gate) |
+| OR | OR | NOR | `~` on the label (no gate) |
+| XOR | XOR | XNOR | `~` on the label (no gate) |
 
-Styles from `AND1.xml` / `NAND1.xml` / `OR1.xml` / `NOR1.xml` / `XOR1.xml` / `XNOR1.xml` via `drawio_geometry._intra_*_gate_style`.
+Styles from `AND1.xml` / `NAND1.xml` / `OR1.xml` / `NOR1.xml` / `XOR1.xml` / `XNOR1.xml` via `drawio_geometry._intra_*_gate_style`, which take `(op, inv)` straight from the `CondTree` `Group` node — **never** a group index, because `_DrawioCond.any_group` drops undrawable groups and the index no longer maps back to the model.
 
-**Between groups** (same Hi or Lo path): OR merge (`_wire_or_fanin`); all single-input groups with every `group_inv` → NOR at merge.
+A single-input group has no merge gate to hang the bubble on, and `src/reference/` has no NOT shape. Since `¬(op(A)) == ¬A` for and/or/xor, the inversion is pushed down to the item's label (`_DrawioCond.group`); `¬¬A` folds back to `A`.
+
+**Between groups** (same Hi or Lo path): OR merge (`_wire_or_fanin`), **always plain OR**. `AnyGroup` has no `inv` field, so nothing can negate the root.
 
 ### AND/OR trees (n ≥ 8)
 
@@ -244,8 +246,8 @@ All spacing constants live at the top of `drawio_cell_export.py` — not in `Dra
 - [ ] Block width: `_path_horizontal_gate_width`, `_child_merge_channel`, `_export_wire_extra_for_name`
 - [ ] Multi-group: `_group_branch_attach_right`, vertical stack in `_wire_path_v2`
 - [ ] PSEQCELL: `_load_pseqcell_layout` / `CELL_O_*`; output edge from O right
-- [ ] Intra-op / group_inv: `_intra_merge_gate_style`, `_or_gate_style` in `drawio_geometry.py`
-- [ ] Run `pytest tests/test_drawio_cell.py tests/test_integration.py -q`
+- [ ] Intra-op / group_inv: `_intra_child_gate_style(op)` / `_intra_merge_gate_style(op, inv)` in `drawio_geometry.py`, fed by `_GroupPlan`
+- [ ] Run `pytest tests/test_drawio_cell.py tests/test_drawio_gate_topology.py tests/test_integration.py -q`
 
 ## Common mistakes
 
@@ -256,6 +258,8 @@ All spacing constants live at the top of `drawio_cell_export.py` — not in `Dra
 | AND tree child↔merge fixed `2×GAP` only | Use `_child_merge_channel(right_terms)` — widens for long merge-side names |
 | Direct label→Deb uses 80pt (GAP+GATE_CELL_GAP) | Single-term branch: `label_right = attach_right` (40pt only) |
 | Wiring Q/~Q feedback between blocks | Not supported; use cond label `{sig}_{hi\|lo}` |
+| Looking up `intra_op` / `group_inv` by group index in the layout layer | Read them off `_GroupPlan`; `any_group` drops groups so indices shift |
+| Negating the root OR for `group_inv` | Root is always OR; `group_inv` belongs to its own group |
 | Export `extra` not on 40pt grid | `_snap_grid_up` on `_export_wire_extra_for_name` result |
 
 ## Verification

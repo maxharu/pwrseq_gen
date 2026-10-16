@@ -1,0 +1,59 @@
+---
+description: pwrseq_gen 的實際架構、套件邊界、命名與相容性要求（寫 Python 程式前必讀）
+globs: src/**/*.py,scripts/**/*.py,tests/**/*.py,pyproject.toml
+alwaysApply: false
+---
+
+# pwrseq_gen 專案規範
+
+本檔描述**現行**架構，不是理想狀態。既有設計是刻意的，未經要求不得重構、改公開介面或改既有行為。
+權威來源：`README.md`（套件邊界／專案結構）、`ROADMAP.md`（已完成的決策與待辦）、`doc/FUTURE.md`（尚未實作的提案）。
+
+## 技術棧與建置
+
+- Python，`requires-python = ">=3.10"`（`pyproject.toml`）。程式直接使用 `list[str]` / `str | None`，部分檔案有 `from __future__ import annotations`。
+- 執行期相依：`customtkinter`、`openpyxl`、`schemdraw`、`Pillow`、`matplotlib`（`requirements.txt`）。開發加 `pytest`、`ruff`（`requirements-dev.txt`）；打包用 `pyinstaller`（`requirements-build.txt`）。
+- 平台 Windows 優先：`.bat` 腳本、`.xlsm` / VBA、PyInstaller；CI 跑 `windows-latest`。
+- 入口：`src/main.py` → `gui.run_gui`。啟動用 `run.bat`，打包用 `build.bat` / `build_onedir.bat`，無頭匯出用 `json2drawio.bat`。
+- **待確認**：`README.md` 的手動安裝段與 `run.bat` 訊息仍寫「Python 3.8 以上」，與 `pyproject.toml` 的 `>=3.10` 不一致。以 `pyproject.toml` 為準，但未經要求不要去改那兩處文字。
+
+## 套件結構與職責（`src/`）
+
+| 套件 | 職責 | 對外介面 |
+|---|---|---|
+| `core` | 資料模型與共用詞彙表（`config_models` / `timing_models` / `cond_ir` / `naming` / `constants` / `validator` / `group_logic` / `paths` / `cond_edit` / `config_edit` / `project_session` / `snapshot_history` / `version` / `applog` / `app_expiry`） | 刻意**不**收斂成扁平命名空間，維持深層 import |
+| `codegen` | Verilog / C 產生器 | `generate_verilog`、`generate_c` |
+| `drawio` | Draw.io 電路圖（cell-centric 格線佈局） | `generate_drawio`、`DrawioExportOptions` |
+| `timing` | 時序邏輯模擬與 Schemdraw 時序圖 | `__init__.py` 的 `__all__`（10 個名字） |
+| `excel` | Excel 匯入／匯出與版面；`excel.vba` 是獨立子套件介面 | 各自的 `__all__` |
+| `pipeline` | 匯出應用服務層（驗證 → 產生 → 寫檔） | `export`、`ExportResult` |
+| `gui` | CustomTkinter GUI（`theme` / `widgets` / `panels` / `dialogs` / `settings` / `app`） | `run_gui` |
+| `tools` | `json2drawio` / `build` / `build_onedir` | 無宣告 API（最外層消費端） |
+
+`src/reference/` 是匯出資產（PSEQCELL 版面、pwrcell.c/h）；`templates/` 是 Excel／Draw.io 範本；`scripts/` 是範本與資產產生腳本，**依賴 `src/`，反向不成立**；`doc/` 與 `output/` 已 gitignore（本機資料）。
+
+## 不變量（違反會有測試轉紅）
+
+1. **跨套件呼叫只走套件 facade**：`from drawio import generate_drawio`，不是 `from drawio.drawio_cell_export import ...`。`core` 是唯一豁免（共用詞彙表，性質接近 stdlib）。`tests/` 本身豁免。
+2. **相依單向、不得成環**：`core` 不依賴任何套件 → 其餘套件 → `gui` 最外層。守門測試走 AST，**函式內的延後 import 一樣算**。`excel` ↔ `timing` 那條環已斷開，不要重建。
+3. **`__all__` 是契約**：改動對外介面必須同步 `tests/test_package_api.py` 的 `EXPECTED_API`；新增套件要加鍵（少一個鍵不會失敗，只會沒人守）。
+4. **條件語意只有一份**：`core/cond_ir.py` 的 `resolve_condition(rail, kind, name_to_rail) -> CondTree`。節點為 `Const` / `Level` / `Cond` / `Not` / `Group` / `AnyGroup`，刻意對齊 F-DEP-08 的兩層結構。五個下游（`verilog_generator`、`c_generator`、`timing_sim`、`drawio_cell_export`、`timing_export`）各只寫一個 `CondVisitor`。**語意擴充改 IR，不要在後端加判斷。**
+5. **匯出前置檢查只有一個閘**：`pipeline/export.py` 的 `export(cfg, kind, path, *, opts=None)`。GUI 與 `tools/json2drawio.py` 都走它，驗證沒過一律不寫檔。新格式註冊進 `_WRITERS` 並補 `tests/test_export_pipeline.py` 的參數化。
+6. **`templates/` 不可整包打包**（含未追蹤的客戶檔案），只能在 `src/tools/build.py` 逐一指名；路徑一律取自 `core/paths.py`（含打包後的 `sys._MEIPASS` 分支）。
+7. **時序模擬是邏輯預覽，不是 RTL**：轉態語意、self 依賴、兩段式評估與 DEB INIT 的規則見 `.cursor/rules/timing-sim-behavior.mdc`，不要重新引入 cycle 計數。
+
+## 命名與風格
+
+- 模組檔名 snake_case，套件內用前綴表示歸屬（`drawio_*`、`timing_*`、`excel_*`）；模組私有函式以 `_` 開頭；常數 UPPER_SNAKE。
+- 測試檔 `tests/test_<模組或主題>.py`；黃金基準在 `tests/golden/`。
+- 產生出的識別子一律走 `core/naming.py` 的 `safe_name`（`. - 空白` → `_`）與 `internal_sig`（全小寫）；pulse 名稱走 `core.config_models` 的 `pulse_suffix` / `parse_pulse_period`，不要再自己剖析。
+- ruff：`line-length = 120`，`select = ["F", "E9", "I", "RUF100"]`。per-file-ignores 排除 GUI 的星號 import（`F403`/`F405`）與 facade 的 `F401`。**刻意不開** `BLE001` / `S110`：GUI 的 `except Exception: pass` 是「預覽／繪圖失敗不要讓整個視窗掛掉」的設計決策。不要擴大規則集。
+- 程式識別子用英文；docstring 與註解用繁體中文，說明**為什麼**（取捨、舊 bug 成因），不重述程式在做什麼。檔案 UTF-8。
+
+## 相容性要求
+
+- `PowerSeqConfig.to_dict` / `from_dict` **就是存檔格式本身**，沒有版本號也沒有 migration 層。新增欄位必須對舊 JSON 缺欄位給預設值（`doc/FUTURE.md` 把 schema 版本列為 `combine_op` 那一輪再付清）。
+- Excel 範本是對外契約：Nodes／Conditions／Lists 工作表、`.xlsm` 內嵌 VBA Sync 按鈕（`templates/vba/`）。改版面要同時顧 `excel_import` / `excel_export` / `excel_template_layout` 與 `scripts/generate_excel_template.py`，細節見 `.cursor/skills/excel-template/`。
+- Draw.io 版面與走線、Schemdraw 匯出各有既定規格：`.cursor/skills/drawio-placement/`、`.cursor/skills/drawio-routing/`、`.cursor/skills/schemdraw/`。
+- 五個後端的輸出受 `tests/golden/` byte 級鎖定；若變更不該改輸出，就要證明基準檔零變動。
+- **待確認**：行尾（CRLF／LF）與編碼規範未在任何設定檔明文（無 `.editorconfig`、無 `.gitattributes`）；是否支援非 Windows 平台亦未宣告。

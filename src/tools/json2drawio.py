@@ -8,15 +8,16 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.config_models import PowerSeqConfig
-from drawio import generate_drawio
+from pipeline import export as run_export
 
 
 def convert(json_path: str, xml_path: str) -> None:
     with open(json_path, "r", encoding="utf-8") as f:
         cfg = PowerSeqConfig.from_dict(json.load(f))
-    xml = generate_drawio(cfg)
-    with open(xml_path, "w", encoding="utf-8") as f:
-        f.write(xml)
+    # 走與 GUI 同一條匯出路徑：validate 由 pipeline 把關，無效設定不會寫出檔案
+    result = run_export(cfg, "drawio", xml_path)
+    if not result.ok:
+        raise ValueError("; ".join(result.errors))
 
 
 def main() -> None:

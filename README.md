@@ -62,12 +62,14 @@ Lint 規則定義在 `pyproject.toml` 的 `[tool.ruff.lint]`：只納管 `F`（�
 
 ## 套件邊界
 
-`codegen` / `drawio` / `excel` / `excel.vba` / `timing` 各自在 `__init__.py` 宣告 `__all__`，
+`codegen` / `drawio` / `excel` / `excel.vba` / `timing` / `pipeline` 各自在 `__init__.py` 宣告 `__all__`，
 跨套件呼叫只走這層介面（`from drawio import generate_drawio`），套件內的模組是實作細節。
 `core` 是例外——它是共用詞彙表（`PowerRail` / `safe_name` / `DEP_HIGH` …），
 維持 `from core.config_models import PowerRail` 這種自我說明的深層 import。
 
-相依方向是單向的：`core` 不相依任何套件，其餘套件往 `core` 走，`gui` 在最外層。
+相依方向是單向的：`core` 不相依任何套件，其餘套件往 `core` 走，`pipeline` 在各匯出套件之上，`gui` 在最外層。
+Verilog／C／Draw.io／Schemdraw 的匯出一律經 `pipeline.export`：先 `validate`，沒過就不寫檔。
+`gui` 與 `tools/json2drawio.py` 都走這個閘。
 `excel` 與 `timing` 曾經互相 import、靠函式內的延後 import 才沒在 import 期炸掉，
 現在那條環已經斷開（`merge_scenario_for_config` 只操作 `core` 型別，已歸位到 `core`）。
 
@@ -92,6 +94,7 @@ src/
     validator.py             設定驗證
     group_logic.py           群組 intra-op AND/OR/XOR
     version.py               版本／作者等單一來源
+    project_session.py       文件狀態：path、dirty、undo 政策（不依賴 Tk）
     applog.py  snapshot_history.py  app_expiry.py
   timing/                  時序模擬與時序圖
     timing_sim.py            時序邏輯模擬引擎
@@ -102,6 +105,8 @@ src/
   drawio/                  Draw.io 匯出（cell_export / geometry / options）
   excel/                   Excel 匯入／匯出與版面
     vba/                     VBA 嵌入（COM 需 Excel／zip 注入不需）
+  pipeline/                匯出應用服務層：validate → 產生 → 寫檔
+    export.py                export() / ExportResult（verilog / c / drawio / schemdraw）
   gui/                     CustomTkinter GUI（theme/widgets/panels/dialogs/settings/app）
   tools/                   json2drawio.py / build.py / build_onedir.py
   reference/               PSEQCELL 版面等匯出資產

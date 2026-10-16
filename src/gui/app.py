@@ -25,21 +25,20 @@ from core.config_models import (
     build_timing_scenario,
     rail_input_wave_spec,
 )
-from core.snapshot_history import SnapshotHistory
+from core.project_session import ProjectSession
 from core.timing_models import InputWaveSpec, TimingScenario
 from core.validator import validate
-from drawio import generate_drawio
 from gui.dialogs import *
 from gui.panels import *
 from gui.settings import GuiSettings, RecentFiles
 from gui.theme import *
 from gui.widgets import *
+from pipeline import export as run_export
 from timing import (
     TIMING_EDGE_BOTH,
     TIMING_EDGE_HI_ONLY,
     TIMING_EDGE_LO_ONLY,
     TimingExportOptions,
-    export_schemdraw_from_options,
     generate_schemdraw_doc,
     render_schemdraw_png_bytes,
 )
@@ -62,28 +61,28 @@ def _write_config_file(cfg: PowerSeqConfig, path: str) -> None:
 class PowerSeqGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self._base_title = f"{APP_NAME} {APP_VERSION}"
-        self.title(self._base_title)
+        # 文件狀態（內容、路徑、dirty、undo/redo、存檔點、存檔中旗標）全歸 session；
+        # 其餘 self.* 是貨真價實的 UI（widget、算繪世代、拖曳狀態）。
+        self._session = ProjectSession(
+            base_title=f"{APP_NAME} {APP_VERSION}",
+            undo_limit=UNDO_LIMIT,
+            recent=RecentFiles(),
+        )
+        self.title(self._session.title())
         self.geometry("1400x850")
         self.minsize(1000, 650)
-        self.config_obj = PowerSeqConfig()
 
-        self._dirty = False
-        self._saving = False
         self._topmost = False
         self._inspect_mode = False
         self._show_preview = True
         self._preview_pane_in_paned = False
         self._paned_sash_drag = False
-        self._history = SnapshotHistory(UNDO_LIMIT)
         self._preview_after_id: Optional[str] = None
         self._preview_render_gen = 0
         self._schemdraw_preview_after_id: Optional[str] = None
         self._schemdraw_render_gen = 0
         self._schemdraw_preview_opts: TimingExportOptions | None = None
-        self._current_path: Optional[str] = None
         self._gui_settings = GuiSettings()
-        self._recent = RecentFiles()
         self._tooltips: list[Tooltip] = []  # 強引用，避免 GC
         self._node_list_delete_armed = False
 
@@ -94,9 +93,19 @@ class PowerSeqGUI(ctk.CTk):
         self.after_idle(self._apply_paned_layout)
         self.after_idle(self.node_list._sync_scroll_height)
 
+    # config_obj 的實體狀態歸 session；保留這個名稱當 alias，讓既有的 node 編輯 handler
+    # 不必全部改寫（它們讀寫的是文件內容，概念上就是 session.config）。
+    @property
+    def config_obj(self) -> PowerSeqConfig:
+        return self._session.config
+
+    @config_obj.setter
+    def config_obj(self, value: PowerSeqConfig) -> None:
+        self._session.config = value
+
     def _on_close(self) -> None:
         # 存檔中關閉會硬砍 daemon thread → 檔案可能寫一半損毀，先擋下。
-        if self._saving:
+        if self._session.saving:
             self._status_msg("Saving… please wait before closing", level="warn")
             return
         self.destroy()
@@ -374,18 +383,14 @@ class PowerSeqGUI(ctk.CTk):
 
     # ---- title / dirty ----
     def _mark_dirty(self):
-        if not self._dirty:
-            self._dirty = True
+        if not self._session.is_dirty:
+            self._session.mark_edited()
             self._update_title()
 
-    def _mark_clean(self):
-        self._dirty = False
-        self._update_title()
-
     def _update_title(self):
-        self.title(self._base_title + (" *" if self._dirty else ""))
+        self.title(self._session.title())
         if hasattr(self, "_status"):
-            self._status.set_file(self._current_path, self._dirty)
+            self._status.set_file(self._session.path, self._session.is_dirty)
 
     def _update_stats(self):
         if not hasattr(self, "_status"):
@@ -401,33 +406,26 @@ class PowerSeqGUI(ctk.CTk):
 
     # ---- undo / redo ----
     def _push_undo(self):
-        snap = json.dumps(self._collect_config().to_dict(), ensure_ascii=False)
-        self._history.push(snap)
+        self._session.push_undo(self._collect_config())
         self._update_undo_btns()
 
     def _undo(self):
-        if not self._history.can_undo:
+        if not self._session.undo(self._collect_config()):
             return
-        current = json.dumps(self._collect_config().to_dict(), ensure_ascii=False)
-        target = self._history.undo(current)
-        self.config_obj = PowerSeqConfig.from_dict(json.loads(target))
         self._refresh_all()
-        self._mark_dirty()
+        self._update_title()
         self._update_undo_btns()
 
     def _redo(self):
-        if not self._history.can_redo:
+        if not self._session.redo(self._collect_config()):
             return
-        current = json.dumps(self._collect_config().to_dict(), ensure_ascii=False)
-        target = self._history.redo(current)
-        self.config_obj = PowerSeqConfig.from_dict(json.loads(target))
         self._refresh_all()
-        self._mark_dirty()
+        self._update_title()
         self._update_undo_btns()
 
     def _update_undo_btns(self):
-        self._undo_btn.configure(state="normal" if self._history.can_undo else "disabled")
-        self._redo_btn.configure(state="normal" if self._history.can_redo else "disabled")
+        self._undo_btn.configure(state="normal" if self._session.can_undo else "disabled")
+        self._redo_btn.configure(state="normal" if self._session.can_redo else "disabled")
 
     # ---- per-node Apply ----
     def _apply_rail_frame(self, cf) -> None:
@@ -1067,8 +1065,9 @@ class PowerSeqGUI(ctk.CTk):
 
     def _preview_c_filename(self) -> str:
         """預覽 C 時決定 output_filename（影響 guard / 函式前綴）。"""
-        if self._current_path and self._current_path.lower().endswith(".json"):
-            return os.path.splitext(self._current_path)[0] + ".c"
+        path = self._session.path
+        if path and path.lower().endswith(".json"):
+            return os.path.splitext(path)[0] + ".c"
         return "power.c"
 
     def _render_preview(self):
@@ -1084,8 +1083,8 @@ class PowerSeqGUI(ctk.CTk):
             lang = self.preview.get_lang()
             c_name = self._preview_c_filename()
             v_path = None
-            if self._current_path and self._current_path.lower().endswith(".json"):
-                v_path = os.path.splitext(self._current_path)[0] + ".v"
+            if self._session.path and self._session.path.lower().endswith(".json"):
+                v_path = os.path.splitext(self._session.path)[0] + ".v"
         except Exception as e:
             self.preview.set_error(str(e))
             return
@@ -1192,7 +1191,7 @@ class PowerSeqGUI(ctk.CTk):
 
     # ---- recent ----
     def _show_recent_menu(self):
-        items = self._recent.list()
+        items = self._session.recent.list()
         menu = tk.Menu(self, tearoff=0)
         if not items:
             menu.add_command(label="(no recent files)", state="disabled")
@@ -1215,15 +1214,16 @@ class PowerSeqGUI(ctk.CTk):
             if ext in (".xlsx", ".xlsm", ".xls"):
                 from excel import load_powerseq_from_excel
 
-                self.config_obj = load_powerseq_from_excel(path)
+                cfg = load_powerseq_from_excel(path)
             else:
                 with open(path, encoding="utf-8") as f:
-                    self.config_obj = PowerSeqConfig.from_dict(json.load(f))
-            self._history.clear()
-            self._current_path = path
-            self._recent.add(path)
+                    cfg = PowerSeqConfig.from_dict(json.load(f))
+            self._session.load(path, cfg)
             self._refresh_all()
-            self._mark_clean()
+            # 用正規化後的顯示內容重新錨定存檔點（_collect_config 會補預設、清空欄位，
+            # 和 undo 比對用的是同一把尺），否則 undo 回到此狀態 dirty 會誤判。
+            self._session.set_saved_point(self._collect_config())
+            self._update_title()
             self._status_msg(f"Loaded: {os.path.basename(path)}", level="success")
         except Exception as e:
             logger.exception("Load failed")
@@ -1258,17 +1258,18 @@ class PowerSeqGUI(ctk.CTk):
 
     def _save_json(self):
         """Save to current path if known, else fall back to Save As."""
-        if self._current_path:
-            return self._save_to(self._current_path)
+        if self._session.path:
+            return self._save_to(self._session.path)
         return self._save_json_as()
 
     def _save_json_as(self):
-        if self._saving:
+        if self._session.saving:
             self._status_msg("Saving in progress… please wait", level="warn")
             return
         cfg = self._collect_config()
-        initial = os.path.basename(self._current_path) if self._current_path else "powerseq.json"
-        cur_ext = os.path.splitext(self._current_path or "")[1].lower()
+        cur_path = self._session.path
+        initial = os.path.basename(cur_path) if cur_path else "powerseq.json"
+        cur_ext = os.path.splitext(cur_path or "")[1].lower()
         if cur_ext in (".xlsx", ".xlsm"):
             default_ext = cur_ext.lstrip(".")
         else:
@@ -1288,15 +1289,14 @@ class PowerSeqGUI(ctk.CTk):
         return self._save_to(path, cfg)
 
     def _save_to(self, path: str, cfg: Optional[PowerSeqConfig] = None):
-        if self._saving:
-            self._status_msg("Saving in progress… please wait", level="warn")
-            return
         # collect 必須在主緒（讀取 widget）；檔案 I/O 才丟背景緒。
         if cfg is None:
             cfg = self._collect_config()
         ext = os.path.splitext(path)[1].lower()
 
-        self._saving = True
+        if not self._session.begin_save():
+            self._status_msg("Saving in progress… please wait", level="warn")
+            return
         self._set_save_enabled(False)
         if hasattr(self, "_status"):
             self._status.set_busy(True)
@@ -1331,18 +1331,15 @@ class PowerSeqGUI(ctk.CTk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_save_done(self, path: str, cfg: PowerSeqConfig) -> None:
-        self._saving = False
+        self._session.finish_save(path, cfg)
         self._set_save_enabled(True)
         if hasattr(self, "_status"):
             self._status.set_busy(False)
-        self.config_obj = cfg
-        self._current_path = path
-        self._recent.add(path)
-        self._mark_clean()
+        self._update_title()
         self._status_msg(f"Saved: {os.path.basename(path)}", level="success")
 
     def _on_save_error(self, e: Exception) -> None:
-        self._saving = False
+        self._session.fail_save()
         self._set_save_enabled(True)
         if hasattr(self, "_status"):
             self._status.set_busy(False)
@@ -1374,36 +1371,39 @@ class PowerSeqGUI(ctk.CTk):
         self._export_menu.set(self._EXPORT_MENU_LABEL)
 
     def _generate_verilog(self):
-        self._generate_code(
-            "Verilog", ".v", [("Verilog", "*.v")], generate_verilog,
-        )
+        self._write_export("verilog", ".v", [("Verilog", "*.v")])
 
     def _generate_c(self):
-        self._generate_code(
-            "C", ".c", [("C source", "*.c")], generate_c,
-        )
+        self._write_export("c", ".c", [("C source", "*.c")])
 
-    def _generate_code(self, label: str, ext: str, filetypes, generator):
+    def _write_export(self, kind: str, ext: str, filetypes, *, require_rails: bool = False):
+        """選路徑 → 經 pipeline 寫檔 → 回報。validate 由 pipeline 把關，是唯一且繞不過的閘。"""
         cfg = self._collect_config()
-        ok, errs = validate(cfg)
-        if not ok:
-            messagebox.showerror("Validation Failed", "\n".join(errs))
-            self._status_msg(f"{len(errs)} validation error(s); cannot generate", level="error")
+        if require_rails and not cfg.rails:
+            self._status_msg("No nodes. Add rails first.", level="warn")
             return
         path = filedialog.asksaveasfilename(defaultextension=ext, filetypes=filetypes)
         if not path:
             return
         try:
-            code = generator(cfg, output_filename=path)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(code)
-            self._status_msg(f"Generated {label}: {os.path.basename(path)}", level="success")
+            result = run_export(cfg, kind, path)
         except Exception as e:
-            logger.exception("Generate %s failed", label)
+            logger.exception("Export %s failed", kind)
             messagebox.showerror("Error", str(e))
-            self._status_msg(f"Generate {label} failed: {e}", level="error")
+            self._status_msg(f"Export {kind} failed: {e}", level="error")
+            return
+        self._render_export_result(result)
 
-    def _run_schemdraw_export(self, export_opts: TimingExportOptions) -> None:
+    def _render_export_result(self, result) -> None:
+        if not result.ok:
+            messagebox.showerror("Validation Failed", "\n".join(result.errors))
+            self._status_msg(result.summary, level="error")
+            return
+        self._status_msg(result.summary, level="success")
+
+    def _run_schemdraw_export(
+        self, cfg: PowerSeqConfig, export_opts: TimingExportOptions
+    ) -> None:
         path = filedialog.asksaveasfilename(
             defaultextension=".svg",
             filetypes=[
@@ -1416,35 +1416,20 @@ class PowerSeqGUI(ctk.CTk):
         if not path:
             return
         try:
-            cfg2 = self._collect_config()
-            scenario = self._timing_scenario_for_export(cfg2)
-            export_schemdraw_from_options(cfg2, scenario, export_opts, path)
-            n = len(export_opts.include_rails)
-            if export_opts.edge_kinds == TIMING_EDGE_HI_ONLY:
-                edge_label = "Hi arrows"
-            elif export_opts.edge_kinds == TIMING_EDGE_LO_ONLY:
-                edge_label = "Lo arrows"
-            else:
-                edge_label = "Hi+Lo arrows"
-            self._status_msg(
-                f"Exported Schemdraw ({n} lanes, {edge_label}): {os.path.basename(path)}",
-                level="success",
-            )
+            result = run_export(cfg, "schemdraw", path, opts=export_opts)
         except ImportError as e:
             messagebox.showerror("Schemdraw Missing", str(e))
             self._status_msg("Schemdraw export failed: package not installed", level="error")
+            return
         except Exception as e:
             logger.exception("Schemdraw export failed")
             messagebox.showerror("Error", str(e))
             self._status_msg(f"Schemdraw export failed: {e}", level="error")
+            return
+        self._render_export_result(result)
 
     def _export_schemdraw(self):
         cfg = self._collect_config()
-        ok, errs = validate(cfg)
-        if not ok:
-            messagebox.showerror("Validation Failed", "\n".join(errs))
-            self._status_msg(f"{len(errs)} validation error(s); cannot export", level="error")
-            return
         if not cfg.rails:
             self._status_msg("No nodes. Add rails first.", level="warn")
             return
@@ -1456,29 +1441,13 @@ class PowerSeqGUI(ctk.CTk):
             )
             self._status_msg("Schemdraw export cancelled: no nodes selected", level="warn")
             return
-        self._run_schemdraw_export(opts)
+        self._run_schemdraw_export(cfg, opts)
 
     def _export_drawio(self):
-        cfg = self._collect_config()
-        if not cfg.rails:
-            self._status_msg("No nodes. Add rails first.", level="warn")
-            return
-        path = filedialog.asksaveasfilename(
-            defaultextension=".xml",
-            filetypes=[("Draw.io XML", "*.xml"), ("All", "*.*")],
+        self._write_export(
+            "drawio", ".xml", [("Draw.io XML", "*.xml"), ("All", "*.*")],
+            require_rails=True,
         )
-        if not path:
-            return
-        try:
-            cfg2 = self._collect_config()
-            xml = generate_drawio(cfg2)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(xml)
-            self._status_msg(f"Exported: {os.path.basename(path)}", level="success")
-        except Exception as e:
-            logger.exception("Export failed")
-            messagebox.showerror("Error", str(e))
-            self._status_msg(f"Export failed: {e}", level="error")
 
 
 def run_gui():

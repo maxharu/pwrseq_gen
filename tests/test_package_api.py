@@ -29,6 +29,7 @@ EXEMPT_TARGETS = {"core"}
 EXPECTED_API = {
     "codegen": ["generate_c", "generate_verilog"],
     "drawio": ["DrawioExportOptions", "generate_drawio"],
+    "pipeline": ["ExportResult", "export"],
     "excel": [
         "apply_nodes_sheet_header_rows",
         "build_signal_dropdown_entries",

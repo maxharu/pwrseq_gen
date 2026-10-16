@@ -1,6 +1,7 @@
 """Cell-centric Draw.io export tests."""
 import json
 import os
+import re
 import sys
 import xml.etree.ElementTree as ET
 
@@ -465,8 +466,13 @@ class TestCellCentricDrawio:
         assert "negating=1" not in (child.get("style") or "")
         assert "negating=1" in (merge.get("style") or "")
 
-    def test_or_output_not_tree_child_or_merge_nor(self):
-        """_or_output_not + ≥8 single-term groups: child OR, merge NOR."""
+    def test_single_term_group_inv_lands_on_the_label_not_the_root_or(self):
+        """≥8 個單項 group 各自 group_inv：反相掛在標籤上，根 OR 樹維持純 OR。
+
+        單項 group 沒有自己的閘可以掛反相泡泡，但反相是該 group 的事，不是根 OR 的事
+        （`AnyGroup` 根本沒有 `inv` 欄位）。把泡泡掛到根 OR 等於畫成 `~(a | b)`，
+        而條件其實是 `~a | ~b`。
+        """
         deps = [f"IN_{i}" for i in range(AND_TREE_THRESHOLD)]
         cfg = PowerSeqConfig(
             rails=[
@@ -492,10 +498,15 @@ class TestCellCentricDrawio:
             and "operation=or" in (c.get("style") or "")
         ]
         assert len(or_gates) == 2
-        merge = max(or_gates, key=lambda c: float(c.find("mxGeometry").get("x")))
-        child = min(or_gates, key=lambda c: float(c.find("mxGeometry").get("x")))
-        assert "negating=1" not in (child.get("style") or "")
-        assert "negating=1" in (merge.get("style") or "")
+        assert all("negating=1" not in (c.get("style") or "") for c in or_gates)
+        labels = {
+            re.sub(r"<[^>]+>", "", c.get("value") or "").strip()
+            for c in root.iter("mxCell")
+            if c.get("vertex") == "1"
+            and (c.get("style") or "").startswith("text;")
+            and "align=right" in (c.get("style") or "")
+        }
+        assert {f"~{n}" for n in deps} <= labels
 
     def test_multi_group_vertical_stack_same_gate_x(self):
         """Multi-group: OR is GAP right of branch column; groups share X, stack on Y."""

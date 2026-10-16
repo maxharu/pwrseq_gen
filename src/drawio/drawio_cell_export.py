@@ -52,7 +52,6 @@ from drawio.drawio_geometry import (
     _escape_xml,
     _intra_child_gate_style,
     _intra_merge_gate_style,
-    _or_gate_style,
 )
 
 LABEL_W = 100
@@ -196,8 +195,21 @@ class _Builder:
         return eid
 
 
+@dataclass
+class _GroupPlan:
+    """一個 group 要怎麼畫：閘的種類（`op`）、整組要不要反相（`inv`）、以及輸入項。
+
+    `op` / `inv` 跟著樹一起傳下去，而不是讓版面那層拿 group 索引回查 `PowerRail`：
+    `any_group` 會丟掉畫不出來的整組，丟掉之後索引就對不回原始模型了。
+    """
+
+    op: str
+    inv: bool
+    terms: list[_Term]
+
+
 class _DrawioCond(CondVisitor):
-    """把 CondTree 渲染成閘輸入的 `_Term`。
+    """把 CondTree 渲染成每個 group 的 `_GroupPlan`。
 
     畫不出來的葉節點一律回 None，由 `group` 濾掉：常數不需要閘輸入、不在 config 裡的
     依賴沒有對應元件、Force 條件則整個不畫。
@@ -220,14 +232,21 @@ class _DrawioCond(CondVisitor):
     def invert(self, operand: _Term | None) -> _Term | None:
         if operand is None:
             return None
+        if operand.text.startswith("~"):
+            # ¬¬A = A：單項 group 的整組反相會疊在單項 inv 上，不摺掉就會畫出 `~~A`
+            return _Term(operand.text[1:], operand.is_cond)
         return _Term(f"~{operand.text}", operand.is_cond)
 
-    def group(self, op: str, items: list[_Term | None], inv: bool) -> list[_Term]:
-        # intra_op / group_inv 決定的是閘的種類（AND/NAND、OR/NOR），由版面那層處理
-        return [t for t in items if t is not None]
+    def group(self, op: str, items: list[_Term | None], inv: bool) -> _GroupPlan:
+        terms = [t for t in items if t is not None]
+        if inv and len(terms) == 1:
+            # 只剩一項時沒有 merge 閘可以掛反相泡泡，而且 ¬(op(A)) 對 and/or/xor 都等於 ¬A，
+            # 所以把反相下推到該項的標籤（`~` 前綴，與單項 inv 同一套畫法）。
+            return _GroupPlan(op, False, [self.invert(terms[0])])
+        return _GroupPlan(op, inv, terms)
 
-    def any_group(self, groups: list[list[_Term]]) -> list[list[_Term]]:
-        return [g for g in groups if g]
+    def any_group(self, groups: list[_GroupPlan]) -> list[_GroupPlan]:
+        return [g for g in groups if g.terms]
 
 
 class _CondSignalKeys(CondVisitor):
@@ -369,7 +388,7 @@ def _parse_path_group_terms(
     hl: str,
     name_to_rail: dict[str, PowerRail],
     valid: set[str],
-) -> list[list[_Term]]:
+) -> list[_GroupPlan]:
     tree = resolve_condition(rail, hl, name_to_rail)
     if not isinstance(tree, AnyGroup):
         return []  # 完全沒有 group（條件退化成常數），沒有閘要畫
@@ -395,7 +414,7 @@ def _path_horizontal_gate_width(
     parsed = _parse_path_group_terms(rail, hl, name_to_rail, valid)
     if not parsed:
         return 0
-    intra = max(_intra_group_gate_width(t) for t in parsed)
+    intra = max(_intra_group_gate_width(p.terms) for p in parsed)
     if len(parsed) < 2:
         return intra
     or_cols = _or_columns(len(parsed))
@@ -579,14 +598,13 @@ def _place_gate(
 
 def _wire_and_branch(
     b: _Builder,
-    rail: PowerRail,
     hl: str,
-    terms: list[_Term],
-    gi: int,
+    plan: _GroupPlan,
     deb_anchor_y: float,
     attach_right: float,
 ) -> tuple[str, float]:
     """Wire one group (intra AND/OR/XOR); attach_right is the right edge to abut."""
+    terms = plan.terms
     if len(terms) == 1:
         # Direct label→Deb: same clearance as gate output→Cell (GATE_CELL_GAP only).
         label_right = attach_right
@@ -597,7 +615,7 @@ def _wire_and_branch(
         return lid, label_x
 
     gy = deb_anchor_y - AND_GATE_H / 2
-    merge_style = _intra_merge_gate_style(rail, hl, gi)
+    merge_style = _intra_merge_gate_style(plan.op, plan.inv)
 
     if len(terms) < AND_TREE_THRESHOLD:
         gid, gx = _place_gate(b, attach_right, gy, AND_GATE_W, AND_GATE_H, merge_style)
@@ -621,7 +639,7 @@ def _wire_and_branch(
         gy,
         AND_GATE_W,
         AND_GATE_H,
-        _intra_child_gate_style(rail, hl, gi),
+        _intra_child_gate_style(plan.op),
     )
 
     left_label_x = child_gx - GAP - LABEL_W
@@ -643,8 +661,6 @@ def _wire_and_branch(
 
 def _wire_or_fanin(
     b: _Builder,
-    rail: PowerRail,
-    hl: str,
     branch_ids: list[str],
     deb_id: str,
     deb_anchor_y: float,
@@ -652,13 +668,17 @@ def _wire_or_fanin(
     stroke: str,
     edge_val: str,
 ) -> None:
-    """Wire OR groups: single OR, or 2-level tree (child OR → merge OR/NOR)."""
+    """Wire OR groups: single OR, or 2-level tree (child OR → merge OR).
+
+    根閘永遠是 OR：`AnyGroup` 沒有 `inv` 欄位，沒有任何資料能讓它變成 NOR。整組反相是
+    `Group` 的事，畫在該組自己的閘（或單項時的標籤）上。
+    """
     if len(branch_ids) == 1:
         b.edge(branch_ids[0], deb_id, stroke=stroke, value=edge_val)
         return
 
     gy = deb_anchor_y - OR_GATE_H / 2
-    merge_style = _or_gate_style(rail, hl)
+    merge_style = _GATE_STYLE_OR
 
     if len(branch_ids) < AND_TREE_THRESHOLD:
         or_id, _ = _place_gate(b, gate_right, gy, OR_GATE_W, OR_GATE_H, merge_style)
@@ -667,7 +687,7 @@ def _wire_or_fanin(
         b.edge(or_id, deb_id, stroke=stroke, value=edge_val)
         return
 
-    # 2-level: child OR (left) → merge OR/NOR (right); invert only at merge when NOR.
+    # 2-level: child OR (left) → merge OR (right).
     mid = (len(branch_ids) + 1) // 2
     left_ids, right_ids = branch_ids[:mid], branch_ids[mid:]
 
@@ -706,7 +726,7 @@ def _wire_path_v2(
     stroke = STROKE_HI if hl == "hi" else STROKE_LO
     gate_right = cell_x - GATE_CELL_GAP
 
-    parsed_groups: list[list[_Term]] = _parse_path_group_terms(
+    parsed_groups: list[_GroupPlan] = _parse_path_group_terms(
         rail, hl, name_to_rail, valid
     )
 
@@ -724,7 +744,8 @@ def _wire_path_v2(
 
     branch_ids: list[str] = []
     stack_edge: float | None = None
-    for gi, terms in enumerate(parsed_groups):
+    for gi, plan in enumerate(parsed_groups):
+        terms = plan.terms
         if gi == 0:
             anchor_y = deb_anchor_y
         elif hl == "hi":
@@ -737,9 +758,7 @@ def _wire_path_v2(
             anchor_y = stack_edge + above
 
         attach = branch_attach if multi_group else gate_right
-        out_id, _ = _wire_and_branch(
-            b, rail, hl, terms, gi, anchor_y, attach
-        )
+        out_id, _ = _wire_and_branch(b, hl, plan, anchor_y, attach)
         branch_ids.append(out_id)
 
         above, below = _group_vertical_extents(hl, len(terms))
@@ -755,8 +774,6 @@ def _wire_path_v2(
     if multi_group:
         _wire_or_fanin(
             b,
-            rail,
-            hl,
             branch_ids,
             deb_id,
             deb_anchor_y,

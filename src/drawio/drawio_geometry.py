@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 
-from core.config_models import PowerRail, parse_pulse_period
+from core.config_models import parse_pulse_period
 from core.constants import DEP_HIGH, DEP_LOW
 from core.group_logic import normalize_intra_op
 from core.paths import reference_dir
@@ -173,55 +173,18 @@ _INTRA_NEG = {
 }
 
 
-def _get_intra_op(r: PowerRail, hl: str, gi: int) -> str:
-    if hl == "hi":
-        return r.get_hi_intra_op(gi)
-    return r.get_lo_intra_op(gi)
+def _intra_child_gate_style(op: str) -> str:
+    """2-level tree 左側 child 閘（不反相；整組反相一律掛在 merge 閘上）。"""
+    return _INTRA_POS[normalize_intra_op(op)]
 
 
-def _group_output_not(r: PowerRail, hl: str, gi: int) -> bool:
-    """整組結果反相（group_inv）→ 繪製 negating 閘。"""
-    groups = r.get_hi_groups() if hl == "hi" else r.get_lo_groups()
-    if gi >= len(groups) or len(groups[gi]) < 2:
-        return False
-    return r.get_hi_group_inv(gi) if hl == "hi" else r.get_lo_group_inv(gi)
+def _intra_merge_gate_style(op: str, inv: bool) -> str:
+    """Group 內 merge 閘；整組反相時用 negating 閘。
 
-
-def _or_output_not(r: PowerRail, hl: str) -> bool:
-    """OR 路徑（≥2 group）且每組皆單一依賴、全部 group_inv → 繪製 NOR（negating=1）。"""
-    groups = r.get_hi_groups() if hl == "hi" else r.get_lo_groups()
-    if len(groups) < 2:
-        return False
-    if any(len(g) >= 2 for g in groups):
-        return False
-    get_inv = r.get_hi_group_inv if hl == "hi" else r.get_lo_group_inv
-    return all(get_inv(gi) for gi in range(len(groups)))
-
-
-def _intra_child_gate_style(r: PowerRail, hl: str, gi: int) -> str:
-    """2-level tree 左側 child 閘（不反相）。"""
-    op = normalize_intra_op(_get_intra_op(r, hl, gi))
-    return _INTRA_POS[op]
-
-
-def _intra_merge_gate_style(r: PowerRail, hl: str, gi: int) -> str:
-    """Group 內 merge 閘；group_inv 時用 negating 閘。"""
-    op = normalize_intra_op(_get_intra_op(r, hl, gi))
-    if _group_output_not(r, hl, gi):
-        return _INTRA_NEG[op]
-    return _INTRA_POS[op]
-
-
-def _and_gate_style(r: PowerRail, hl: str, gi: int) -> str:
-    """相容別名：intra merge 閘 style。"""
-    return _intra_merge_gate_style(r, hl, gi)
-
-
-def _or_gate_style(r: PowerRail, hl: str) -> str:
-    """OR 或 NOR；2-level tree 時僅 merge 層用此 style，child 恆為 OR。"""
-    if _or_output_not(r, hl):
-        return _GATE_STYLE_NOR
-    return _GATE_STYLE_OR
+    `op` / `inv` 由 `CondTree` 的 `Group` 節點直接帶進來，不再用 group 索引回查原始模型
+    ——`_DrawioCond` 會丟掉畫不出來的整組，索引對不回去。
+    """
+    return (_INTRA_NEG if inv else _INTRA_POS)[normalize_intra_op(op)]
 
 
 def _escape_xml(s: str) -> str:

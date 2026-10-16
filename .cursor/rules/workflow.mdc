@@ -1,0 +1,53 @@
+---
+description: pwrseq_gen 的開發流程：釐清→紅測試→最小實作→ci.bat 全綠→文件同步→commit/push，以及黃金輸出更新規則
+alwaysApply: false
+---
+
+# pwrseq_gen 開發流程
+
+## 1. 動手前
+
+- 需求不清楚先問（`.cursor/rules/clarify-before-acting.mdc`）。多種合理解讀時列選項，不要默默選一個。
+- 把任務轉成**可驗證目標**：「加驗證」→「為無效輸入寫測試，再讓它通過」；「修 bug」→「先寫重現測試」。
+- 多步驟先列簡短計畫，每步附 verify 方式。
+- 先查 `ROADMAP.md`（標「已完成」的決策不要退回）與 `doc/FUTURE.md`（只列未實作項），避免重做已完成的工作。
+- 動到特定子系統時先讀對應 skill：`.cursor/skills/drawio-placement/`、`drawio-routing/`、`excel-template/`、`schemdraw/`；時序語意另見 `.cursor/rules/timing-sim-behavior.mdc`；圖層／通道術語見 `.cursor/rules/pwrseq-terminology.mdc`。
+
+## 2. 實作
+
+- 先讓測試紅，再寫最小實作到綠。測試分層與注入退化的做法見 `tester` subagent。
+- 範圍紀律：每一行變更都要追溯到需求。不順手重構、不美化鄰近程式、不刪無關死碼（提一句即可）。只清掉**因本次變更**而產生的孤兒 import／變數。
+- 既有不變量（套件邊界、相依方向、條件語意單一來源、匯出 validate 閘）見 `.cursor/rules/project-standards.mdc`。
+
+## 3. 驗證
+
+```bat
+ci.bat
+```
+
+= `python -m ruff check .` + `python -m pytest -q`。`.github/workflows/ci.yml` 直接呼叫同一支，所以本地與 CI 不可能跑到不同指令。**push / 開 PR 前必須全綠。**
+
+- 單檔迭代：`python -m pytest tests/test_xxx.py -q`（`pythonpath = ["src"]` 已在 `pyproject.toml` 設好）。但宣告完成前要跑完整 `ci.bat`。
+- 測試需要 Tk 時用 `conftest.py` 的 session 級 `ctk_root` fixture（這個環境下一個 process 只能可靠建立一次 Tk root）。
+- 黃金輸出變更：先審 diff 並確認是預期的，再用 `PWRSEQ_UPDATE_GOLDEN=1 python -m pytest tests/test_golden_exports.py` 重生，並在回報中逐處說明來由。**不得為了讓測試變綠而更新基準。**
+- 若變更**不該**影響輸出，就要證明 `tests/golden/` 零變動。
+
+## 4. 文件同步（與程式同一 commit）
+
+- `README.md`：功能、套件邊界、專案結構、開發指令。
+- `ROADMAP.md`：架構決策落地後補「落地結果」；刻意的行為變更必須寫在這裡。
+- `doc/FUTURE.md`：**只列尚未實作**的項目，做完就移除（留著會害下一個人重做）。
+- `.cursor/skills/*`：改到 Draw.io 版面／走線、Excel 範本、Schemdraw 匯出時同步對應 skill。
+- 要 push / 開 PR / 發布前，依 `github-upload-docs-sync` skill 稽核文件與程式是否一致；不一致先更新文件再 push。
+
+## 5. Commit 與 push
+
+- 唯一長期分支是 `main`（`origin/main`）。
+- Commit 訊息沿用 Conventional Commits + 繁體中文描述，例：`refactor(gui): 條件編輯器與節點清單的編輯邏輯抽成 core 純資料模型`、`fix(drawio): ...`、`test: ...`、`docs: ...`、`ci: ...`。
+- 便捷腳本 `git_push.bat` 會 `git add .` → commit → `git push origin main`；它**不會**跑 CI，用它之前自己先跑 `ci.bat`。
+- 不要把 `output/` 、`doc/` 、客戶專有檔案（`.gitignore` 末段列的 X15 檔）加入版控。
+- 使用者只說「本地 commit」時，不必做完整文件稽核。
+
+## 6. 回報
+
+說明改了什麼、為什麼、哪支測試證明有效、注入退化的結果，以及**發現但未處理**的問題。無法從程式或文件確認的規範，標為**待確認**，不要自行假設。

@@ -162,7 +162,7 @@ def test_sim_bare_uses_the_empty_condition_defaults():
 
 def _drawio_groups(rail_name, hl):
     parsed = _parse_path_group_terms(NAME_TO_RAIL[rail_name], hl, NAME_TO_RAIL, set(NAME_TO_RAIL))
-    return [[(t.text, t.is_cond) for t in group] for group in parsed]
+    return [[(t.text, t.is_cond) for t in group.terms] for group in parsed]
 
 
 def test_drawio_drops_undrawable_terms_and_empty_groups():
@@ -171,8 +171,9 @@ def test_drawio_drops_undrawable_terms_and_empty_groups():
         # 第 1 組：準位（帶 ~）+ 條件訊號
         [("~IN_DEB", False), ("base_hi", True)],
         # 第 2 組只有反相常數 → 整組消失；第 3 組的 BASE use=force 與 __LOW__ 也被丟掉，
-        # IN_RAW 雖然帶 use=hi 但它是 input，退化為準位
-        [("IN_RAW", False)],
+        # IN_RAW 雖然帶 use=hi 但它是 input，退化為準位。只剩一項時沒有 merge 閘可以掛
+        # 整組反相的泡泡，所以 group_inv 下推到標籤變成 ~IN_RAW。
+        [("~IN_RAW", False)],
     ]
     assert _drawio_groups("MIXED", "lo") == [[("base_lo", True)], [("IN_RAW", False)]]
     assert _drawio_groups("LEGACY", "hi") == [[("~base_lo", True), ("IN_RAW", False)]]
