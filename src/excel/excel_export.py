@@ -16,6 +16,7 @@ try:
 except ImportError as e:
     raise ImportError("Excel export requires openpyxl: pip install openpyxl") from e
 
+from core.config_edit import group_rails_into_nodes
 from core.config_models import (
     DEFAULT_PULSE,
     PowerRail,
@@ -181,37 +182,47 @@ def _write_config(ws, config: PowerSeqConfig, scenario: TimingScenario) -> None:
     _set_config_value(ws, "timing_hscale", scenario.hscale)
 
 
+NODES_END_COL = 11  # 10 物理欄 + 第 11 欄 Width/Bits
+
+
 def _write_nodes(ws, rails: list[PowerRail]) -> None:
     apply_nodes_sheet_header_rows(ws)
-    _clear_data_area(ws, 10, new_row_count=len(rails))
-    for i, rail in enumerate(rails):
+    # vector 的連續 bit 收合成一列：名稱取 group_base、Width 欄=寬度，共用物理取 head(bit0)。
+    nodes = group_rails_into_nodes(rails)
+    _clear_data_area(ws, NODES_END_COL, new_row_count=len(nodes))
+    for i, node in enumerate(nodes):
+        head = node[0]
         r = DATA_START_ROW + i
-        fill = INPUT_FILL if rail.seq_type == "input" else OUTPUT_FILL
-        if rail.seq_type == "input":
+        fill = INPUT_FILL if head.seq_type == "input" else OUTPUT_FILL
+        node_name = head.group_base if head.group_base is not None else head.name
+        width = head.width_expr if head.group_base is not None else None
+        if head.seq_type == "input":
             values = (
-                rail.name,
+                node_name,
                 "Input",
-                rail.deb_cycle_hi,
-                rail.deb_cycle_lo,
+                head.deb_cycle_hi,
+                head.deb_cycle_lo,
                 None,
-                rail.deb_init,
+                head.deb_init,
                 None,
-                rail.pulse_hi,
-                rail.pulse_lo,
-                rail.deb_pulse,
+                head.pulse_hi,
+                head.pulse_lo,
+                head.deb_pulse,
+                width,
             )
         else:
             values = (
-                rail.name,
+                node_name,
                 "Output",
-                rail.cycle_hi,
-                rail.cycle_lo,
-                rail.cycle_force,
-                rail.init,
-                rail.force_val,
-                rail.pulse_hi,
-                rail.pulse_lo,
-                rail.pulse_force,
+                head.cycle_hi,
+                head.cycle_lo,
+                head.cycle_force,
+                head.init,
+                head.force_val,
+                head.pulse_hi,
+                head.pulse_lo,
+                head.pulse_force,
+                width,
             )
         for c, val in enumerate(values, start=1):
             cell = ws.cell(r, c, value=val)

@@ -374,3 +374,63 @@ matplotlib SVG metadata 含日期不穩定，只驗有寫出、非空）。`EXPE
 比對用的是同一把尺，否則 `_collect_config` 補預設／清空 `timing_scenario` 造成的差異會讓
 undo 回到載入狀態時 dirty 誤判。`_saving` 改走 `begin_save()` 的原子 check-and-set，比原本
 「先讀旗標、collect、再設旗標」少一個 collect 失敗會卡住存檔鎖的窗口。
+
+---
+
+## 已完成（vector 節點 + parameter 宣告）
+
+這一輪是**功能擴充**，不是技術債清理，但沿用同一條安全網原則：每階段先紅測試 →
+最小實作 → `ci.bat` 全綠；**無 vector / 無 parameter 的既有 config 產生的黃金輸出
+（`tests/golden/`）byte 全程不變**，`cond_ir` 與五個後端的條件語意一行未動。
+
+### A 區：vector 核心
+
+- **A1 身份／條件分層** — `PowerRail` 是 god object，身份與條件混在一起。抽出
+  `ConditionConfig` 收 `depends_on_{hi,lo,force}_*` 與 `get_*` 存取器，`PowerRail` 改組合
+  `cond: ConditionConfig` 並以 `@property` 委派所有既有屬性／方法，使 `cond_ir`、五後端、
+  excel、widgets **呼叫點零改動**。等價證明：`tests/golden/` byte 不變 + 委派漏接欄位的注入退化轉紅。
+- **A2 vector 模型／序列化** — 新增 `VectorNode`（`base` / `seq_type` / `width_expr` 字串 /
+  每 bit `ConditionConfig`）與 `elaborate()` → N 個 `PowerRail`（`base[i]`）；`PowerRail` 加群組
+  metadata（`group_base` / `bit_index` / `width_expr`）。`to_dict` 收合同群組成一筆、`from_dict`
+  展開。相容舊 JSON（無群組 = width 1）。
+- **A3 命名／驗證** — `naming.safe_name` 處理 `[]`（`FOO[2]`→`FOO_2`）；`validator` 新增展開後
+  identifier 撞名與 width 正整數檢查。
+- **A4 群組批次** — `PowerSeqConfig` 整組 rename（base 改名 → 所有 bit + 全部引用更新）與整組
+  刪除／搬移；`core/config_edit.py` 的 `next_rail_name` / `delete_indices` / `move_item` 支援群組。
+
+### B 區：vector 產出／介面
+
+- **B5 產生器（整數寬度）** — Verilog 遇群組 rail 只在 bit 0 收合輸出一條 bus（`[k-1:0]` +
+  加寬 wire + 單一 `PSEQCELL` / `DEB` `WIDTH=k`），body assign 先用 bit 0 的條件代表整條 bus；
+  C 逐 rail 自然產生 N 個 `pwrcell`（零結構改動）。
+- **B6 vector GUI（卡片內分頁）** — 每張節點卡片頂部 `[宣告|條件]` 分段鈕；宣告頁＝身份＋物理
+  參數（含 Vector 勾選 + width 欄位），條件頁＝逐 bit（vector 顯示 Bit 選擇器）。左欄
+  `NodeListPanel` 維持一列一 Node（vector 不展開），加 `base [×N]` 標記；三區各自加可收合標題。
+- **B7 Excel vector** — Nodes sheet 加 `Width/Bits` 欄（key `width`），`excel_import` / `excel_export`
+  支援 vector 收合／展開，Conditions 以 bit 名 `base[i]` 引用。
+
+### C 區：parameter 層
+
+- **C8 資料 + eval_width** — 新增 `Parameter(name, value)` 與有序的 `PowerSeqConfig.parameters`
+  （`to_dict` 僅非空時輸出該鍵、舊檔 → 空清單）；`core/param_expr.py` 的 `eval_width(expr, parameters)`
+  用 **ast 白名單**求值（整數字面、已宣告 parameter 名、`+ - * //`、括號、一元正負；拒 `**` / float /
+  bool / 未宣告名 / `__import__`，**不碰 `eval()`**）。`ParamExprError(ValueError)` 讓既有
+  `except ValueError` 呼叫者照舊接住。`from_dict` 展開群組改走帶 parameters 的 `eval_width`，
+  `width_expr` 可為公式；公式字串本身原樣保留。
+- **C9 產生器宣告** — Verilog「Parameter Declare」段輸出對齊的 `#(parameter NAME = VAL, ...)`
+  （無則沿用 `//    No parameters` 佔位）；群組寬度符號化：整數 `[k-1:0]` / `.WIDTH(k)`、公式
+  `[(EXPR)-1:0]` / `.WIDTH((EXPR))`。C 檔頭（`#include` 後、struct 前）輸出 `#define` 區塊
+  （無 parameter 不輸出；body 仍用展開後的具體 N）。
+- **C10 驗證** — parameter 名需為合法識別子、不重複、值為正整數；width 公式僅能引用已宣告
+  parameter 且 `eval_width > 0`，未宣告 → 判為無效寬度。訊息沿用 `'<name>'` 可點擊跳轉格式。
+- **C11 parameter GUI** — 新增 `ParameterPanel`（比照 `PulsePanel` 的 name=value 清單、可收合，
+  置左欄 Timing Signals 上方），接進 `app.py`（存 `config.parameters`、觸發 dirty 與重算；值變更時
+  以 `to_dict`/`from_dict` round-trip 重算受影響群組的展開 N，無效 width 交 validator 回報不中斷 UI）。
+  `RailEditorFrame` 的 width 欄位改接受公式（`_parse_width` 走 `eval_width`、失敗回退整數）、
+  `get_rails` 保留 `width_expr` 符號字串，並加「插入 parameter」下拉。
+
+### 刻意延後（走乙，見 `doc/FUTURE.md`）
+
+body 維持在「Verilog bit 0 代表整條 bus／C 逐 bit 攤平成 N 份獨立結構」的最小可行狀態。
+真正的 **body 迴圈化**（Verilog `generate` 迴圈做真 per-bit 條件渲染、C 改用陣列 + 迴圈）
+會改變既有 vector 的輸出形狀，屬於獨立一輪，記在 `doc/FUTURE.md`。

@@ -6,7 +6,8 @@
 
 ## 功能
 
-- **節點編輯**：Input／Output 節點、Hi／Lo／Force 三段條件、群組內 AND／OR／XOR 運算、debounce 設定。
+- **節點編輯**：Input／Output 節點、Hi／Lo／Force 三段條件、群組內 AND／OR／XOR 運算、debounce 設定；
+  **vector 節點**（一個 base 展開成 N 個 bit、每 bit 條件獨立）與 **parameter**（具名整數常數，vector 寬度可用公式引用）。
 - **程式碼產生**：
   - Verilog（`verilog_generator.py`）
   - C（`c_generator.py`）
@@ -83,9 +84,10 @@ Verilog／C／Draw.io／Schemdraw 的匯出一律經 `pipeline.export`：先 `va
 src/
   main.py                  進入點（設定 DPI 後啟動 GUI）
   core/                    資料模型與共用基礎
-    config_models.py         PowerSeqConfig / PowerRail、pulse 名稱解析
+    config_models.py         PowerSeqConfig / PowerRail / ConditionConfig / VectorNode / Parameter、pulse 名稱解析
+    param_expr.py            width 公式求值（eval_width，ast 白名單；整數或引用 parameter）
     timing_models.py         InputWaveSpec / TimingScenario
-    naming.py                safe_name / internal_sig
+    naming.py                safe_name / internal_sig（含 vector bit 名 FOO[2]→FOO_2）
     constants.py             DEP_HIGH / DEP_LOW
     cond_ir.py               條件語意唯一來源：resolve_condition → CondTree
     cond_edit.py             條件編輯器的純資料模型（新增／刪除／拖放重排）
@@ -115,6 +117,23 @@ tests/                   pytest 測試（邏輯層）
 scripts/                 範本／資產產生腳本（依賴 src/，反向不成立）
 templates/               Excel／Draw.io／時序圖範本與資產
 ```
+
+## 資料模型與相容性
+
+- **身份／條件分層**：`PowerRail` 只保留身份（`name` / `seq_type` / `pulse_*` / `cycle_*` / `deb_*` / `init` / `force_val`），
+  條件（`depends_on_{hi,lo,force}_*` 與對應 `get_*` 存取器）收進 `ConditionConfig`，`PowerRail` 以 `@property`
+  委派，呼叫點、`cond_ir` 與五個後端零改動。
+- **Vector 節點**：`VectorNode`（`base` / `seq_type` / `width_expr` 字串 / 每 bit 的 `ConditionConfig`）的 `elaborate()`
+  依 `eval_width(width_expr)` 展開成 N 個獨立 `PowerRail`（canonical 名 `base[i]`），每個帶群組 metadata
+  （`group_base` / `bit_index` / `width_expr`）。config 以**扁平 rails + 群組 metadata** 保存：`to_dict` 把同群組收合成
+  一筆（保留 `width_expr` 字串）、`from_dict` 以 `eval_width(width_expr, parameters)` 展開。Verilog 把群組收合成一條 bus
+  （`[k-1:0]` 或公式 `[(EXPR)-1:0]` + 單一 `PSEQCELL WIDTH`），C 逐 rail 展成 N 個 `pwrcell`。
+- **Parameter**：`PowerSeqConfig.parameters` 是有序的 `Parameter(name, value)` 清單；vector 寬度公式可引用
+  （Verilog 產生 `#(parameter NAME = VAL, ...)`、C 產生 `#define`）。`width_expr` 一律存字串（整數期 `"2"`、
+  公式期如 `"NUM_CPU*2"`）。
+- **舊檔相容**：`to_dict` / `from_dict` 就是存檔格式本身，無版本號、無 migration 層。舊 JSON 缺欄位一律給預設——
+  **無群組 metadata = 單一節點（`width_expr` 預設 `"1"`）**、**無 `parameters` = 空清單**；且 `to_dict` 僅在
+  `parameters` 非空時才輸出該鍵，確保無 parameter 的舊檔產生的輸出 byte 不變（由 `tests/golden/` 鎖定）。
 
 ## 術語
 

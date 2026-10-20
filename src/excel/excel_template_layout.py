@@ -27,6 +27,11 @@ def node_sheet_headers() -> list[tuple[str, str, str]]:
             "Pulse_Force / Pulse_Deb",
             "Output -> Pulse_Force;\nInput -> Pulse_Deb",
         ),
+        (
+            "width",
+            "Width/Bits",
+            "Vector width N;\nblank/1 = scalar;\nbits named base[i]",
+        ),
     ]
 
 

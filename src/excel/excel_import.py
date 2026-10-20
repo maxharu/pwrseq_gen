@@ -19,6 +19,7 @@ from core.config_models import (
     PowerRail,
     PowerSeqConfig,
     apply_input_wave_dict,
+    eval_width,
     normalize_pulse_name,
 )
 from core.constants import DEP_HIGH, DEP_LOW
@@ -31,7 +32,7 @@ COND_META_COLS = 4
 INPUT_META_COLS = 6  # input_name, cond_side, mode, wave, operation, group_inv
 COND_SIGNAL_MAX_COLS = 49
 INPUT_COND_SIGNAL_MAX_COLS = 49
-NODES_MAX_COL = 10
+NODES_MAX_COL = 11  # 10 物理欄 + 第 11 欄 Width/Bits（vector 寬度）
 OUTPUT_COND_MAX_COL = COND_META_COLS + COND_SIGNAL_MAX_COLS
 INPUT_COND_MAX_COL = INPUT_META_COLS + INPUT_COND_SIGNAL_MAX_COLS
 CONFIG_MAX_ROW = 59
@@ -335,9 +336,59 @@ def _parse_config_defaults(lookup: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_node_rail(name: str, seq_type: str, row: tuple, defaults: dict[str, Any]) -> PowerRail:
+    """由一列的物理欄位建單一 PowerRail（不含群組 metadata、不含條件）。"""
+    dp = defaults["default_pulse"]
+    cycle_hi = _cell_int(_row_val(row, 3), defaults["default_cycle_hi"])
+    cycle_lo = _cell_int(_row_val(row, 4), defaults["default_cycle_lo"])
+    cycle_force = _cell_int(_row_val(row, 5), defaults["default_cycle_force"])
+    init = _cell_int(_row_val(row, 6), defaults["default_init"])
+    force_val = _cell_int(_row_val(row, 7), defaults["default_force_val"])
+    pulse_hi = normalize_pulse_name(_cell_str(_row_val(row, 8)) or dp)
+    pulse_lo = normalize_pulse_name(_cell_str(_row_val(row, 9)) or dp)
+    pulse_timing = normalize_pulse_name(_cell_str(_row_val(row, 10)) or dp)
+
+    if seq_type == "input":
+        deb_enable = cycle_hi != 0 or cycle_lo != 0
+        return PowerRail(
+            name=name,
+            seq_type="input",
+            deb_enable=deb_enable,
+            deb_init=init,
+            deb_cycle_hi=cycle_hi,
+            deb_cycle_lo=cycle_lo,
+            deb_pulse=pulse_timing,
+            pulse_hi=pulse_hi,
+            pulse_lo=pulse_lo,
+        )
+    return PowerRail(
+        name=name,
+        seq_type="output",
+        cycle_hi=cycle_hi,
+        cycle_lo=cycle_lo,
+        cycle_force=cycle_force,
+        init=init,
+        force_val=force_val,
+        pulse_hi=pulse_hi,
+        pulse_lo=pulse_lo,
+        pulse_force=pulse_timing,
+    )
+
+
+def _node_width_expr(row: tuple) -> str | None:
+    """第 11 欄 Width/Bits：空或無效整數 → None（scalar）；否則回傳整數字串（vector 寬度）。"""
+    raw = _cell_str(_row_val(row, 11))
+    if not raw:
+        return None
+    try:
+        eval_width(raw)
+    except (TypeError, ValueError):
+        return None
+    return raw
+
+
 def _parse_nodes(rows: list[tuple], defaults: dict[str, Any]) -> list[PowerRail]:
     rails: list[PowerRail] = []
-    dp = defaults["default_pulse"]
     for row in rows:
         name = _cell_str(_row_val(row, 1))
         if not name:
@@ -347,45 +398,18 @@ def _parse_nodes(rows: list[tuple], defaults: dict[str, Any]) -> list[PowerRail]
         seq_raw = _cell_str(_row_val(row, 2)).lower()
         seq_type = "input" if seq_raw == "input" else "output"
 
-        cycle_hi = _cell_int(_row_val(row, 3), defaults["default_cycle_hi"])
-        cycle_lo = _cell_int(_row_val(row, 4), defaults["default_cycle_lo"])
-        cycle_force = _cell_int(_row_val(row, 5), defaults["default_cycle_force"])
-        init = _cell_int(_row_val(row, 6), defaults["default_init"])
-        force_val = _cell_int(_row_val(row, 7), defaults["default_force_val"])
-        pulse_hi = normalize_pulse_name(_cell_str(_row_val(row, 8)) or dp)
-        pulse_lo = normalize_pulse_name(_cell_str(_row_val(row, 9)) or dp)
-        pulse_timing = normalize_pulse_name(_cell_str(_row_val(row, 10)) or dp)
-
-        if seq_type == "input":
-            deb_enable = cycle_hi != 0 or cycle_lo != 0
-            rails.append(
-                PowerRail(
-                    name=name,
-                    seq_type="input",
-                    deb_enable=deb_enable,
-                    deb_init=init,
-                    deb_cycle_hi=cycle_hi,
-                    deb_cycle_lo=cycle_lo,
-                    deb_pulse=pulse_timing,
-                    pulse_hi=pulse_hi,
-                    pulse_lo=pulse_lo,
-                )
-            )
-        else:
-            rails.append(
-                PowerRail(
-                    name=name,
-                    seq_type="output",
-                    cycle_hi=cycle_hi,
-                    cycle_lo=cycle_lo,
-                    cycle_force=cycle_force,
-                    init=init,
-                    force_val=force_val,
-                    pulse_hi=pulse_hi,
-                    pulse_lo=pulse_lo,
-                    pulse_force=pulse_timing,
-                )
-            )
+        width_expr = _node_width_expr(row)
+        if width_expr is None:
+            rails.append(_build_node_rail(name, seq_type, row, defaults))
+            continue
+        # vector：Width 欄展開成 N 個 base[i]，共用物理 + 群組 metadata（條件由 Conditions 以 bit 名填）
+        n = eval_width(width_expr)
+        for i in range(n):
+            bit = _build_node_rail(f"{name}[{i}]", seq_type, row, defaults)
+            bit.group_base = name
+            bit.bit_index = i
+            bit.width_expr = width_expr
+            rails.append(bit)
     return rails
 
 

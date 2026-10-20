@@ -29,7 +29,7 @@ COND_META_COLS = 4          # output_name, cond_type, operation, group_inv
 INPUT_META_COLS = 6         # input_name, cond_side, mode, wave, operation, group_inv
 COND_SIGNAL_MAX_COLS = 49   # validation width
 INPUT_COND_SIGNAL_MAX_COLS = 49
-NODES_MAX_COL = 10
+NODES_MAX_COL = 11          # 10 physical cols + col K `width` (Width/Bits, vector width)
 ```
 
 Sheet tabs (English) and A1 detection keys:
@@ -129,6 +129,12 @@ Registry (optional dev): `HKCU\Software\Microsoft\Office\16.0\Excel\Security\Acc
 ### Nodes → `PowerRail`
 
 Row order = rail order. Input vs Output from col B.
+
+Col K `width` (`_node_width_expr` → `eval_width`): blank/1 → scalar `PowerRail`; N>1 → **expand**
+into `base[0]..base[N-1]` with group metadata (`group_base` / `bit_index` / `width_expr`), physical
+params shared from the Nodes row, per-bit conditions resolved from the Conditions sheets by bit name.
+Export does the inverse: a vector's N bit rails **collapse** to one Nodes row (name = `group_base`,
+width = `width_expr`, physical from bit 0).
 
 ### Output Conditions → `depends_on_*`
 

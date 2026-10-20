@@ -13,9 +13,14 @@ from codegen import generate_c, generate_verilog
 from core.app_expiry import ensure_not_expired
 from core.applog import get_logger
 from core.config_edit import (
-    delete_indices,
-    move_item,
+    delete_nodes,
+    flatten_node_rails,
+    group_rails_into_nodes,
+    move_node,
     next_rail_name,
+    node_index_to_rail_span,
+    node_spans,
+    rail_index_to_node_index,
     remap_index_after_move,
 )
 from core.config_models import (
@@ -23,10 +28,9 @@ from core.config_models import (
     PowerRail,
     PowerSeqConfig,
     build_timing_scenario,
-    rail_input_wave_spec,
 )
 from core.project_session import ProjectSession
-from core.timing_models import InputWaveSpec, TimingScenario
+from core.timing_models import TimingScenario
 from core.validator import validate
 from gui.dialogs import *
 from gui.panels import *
@@ -114,6 +118,28 @@ class PowerSeqGUI(ctk.CTk):
     def _tt(self, widget, text: str):
         """Attach tooltip; keep reference to avoid GC."""
         self._tooltips.append(Tooltip(widget, text))
+
+    def _make_collapsible_header(self, parent, title: str, body_getter):
+        """左欄區塊的可收合標題：點擊切換下方 body 的 grid 顯示（預設展開）。"""
+        hdr = ctk.CTkFrame(parent, fg_color="transparent")
+        state = {"open": True}
+        arrow = ctk.CTkLabel(hdr, text="\u25BC", width=18, cursor="hand2", font=FONT_BODY)
+        arrow.pack(side="left", padx=(S_XS, S_XS))
+        lbl = ctk.CTkLabel(hdr, text=title, font=FONT_SECTION, cursor="hand2", anchor="w")
+        lbl.pack(side="left")
+
+        def _toggle(_e=None):
+            state["open"] = not state["open"]
+            arrow.configure(text="\u25BC" if state["open"] else "\u25B6")
+            body = body_getter()
+            if state["open"]:
+                body.grid()
+            else:
+                body.grid_remove()
+
+        for w in (hdr, arrow, lbl):
+            w.bind("<Button-1>", _toggle)
+        return hdr
 
     def _sep(self, parent):
         """Toolbar 視覺分隔線。
@@ -248,15 +274,13 @@ class PowerSeqGUI(ctk.CTk):
         self._paned = paned
         self._bind_paned_sash_interaction()
 
-        # left — 節點列表撐滿上方；Timing Signals 固定貼底，避免中間空白
+        # left — Nodes 撐滿上方；Timing Signals 貼底。兩區各有可收合標題（預設展開）。
+        # Parameters 區留待 C11。
         left_wrap = ctk.CTkFrame(paned, fg_color=("gray90", "gray17"), width=260)
         paned.add(left_wrap, minsize=200, stretch="never", width=260)
-        left_wrap.grid_rowconfigure(0, weight=1)
-        left_wrap.grid_rowconfigure(1, weight=0)
+        left_wrap.grid_rowconfigure(1, weight=1)  # node_list 吸收額外空間
+        left_wrap.grid_rowconfigure(3, weight=0)
         left_wrap.grid_columnconfigure(0, weight=1)
-
-        self.pulse_panel = PulsePanel(left_wrap, on_change=self._on_pulses_changed)
-        self.pulse_panel.grid(row=1, column=0, sticky="ew", padx=S_XS, pady=(0, S_SM))
 
         self.node_list = NodeListPanel(
             left_wrap, fg_color="transparent",
@@ -269,7 +293,24 @@ class PowerSeqGUI(ctk.CTk):
             on_activate=self._arm_node_list_delete,
             on_disarm=self._disarm_node_list_delete,
         )
-        self.node_list.grid(row=0, column=0, sticky="nsew", padx=S_XS, pady=(S_XS, 0))
+        self._nodes_header = self._make_collapsible_header(
+            left_wrap, "Nodes", lambda: self.node_list)
+        self._nodes_header.grid(row=0, column=0, sticky="ew", padx=S_XS, pady=(S_XS, 0))
+        self.node_list.grid(row=1, column=0, sticky="nsew", padx=S_XS, pady=(S_XS, 0))
+
+        self.parameter_panel = ParameterPanel(left_wrap, on_change=self._on_parameters_changed)
+        self._param_header = self._make_collapsible_header(
+            left_wrap, "Parameters", lambda: self.parameter_panel)
+        self._param_header.grid(row=2, column=0, sticky="ew", padx=S_XS, pady=(S_SM, 0))
+        self.parameter_panel.grid(row=3, column=0, sticky="ew", padx=S_XS, pady=(0, S_SM))
+        self.parameter_panel.entry_name.bind(
+            "<FocusIn>", lambda _e: self._disarm_node_list_delete(), add="+")
+
+        self.pulse_panel = PulsePanel(left_wrap, on_change=self._on_pulses_changed)
+        self._timing_header = self._make_collapsible_header(
+            left_wrap, "Timing Signals", lambda: self.pulse_panel)
+        self._timing_header.grid(row=4, column=0, sticky="ew", padx=S_XS, pady=(S_SM, 0))
+        self.pulse_panel.grid(row=5, column=0, sticky="ew", padx=S_XS, pady=(0, S_SM))
         self.pulse_panel.entry.bind(
             "<FocusIn>", lambda _e: self._disarm_node_list_delete(), add="+")
 
@@ -428,98 +469,86 @@ class PowerSeqGUI(ctk.CTk):
         self._redo_btn.configure(state="normal" if self._session.can_redo else "disabled")
 
     # ---- per-node Apply ----
-    def _apply_rail_frame(self, cf) -> None:
+    def _apply_node_frame(self, cf) -> None:
         """Apply by frame identity（重排後 index 仍正確）。"""
         try:
             idx = self.collapsible_frames.index(cf)
         except ValueError:
             return
-        self._apply_rail(idx)
+        self._apply_node(idx)
 
-    def _make_collapsible_rail(self, rail: PowerRail, *, expanded: bool = False):
-        """建立 CollapsibleRailFrame；on_apply 綁定 frame，不綁死 index。"""
+    def _make_collapsible_node(self, rails, *, expanded: bool = False):
+        """建立節點卡片（vector = N 個 bit rails）；on_apply 綁定 frame，不綁死 index。"""
         holder: list = []
 
         def _on_apply() -> None:
             if holder:
-                self._apply_rail_frame(holder[0])
+                self._apply_node_frame(holder[0])
 
         cf = CollapsibleRailFrame(
             self.editor_scroll,
-            rail,
+            rails,
             get_all_rails=self._get_all_rails,
             get_pulses=self._get_pulses,
             on_apply=_on_apply,
-            get_input_wave_spec=self._input_wave_spec_for,
             expanded=expanded,
+            get_parameters=self._get_parameters,
         )
         holder.append(cf)
         return cf
 
-    def _apply_rail(self, idx: int):
-        """將單一 Node 編輯器內容寫入 config；僅此時更新 header chip 與 Preview。"""
+    def _apply_node(self, idx: int):
+        """將單一節點編輯器內容寫回 config（vector 攤成 N 個 bit rails）。
+
+        base 改名時先用 A4 的 rename_group / rename_rail 更新外部引用，再把該節點的 rail 區段
+        整段換成新 rails；因此引用一致性只有一份規則（core），Tk 只負責收集與顯示。
+        """
         if idx < 0 or idx >= len(self.collapsible_frames):
             return
         cf = self.collapsible_frames[idx]
         if cf.editor is None:
             return
-
-        old_name = cf.rail.name
-        old_type = cf.rail.seq_type
-        new_name = cf.editor.entry_name.get().strip()
-        if not new_name:
+        if not cf.editor.entry_name.get().strip():
             messagebox.showwarning("Notice", "Name cannot be empty")
             return
-        if new_name != old_name and any(
-            r.name == new_name for i, r in enumerate(self.config_obj.rails) if i != idx
-        ):
-            messagebox.showerror("Error", f"Name '{new_name}' already exists")
+
+        span = node_index_to_rail_span(self.config_obj.rails, idx)
+        if span is None:
             return
+        start, old_count = span
+        old_head = self.config_obj.rails[start]
+        old_is_group = old_head.group_base is not None
+        old_base = old_head.group_base if old_is_group else old_head.name
+
+        new_rails = cf.get_rails()
+        new_base = cf.base_name()
+        others = [
+            r.name for i, r in enumerate(self.config_obj.rails)
+            if i < start or i >= start + old_count
+        ]
+        for r in new_rails:
+            if r.name in others:
+                messagebox.showerror("Error", f"Name '{r.name}' already exists")
+                return
 
         self._push_undo()
-        new_rail = cf.get_rail()
-        if new_name != old_name:
-            new_rail.name = old_name
-            self.config_obj.rails[idx] = new_rail
-            if not self.config_obj.rename_rail(old_name, new_name):
-                return
-        else:
-            self.config_obj.rails[idx] = new_rail
-
-        cf.rail = self.config_obj.rails[idx]
+        if new_base != old_base:
+            if old_is_group:
+                self.config_obj.rename_group(old_base, new_base)
+            else:
+                self.config_obj.rename_rail(old_base, new_base)
+        self.config_obj.rails[start:start + old_count] = new_rails
+        cf.rails = new_rails
         self._mark_dirty()
 
-        type_changed = old_type != cf.rail.seq_type
-        name_changed = new_name != old_name
-
-        if type_changed:
-            # type 切換會換整塊編輯器欄位，只重建該 frame
-            was_expanded = cf._expanded
-            cf.pack_forget()
-            cf.destroy()
-            new_cf = self._make_collapsible_rail(self.config_obj.rails[idx], expanded=was_expanded)
-            self.collapsible_frames[idx] = new_cf
-            self._apply_inspect_mode()
-            primary = self.node_list.get_primary()
-            self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
-            self._refresh_all_dep_options()
-            self._update_validation()
-            self._schedule_preview()
-            return
-
-        if name_changed:
-            cf.update_summary()
-            primary = self.node_list.get_primary()
-            self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
-            self._refresh_all_dep_options()
-            self._update_validation()
-            self._schedule_preview()
-            return
-
-        cf.editor.rail = cf.rail
         cf.update_summary()
+        primary = self.node_list.get_primary()
+        self.node_list.set_nodes(
+            group_rails_into_nodes(self.config_obj.rails), primary_idx=primary)
+        self._refresh_all_dep_options()
         self._update_validation()
         self._schedule_preview()
+        self._update_stats()
 
     def _timing_globals_from_toolbar(self) -> tuple[int, int]:
         return self.preview.get_timing_globals()
@@ -540,7 +569,7 @@ class PowerSeqGUI(ctk.CTk):
 
     # ---- collect ----
     def _collect_config(self) -> PowerSeqConfig:
-        rails = [cf.rail for cf in self.collapsible_frames]
+        rails = flatten_node_rails(cf.get_rails() for cf in self.collapsible_frames)
         self.config_obj.rails = rails
         steps, hscale = self._timing_globals_from_toolbar()
         has_input = any(r.seq_type == "input" for r in rails)
@@ -556,14 +585,12 @@ class PowerSeqGUI(ctk.CTk):
             clock_freq_mhz=self.config_obj.clock_freq_mhz,
             pulse_period_ns=self.config_obj.pulse_period_ns,
             pulses=getattr(self.config_obj, "pulses", None) or [DEFAULT_PULSE],
+            parameters=list(getattr(self.config_obj, "parameters", None) or []),
             timing_scenario=timing_scenario,
         )
 
-    def _input_wave_spec_for(self, rail_name: str) -> InputWaveSpec:
-        for r in self.config_obj.rails:
-            if r.name == rail_name and r.seq_type == "input":
-                return rail_input_wave_spec(r)
-        return InputWaveSpec(hi_mode="depends", lo_mode="constant_0")
+    def _get_parameters(self) -> list:
+        return list(getattr(self.config_obj, "parameters", None) or [])
 
     def _get_pulses(self) -> list[str]:
         return getattr(self.config_obj, "pulses", None) or [DEFAULT_PULSE]
@@ -579,11 +606,11 @@ class PowerSeqGUI(ctk.CTk):
 
     # ---- refresh ----
     def _refresh_all(self):
-        # 收集當前 expanded 集合，refresh 後保留
+        # 收集當前 expanded 集合（以 base 名為鍵），refresh 後保留
         prev_expanded: set[str] = set()
         for cf in self.collapsible_frames:
             if cf._expanded:
-                prev_expanded.add(cf.rail.name)
+                prev_expanded.add(cf.base_name())
 
         # validation / preview 會 _collect_config()，須先讓 preview timing 與 config 一致
         self._sync_timing_toolbar_from_config()
@@ -591,14 +618,17 @@ class PowerSeqGUI(ctk.CTk):
         for w in self.editor_scroll.winfo_children():
             w.destroy()
         self.collapsible_frames = []
-        for r in self.config_obj.rails:
-            is_expanded = r.name in prev_expanded
-            cf = self._make_collapsible_rail(r, expanded=is_expanded)
+        nodes = group_rails_into_nodes(self.config_obj.rails)
+        for node in nodes:
+            head = node[0]
+            base = head.group_base if head.group_base is not None else head.name
+            cf = self._make_collapsible_node(node, expanded=base in prev_expanded)
             # pack 由 _apply_inspect_mode 統一處理（避免 inspect toggle 後順序錯亂）
             self.collapsible_frames.append(cf)
 
         primary = self.node_list.get_primary()
-        self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
+        self.node_list.set_nodes(nodes, primary_idx=primary)
+        self.parameter_panel.set_parameters(self._get_parameters())
         self.pulse_panel.set_pulses(self._get_pulses())
         self._apply_inspect_mode()
         self._update_validation()
@@ -612,11 +642,8 @@ class PowerSeqGUI(ctk.CTk):
             cf.pack_forget()
         if self._inspect_mode:
             primary = self.node_list.get_primary()
-            primary_name = None
-            if primary is not None and 0 <= primary < len(self.config_obj.rails):
-                primary_name = self.config_obj.rails[primary].name
-            for cf in self.collapsible_frames:
-                if primary_name is not None and cf.rail.name == primary_name:
+            for i, cf in enumerate(self.collapsible_frames):
+                if primary is not None and i == primary:
                     cf.pack(fill="x", pady=S_XS, padx=S_XS)
                     cf.expand()
         else:
@@ -635,16 +662,16 @@ class PowerSeqGUI(ctk.CTk):
         self.after(50, lambda: self._scroll_to_widget(cf))
 
     def _on_node_reordered(self, from_idx: int, to_idx: int):
-        if not (0 <= from_idx < len(self.config_obj.rails)):
-            return
-        if not (0 <= to_idx < len(self.config_obj.rails)):
+        n = len(self.collapsible_frames)
+        if not (0 <= from_idx < n) or not (0 <= to_idx < n):
             return
         self._push_undo()
         # 重排前先 collect 一次，避免改順序時遺失目前 widget 內未提交的編輯
         self.config_obj = self._collect_config()
-        if not move_item(self.config_obj.rails, from_idx, to_idx):
+        if not move_node(self.config_obj.rails, from_idx, to_idx):
             return
-        move_item(self.collapsible_frames, from_idx, to_idx)
+        cf = self.collapsible_frames.pop(from_idx)
+        self.collapsible_frames.insert(to_idx, cf)
         self._mark_dirty()
 
         # 左側列表重建便宜；中間編輯器只改 pack 順序，不 destroy
@@ -656,7 +683,8 @@ class PowerSeqGUI(ctk.CTk):
             for i in self.node_list.get_selection()
             if (remapped := remap_index_after_move(i, from_idx, to_idx)) is not None
         }
-        self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
+        self.node_list.set_nodes(
+            group_rails_into_nodes(self.config_obj.rails), primary_idx=primary)
         self.node_list._selected = selected
         self.node_list._apply_row_bgs()
         self.node_list.on_multi_change(set(selected))
@@ -696,11 +724,12 @@ class PowerSeqGUI(ctk.CTk):
         name = next_rail_name([r.name for r in self.config_obj.rails])
         rail = PowerRail(name=name, seq_type="output")
         self.config_obj.rails.append(rail)
-        cf = self._make_collapsible_rail(rail, expanded=True)
+        cf = self._make_collapsible_node([rail], expanded=True)
         self.collapsible_frames.append(cf)
         self._mark_dirty()
-        primary = len(self.config_obj.rails) - 1
-        self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
+        primary = len(self.collapsible_frames) - 1
+        self.node_list.set_nodes(
+            group_rails_into_nodes(self.config_obj.rails), primary_idx=primary)
         self.node_list._selected = {primary}
         self.node_list._apply_row_bgs()
         self._apply_inspect_mode()
@@ -717,13 +746,14 @@ class PowerSeqGUI(ctk.CTk):
             return
         self._push_undo()
         self.config_obj = self._collect_config()
-        for i in delete_indices(self.config_obj.rails, selection):
-            cf = self.collapsible_frames.pop(i)
+        for ni in delete_nodes(self.config_obj.rails, selection):
+            cf = self.collapsible_frames.pop(ni)
             cf.pack_forget()
             cf.destroy()
         self.node_list.clear_selection()
         self._mark_dirty()
-        self.node_list.set_rails(self.config_obj.rails, primary_idx=None)
+        self.node_list.set_nodes(
+            group_rails_into_nodes(self.config_obj.rails), primary_idx=None)
         self._apply_inspect_mode()
         self._refresh_all_dep_options()
         self._update_validation()
@@ -739,23 +769,28 @@ class PowerSeqGUI(ctk.CTk):
             return
         self._push_undo()
         self.config_obj = self._collect_config()
-        for i in selection:
-            if 0 <= i < len(self.config_obj.rails):
-                self.config_obj.rails[i].seq_type = new_type
+        spans = node_spans(self.config_obj.rails)
+        for ni in selection:
+            if 0 <= ni < len(spans):
+                start, count = spans[ni]
+                for r in self.config_obj.rails[start:start + count]:
+                    r.seq_type = new_type
         self._mark_dirty()
-        # type 變更需重建受影響的編輯器欄位；只重建選中項
-        for i in sorted(selection):
-            if not (0 <= i < len(self.collapsible_frames)):
+        # type 變更需重建受影響的編輯器欄位；只重建選中節點
+        for ni in sorted(selection):
+            if not (0 <= ni < len(self.collapsible_frames)) or not (0 <= ni < len(spans)):
                 continue
-            was_expanded = self.collapsible_frames[i]._expanded
-            old = self.collapsible_frames[i]
+            was_expanded = self.collapsible_frames[ni]._expanded
+            old = self.collapsible_frames[ni]
             old.pack_forget()
             old.destroy()
-            self.collapsible_frames[i] = self._make_collapsible_rail(
-                self.config_obj.rails[i], expanded=was_expanded,
+            start, count = spans[ni]
+            self.collapsible_frames[ni] = self._make_collapsible_node(
+                self.config_obj.rails[start:start + count], expanded=was_expanded,
             )
         primary = self.node_list.get_primary()
-        self.node_list.set_rails(self.config_obj.rails, primary_idx=primary)
+        self.node_list.set_nodes(
+            group_rails_into_nodes(self.config_obj.rails), primary_idx=primary)
         self._apply_inspect_mode()
         self._refresh_all_dep_options()
         self._update_validation()
@@ -763,6 +798,19 @@ class PowerSeqGUI(ctk.CTk):
         self._update_stats()
 
     # ---- pulses ----
+    def _on_parameters_changed(self, new_params: list):
+        self._push_undo()
+        self.config_obj = self._collect_config()
+        self.config_obj.parameters = list(new_params)
+        # 值/清單變更 → 經序列化 round-trip 以新 parameters 重算各群組展開 N。
+        # width 引用已刪除的 parameter 等無效情況交由 validator 回報，不中斷 UI。
+        try:
+            self.config_obj = PowerSeqConfig.from_dict(self.config_obj.to_dict())
+        except (ValueError, TypeError):
+            pass
+        self._mark_dirty()
+        self._refresh_all()
+
     def _on_pulses_changed(self, new_pulses: list[str]):
         self._push_undo()
         self.config_obj = self._collect_config()
@@ -1143,10 +1191,13 @@ class PowerSeqGUI(ctk.CTk):
     def _jump_to_rail(self, name: str):
         for idx, r in enumerate(self.config_obj.rails):
             if r.name == name:
-                self.node_list._selected = {idx}
-                self.node_list._primary_idx = idx
+                ni = rail_index_to_node_index(self.config_obj.rails, idx)
+                if ni is None:
+                    return
+                self.node_list._selected = {ni}
+                self.node_list._primary_idx = ni
                 self.node_list._render()
-                self._on_node_selected(idx)
+                self._on_node_selected(ni)
                 return
 
     # ---- file ops ----

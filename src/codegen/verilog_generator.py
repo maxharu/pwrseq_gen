@@ -78,6 +78,46 @@ def _port_name(name: str, prefix: str) -> str:
     return prefix + safe_name(name)
 
 
+def _is_group_head(rail: PowerRail) -> bool:
+    """非群組，或群組的 bit 0；Verilog 收合輸出只在 head 處進行（其餘 bit 跳過）。"""
+    return rail.group_base is None or rail.bit_index == 0
+
+
+def _group_sig(rail: PowerRail) -> str:
+    """群組 rail 的 Verilog 代表訊號名（取 base，不帶 [i]）；非群組用節點名。"""
+    return internal_sig(rail.group_base if rail.group_base is not None else rail.name)
+
+
+def _group_port(rail: PowerRail, prefix: str) -> str:
+    """群組 rail 的 port 名（取 base）；非群組用節點名。"""
+    return _port_name(rail.group_base if rail.group_base is not None else rail.name, prefix)
+
+
+def _width_msb(width_expr) -> str:
+    """寬度 MSB 片段：整數 k → `k-1`；公式 → `(EXPR)-1`（保留符號形式，不求值）。"""
+    expr = str(width_expr).strip()
+    try:
+        return str(int(expr) - 1)
+    except ValueError:
+        return f"({expr})-1"
+
+
+def _width_param(width_expr):
+    """.WIDTH() 的值：整數 → int（沿用數值對齊）；公式 → `(EXPR)` 字串。"""
+    expr = str(width_expr).strip()
+    try:
+        return int(expr)
+    except ValueError:
+        return f"({expr})"
+
+
+def _width_prefix(rail: PowerRail) -> str:
+    """群組 rail → `[k-1:0] `（整數）或 `[(EXPR)-1:0] `（公式）；非群組 → ``。"""
+    if rail.group_base is None:
+        return ""
+    return f"[{_width_msb(rail.width_expr)}:0] "
+
+
 def _pulse_signal(pulse_name: str) -> str:
     """取得 pulse 的 Verilog 訊號名稱。config 存 Pulse_*，輸出 iPulse_*。"""
     return pulse_verilog_name(pulse_name)
@@ -153,8 +193,12 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
     # 節點順序 = config.rails（左側列表拖拉順序），用於 port 與整份 Verilog 程式碼順序
     node_order_rails = config.rails
     name_to_rail = {r.name: r for r in config.rails}
-    sequenced = [r for r in node_order_rails if r.has_pseqcell]
-    inputs_with_deb = [r for r in node_order_rails if r.seq_type == "input" and getattr(r, "deb_enable", False)]
+    # 群組（vector）在 Verilog 收合成一條 bus，只在 bit 0（head）產生訊號／實例，其餘 bit 跳過。
+    sequenced = [r for r in node_order_rails if r.has_pseqcell and _is_group_head(r)]
+    inputs_with_deb = [
+        r for r in node_order_rails
+        if r.seq_type == "input" and getattr(r, "deb_enable", False) and _is_group_head(r)
+    ]
 
     if output_filename:
         module_name, define_name = _filename_to_module_and_guard(output_filename)
@@ -191,9 +235,18 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
     lines.extend(_section("Module Declare"))
     lines.append("module " + module_name)
     lines.extend(_section("Parameter Declare"))
-    lines.append("//#(")
-    lines.append("//    No parameters")
-    lines.append("//)")
+    params = getattr(config, "parameters", None) or []
+    if params:
+        w_name = max(len(p.name) for p in params)
+        lines.append("#(")
+        for i, p in enumerate(params):
+            comma = "," if i < len(params) - 1 else ""
+            lines.append(f"    parameter {p.name.ljust(w_name)} = {p.value}{comma}")
+        lines.append(")")
+    else:
+        lines.append("//#(")
+        lines.append("//    No parameters")
+        lines.append("//)")
     lines.extend(_section("Input/Output Port Declare"))
     lines.append("(")
     lines.append("    input  iRst,")
@@ -211,12 +264,15 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
             pulse_sigs.append(sig)
         if pulse_sigs:
             lines.append("    input  " + ", ".join(pulse_sigs) + ",")
-    # Ports 依節點順序 (config.rails)：input 用 iXXX，output 用 oXXX
+    # Ports 依節點順序 (config.rails)：input 用 iXXX，output 用 oXXX；群組收合成一條 bus。
     for r in config.rails:
+        if not _is_group_head(r):
+            continue
+        wp = _width_prefix(r)
         if r.seq_type == "input":
-            lines.append(f"    input  {_port_name(r.name, 'i')},")
+            lines.append(f"    input  {wp}{_group_port(r, 'i')},")
         else:
-            lines.append(f"    output {_port_name(r.name, 'o')},")
+            lines.append(f"    output {wp}{_group_port(r, 'o')},")
     if lines[-1].endswith(","):
         lines[-1] = lines[-1].rstrip(",")
     lines.append(");")
@@ -231,21 +287,27 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
 
     lines.extend(_section("Internal Signal Declare"))
     for r in node_order_rails:
+        if not _is_group_head(r):
+            continue
+        wp = _width_prefix(r)
         if r.has_pseqcell:
-            lines.append(f"wire {internal_sig(r.name)};")
+            lines.append(f"wire {wp}{_group_sig(r)};")
         elif r.seq_type == "input" and getattr(r, "deb_enable", False):
-            lines.append(f"wire {internal_sig(r.name)}_deb;")
+            lines.append(f"wire {wp}{_group_sig(r)}_deb;")
     lines.append("")
 
     if sequenced:
         lines.append("// Condition signals (iHi, iLo, iForce) for PSEQCELL")
-        cond_sigs = [internal_sig(r.name) for r in node_order_rails if r.has_pseqcell]
+        cond_heads = [r for r in node_order_rails if r.has_pseqcell and _is_group_head(r)]
+        cond_sigs = [_group_sig(r) for r in cond_heads]
         w_hi = max(len(s) + 3 for s in cond_sigs)     # "_hi"
         w_lo = max(len(s) + 3 for s in cond_sigs)     # "_lo"
         w_fc = max(len(s) + 6 for s in cond_sigs)     # "_force"
-        for s in cond_sigs:
+        for r in cond_heads:
+            s = _group_sig(r)
+            wp = _width_prefix(r)
             lines.append(
-                f"wire {(s + '_hi').ljust(w_hi)}, "
+                f"wire {wp}{(s + '_hi').ljust(w_hi)}, "
                 f"{(s + '_lo').ljust(w_lo)}, "
                 f"{(s + '_force').ljust(w_fc)};"
             )
@@ -262,11 +324,11 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
     if inputs_with_deb:
         deb_specs = []
         for r in inputs_with_deb:
-            s = internal_sig(r.name)
+            s = _group_sig(r)
             deb_specs.append({
                 "rail": r,
                 "u": f"u_deb_{s}",
-                "inp": _port_name(r.name, "i"),
+                "inp": _group_port(r, "i"),
                 "out": f"{s}_deb",
                 "ps": _pulse_signal(getattr(r, "deb_pulse", DEFAULT_PULSE) or DEFAULT_PULSE),
             })
@@ -276,7 +338,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
         w_ps = max(len(d["ps"]) for d in deb_specs)
         deb_param_rows = [
             [
-                ("WIDTH", 1),
+                ("WIDTH", _width_param(d["rail"].width_expr)),
                 ("INIT", getattr(d["rail"], "deb_init", 0)),
                 ("CYCLE_SYNC", getattr(d["rail"], "deb_cycle_sync", 2)),
                 ("CYCLE_HI", getattr(d["rail"], "deb_cycle_hi", 2)),
@@ -300,7 +362,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
         # iHi, iLo assignments (F-DEP-08: group 內 &，group 間 |)
         renderer = _VerilogCond(name_to_rail)
         for r in sequenced:
-            s = internal_sig(r.name)
+            s = _group_sig(r)
             for kind, no_cond_note in _NO_CONDITION_NOTES.items():
                 tree = resolve_condition(r, kind, name_to_rail)
                 expr = tree.accept(renderer)
@@ -312,7 +374,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
         # Parameter order per src/reference/PSEQCELL.v
         ps_specs = []
         for r in sequenced:
-            s = internal_sig(r.name)
+            s = _group_sig(r)
             ps_specs.append({
                 "rail": r,
                 "s": s,
@@ -336,7 +398,7 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
         ps_param_rows = [
             [
                 ("INIT", p["rail"].init),
-                ("WIDTH", 1),
+                ("WIDTH", _width_param(p["rail"].width_expr)),
                 ("CYCLE_HI", p["rail"].cycle_hi),
                 ("CYCLE_LO", p["rail"].cycle_lo),
                 ("CYCLE_FORCE", p["rail"].cycle_force),
@@ -364,8 +426,8 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
 
     lines.append("///// Continuous Assignment ////////////////////////////////////////////////////")
     out_specs = [
-        (_port_name(r.name, "o"), internal_sig(r.name))
-        for r in node_order_rails if r.seq_type != "input"
+        (_group_port(r, "o"), _group_sig(r))
+        for r in node_order_rails if r.seq_type != "input" and _is_group_head(r)
     ]
     if out_specs:
         w_p = max(len(p) for p, _ in out_specs)

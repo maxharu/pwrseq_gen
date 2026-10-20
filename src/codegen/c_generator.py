@@ -205,6 +205,13 @@ def generate_c(
     lines.extend(_c_banner_title_block(" Include File"))
     lines.append(f'#include "{include_file}"')
     lines.append("")
+    params = getattr(config, "parameters", None) or []
+    if params:
+        lines.extend(_c_banner_title_block(" Parameter Define"))
+        w_pname = max(len(p.name) for p in params)
+        for p in params:
+            lines.append(f"#define {p.name.ljust(w_pname)} {p.value}")
+        lines.append("")
     lines.extend(_c_banner_title_block(" Global Veriables Declare"))
     lines.append("typedef struct")
     lines.append("{")

@@ -21,7 +21,7 @@ alwaysApply: false
 
 | 套件 | 職責 | 對外介面 |
 |---|---|---|
-| `core` | 資料模型與共用詞彙表（`config_models` / `timing_models` / `cond_ir` / `naming` / `constants` / `validator` / `group_logic` / `paths` / `cond_edit` / `config_edit` / `project_session` / `snapshot_history` / `version` / `applog` / `app_expiry`） | 刻意**不**收斂成扁平命名空間，維持深層 import |
+| `core` | 資料模型與共用詞彙表（`config_models` 含 `ConditionConfig` / `VectorNode` / `Parameter` / `timing_models` / `cond_ir` / `param_expr`（width 公式 `eval_width`）/ `naming` / `constants` / `validator` / `group_logic` / `paths` / `cond_edit` / `config_edit` / `project_session` / `snapshot_history` / `version` / `applog` / `app_expiry`） | 刻意**不**收斂成扁平命名空間，維持深層 import |
 | `codegen` | Verilog / C 產生器 | `generate_verilog`、`generate_c` |
 | `drawio` | Draw.io 電路圖（cell-centric 格線佈局） | `generate_drawio`、`DrawioExportOptions` |
 | `timing` | 時序邏輯模擬與 Schemdraw 時序圖 | `__init__.py` 的 `__all__`（10 個名字） |

@@ -8,6 +8,7 @@ from PIL import Image, ImageTk
 
 from core.config_models import (
     DEFAULT_PULSE,
+    Parameter,
     PowerRail,
     normalize_pulse_name,
 )
@@ -44,7 +45,7 @@ class NodeListPanel(ctk.CTkFrame):
         self.on_delete = on_delete
         self.on_activate = on_activate
         self.on_disarm = on_disarm
-        self._rails: list[PowerRail] = []
+        self._nodes: list[list[PowerRail]] = []  # 一個節點 = 一個或多個 bit rails（vector 不展開）
         self._selected: set[int] = set()
         self._primary_idx: Optional[int] = None
         self._row_widgets: dict[int, ctk.CTkFrame] = {}
@@ -113,13 +114,29 @@ class NodeListPanel(ctk.CTkFrame):
         self.on_delete()
         return "break"
 
-    def set_rails(self, rails: list[PowerRail], primary_idx: Optional[int] = None):
-        self._rails = rails
-        if primary_idx is not None and 0 <= primary_idx < len(rails):
+    @staticmethod
+    def _node_base(node: list[PowerRail]) -> tuple[str, bool]:
+        head = node[0]
+        if head.group_base is not None:
+            return head.group_base, True
+        return head.name, False
+
+    @classmethod
+    def _node_label(cls, node: list[PowerRail]) -> str:
+        base, is_vec = cls._node_base(node)
+        return f"{base} [\u00d7{len(node)}]" if is_vec else base
+
+    def node_labels(self) -> list[str]:
+        """各節點的顯示字串（vector 以 `base [×N]` 標記）。"""
+        return [self._node_label(n) for n in self._nodes]
+
+    def set_nodes(self, nodes: list[list[PowerRail]], primary_idx: Optional[int] = None):
+        self._nodes = [list(n) for n in nodes]
+        if primary_idx is not None and 0 <= primary_idx < len(self._nodes):
             self._primary_idx = primary_idx
-        elif self._primary_idx is not None and self._primary_idx >= len(rails):
+        elif self._primary_idx is not None and self._primary_idx >= len(self._nodes):
             self._primary_idx = None
-        self._selected = {i for i in self._selected if 0 <= i < len(rails)}
+        self._selected = {i for i in self._selected if 0 <= i < len(self._nodes)}
         self._render()
 
     def focus_search(self):
@@ -140,10 +157,11 @@ class NodeListPanel(ctk.CTkFrame):
             w.destroy()
         self._row_widgets.clear()
         ft = self.search_var.get().strip().lower()
-        for idx, rail in enumerate(self._rails):
-            if ft and ft not in rail.name.lower():
+        for idx, node in enumerate(self._nodes):
+            base, _ = self._node_base(node)
+            if ft and ft not in base.lower():
                 continue
-            self._make_row(idx, rail)
+            self._make_row(idx, node)
         self._update_multi_status()
         self.after_idle(self._sync_scroll_height)
 
@@ -176,17 +194,18 @@ class NodeListPanel(ctk.CTkFrame):
             return ("#dde6f1", "#2a3a52")
         return ("gray86", "gray22")
 
-    def _make_row(self, idx: int, rail: PowerRail):
+    def _make_row(self, idx: int, node: list[PowerRail]):
         bg = self._row_bg(idx)
         row = ctk.CTkFrame(self.scroll, fg_color=bg, corner_radius=4, height=28)
         row.pack(fill="x", pady=1, padx=S_XS)
         self._row_widgets[idx] = row
 
-        type_label = SEQ_TYPE_LABELS.get(rail.seq_type, rail.seq_type)[:6]
-        pill = make_pill(row, type_label, rail.seq_type)
+        head = node[0]
+        type_label = SEQ_TYPE_LABELS.get(head.seq_type, head.seq_type)[:6]
+        pill = make_pill(row, type_label, head.seq_type)
         pill.pack(side="left", padx=(S_SM, S_XS), pady=2)
 
-        name = ctk.CTkLabel(row, text=rail.name, font=FONT_BODY, anchor="w")
+        name = ctk.CTkLabel(row, text=self._node_label(node), font=FONT_BODY, anchor="w")
         name.pack(side="left", fill="x", expand=True, padx=(S_XS, S_SM), pady=2)
 
         for w in (row, pill, name):
@@ -221,17 +240,17 @@ class NodeListPanel(ctk.CTkFrame):
         self.on_select(idx)
         self.focus_set()
         # 預備虛影（lazy：第一次 motion 才真正顯示，避免按下沒拖也建 Toplevel）
-        self._ghost_pending_rail = self._rails[idx] if 0 <= idx < len(self._rails) else None
+        self._ghost_pending_node = self._nodes[idx] if 0 <= idx < len(self._nodes) else None
 
     def _on_motion(self, _idx: int, event):
         if self._drag_from is None:
             return
         # 虛影：第一次 motion 才真正建立 Toplevel
-        if self._drag_ghost is None and getattr(self, "_ghost_pending_rail", None) is not None:
-            rail = self._ghost_pending_rail
-            type_short = SEQ_TYPE_LABELS.get(rail.seq_type, rail.seq_type)[:6]
-            self._drag_ghost = DragGhost.create(self, f"[{type_short}] {rail.name}")
-            self._ghost_pending_rail = None
+        if self._drag_ghost is None and getattr(self, "_ghost_pending_node", None) is not None:
+            node = self._ghost_pending_node
+            type_short = SEQ_TYPE_LABELS.get(node[0].seq_type, node[0].seq_type)[:6]
+            self._drag_ghost = DragGhost.create(self, f"[{type_short}] {self._node_label(node)}")
+            self._ghost_pending_node = None
         DragGhost.move(self._drag_ghost, event.x_root, event.y_root)
         result = self._find_row_target_idx(event.y_root)
         if result is None:
@@ -297,7 +316,7 @@ class NodeListPanel(ctk.CTkFrame):
     def _destroy_drag_ghost(self):
         DragGhost.destroy(self._drag_ghost)
         self._drag_ghost = None
-        self._ghost_pending_rail = None
+        self._ghost_pending_node = None
 
     def _on_release(self, _idx: int, _event):
         f, t_vp = self._drag_from, self._drag_to
@@ -450,6 +469,127 @@ class PulsePanel(ctk.CTkFrame):
             messagebox.showwarning("Notice", "At least one pulse required")
             return
         new_list = [p for i, p in enumerate(self._pulses) if i != idx]
+        self._selected_idx = None
+        self.on_change(new_list)
+
+
+# ============================================================
+# ParameterPanel — 左側 parameter 清單（C11，name=value）
+# ============================================================
+
+class ParameterPanel(ctk.CTkFrame):
+    """左側 parameter 管理區（列式 UI，風格對齊 PulsePanel）。
+
+    一個 parameter = 一個具名整數常數（name=value）；width 公式可引用、產生 Verilog
+    #(parameter) / C #define。on_change 回傳新的 list[Parameter]（有序）。
+    """
+
+    _ROW_H = 30
+    _MAX_SCROLL_H = 150
+
+    def __init__(self, master, on_change: Callable[[list], None], **kwargs):
+        super().__init__(master, **kwargs)
+        self.on_change = on_change
+        self._params: list[Parameter] = []
+        self._selected_idx: Optional[int] = None
+        self._row_widgets: dict[int, ctk.CTkFrame] = {}
+        self._build_ui()
+        self._render()
+
+    def _build_ui(self):
+        entry_row = ctk.CTkFrame(self, fg_color="transparent")
+        entry_row.pack(fill="x", padx=S_SM, pady=(0, S_SM))
+        self.entry_name = ctk.CTkEntry(entry_row, placeholder_text="Name")
+        self.entry_name.pack(side="left", fill="x", expand=True)
+        self.entry_value = ctk.CTkEntry(entry_row, placeholder_text="Value", width=64)
+        self.entry_value.pack(side="left", padx=(S_XS, 0))
+        for e in (self.entry_name, self.entry_value):
+            e.bind("<Return>", lambda _e: self._on_add())
+            e.bind("<KP_Enter>", lambda _e: self._on_add())
+
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll.pack(fill="x", padx=S_XS, pady=(0, S_SM))
+
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(fill="x", padx=S_SM, pady=(0, S_SM))
+        btn_row.columnconfigure(0, weight=1)
+        btn_row.columnconfigure(1, weight=1)
+        ctk.CTkButton(btn_row, text="+ Add", command=self._on_add).grid(
+            row=0, column=0, sticky="ew", padx=(0, S_XS))
+        ctk.CTkButton(btn_row, text="- Delete", command=self._on_del).grid(
+            row=0, column=1, sticky="ew", padx=(S_XS, 0))
+
+    def _row_bg(self, idx: int) -> tuple[str, str]:
+        if idx == self._selected_idx:
+            return ("#cfe0ff", "#264c80")
+        return ("gray86", "gray22")
+
+    def _update_scroll_height(self):
+        n = max(1, len(self._params))
+        h = min(max(self._ROW_H + 6, n * self._ROW_H + 6), self._MAX_SCROLL_H)
+        try:
+            self.scroll.configure(height=h)
+        except Exception:
+            pass
+
+    def _render(self):
+        for w in self.scroll.winfo_children():
+            w.destroy()
+        self._row_widgets.clear()
+        for idx, p in enumerate(self._params):
+            bg = self._row_bg(idx)
+            row = ctk.CTkFrame(self.scroll, fg_color=bg, corner_radius=4, height=28)
+            row.pack(fill="x", pady=1, padx=S_XS)
+            self._row_widgets[idx] = row
+            lbl = ctk.CTkLabel(row, text=f"{p.name} = {p.value}", font=FONT_MONO, anchor="w")
+            lbl.pack(side="left", fill="x", expand=True, padx=(S_SM, S_SM), pady=2)
+            for w in (row, lbl):
+                w.bind("<ButtonPress-1>", lambda _e, i=idx: self._on_row_press(i))
+        self._update_scroll_height()
+
+    def _on_row_press(self, idx: int):
+        self._selected_idx = idx
+        for i, row in self._row_widgets.items():
+            try:
+                row.configure(fg_color=self._row_bg(i))
+            except Exception:
+                pass
+
+    def set_parameters(self, params: list):
+        self._params = list(params) if params else []
+        if self._selected_idx is not None and self._selected_idx >= len(self._params):
+            self._selected_idx = None
+        self._render()
+
+    def _parse_new(self) -> tuple[Optional[Parameter], Optional[str]]:
+        """讀 name/value 欄位 → (Parameter, None) 或 (None, 錯誤訊息)；不觸發 UI 對話框。"""
+        name = self.entry_name.get().strip()
+        raw = self.entry_value.get().strip()
+        if not name:
+            return None, "Enter parameter name"
+        if any(p.name == name for p in self._params):
+            return None, f"Parameter '{name}' already exists"
+        try:
+            value = int(raw)
+        except ValueError:
+            return None, "Value must be an integer"
+        return Parameter(name=name, value=value), None
+
+    def _on_add(self):
+        param, err = self._parse_new()
+        if err:
+            messagebox.showwarning("Notice", err)
+            return
+        self.on_change(self._params + [param])
+        self.entry_name.delete(0, tk.END)
+        self.entry_value.delete(0, tk.END)
+
+    def _on_del(self):
+        if self._selected_idx is None:
+            messagebox.showinfo("Notice", "Select a parameter to delete")
+            return
+        idx = self._selected_idx
+        new_list = [p for i, p in enumerate(self._params) if i != idx]
         self._selected_idx = None
         self.on_change(new_list)
 
@@ -1111,7 +1251,8 @@ class BatchPanel(ctk.CTkFrame):
 
 
 __all__ = [
-    "NodeListPanel", "PulsePanel", "ValidationPanel", "PreviewPanel", "BatchPanel",
+    "NodeListPanel", "PulsePanel", "ParameterPanel", "ValidationPanel",
+    "PreviewPanel", "BatchPanel",
 ]
 
 

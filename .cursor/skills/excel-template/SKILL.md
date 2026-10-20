@@ -54,13 +54,17 @@ Sheets are detected by **row-1 column-A key** (same in Python `_find_sheet` and 
 
 Data rows start at **row 4** (`DATA_START_ROW` in `excel_import.py`).
 
-### Nodes (10 columns)
+### Nodes (11 columns)
 
-`name`, `type`, `cycle_hi`, `cycle_lo`, `cycle_force`, `init`, `force_val`, `pulse_hi`, `pulse_lo`, `pulse_timing`
+`name`, `type`, `cycle_hi`, `cycle_lo`, `cycle_force`, `init`, `force_val`, `pulse_hi`, `pulse_lo`, `pulse_timing`, `width`
 
 - Dropdowns: `type` (Input/Output), `init`/`force_val` (0/1), pulses from `=PulseList`
 - Input: `cycle_*` → debounce; `init` → DEB INIT; `pulse_timing` → Pulse_Deb
 - Output: `cycle_*` → CYCLE; `force_val`; `pulse_timing` → Pulse_Force
+- `width` (col K, key `width`, label `Width/Bits`): vector width N; blank/1 = scalar.
+  Export **collapses** a vector's N bit rails into one Nodes row (name = `group_base`,
+  physical from bit 0); import **expands** back to `base[0]..base[N-1]` with group metadata.
+  Per-bit conditions live in the Conditions sheets, referenced by bit name `base[i]`.
 - Header rows 1–3 shared via `src/excel/excel_template_layout.py` (`node_sheet_headers`, `apply_nodes_sheet_header_rows`)
 
 ### Output Conditions (long table)

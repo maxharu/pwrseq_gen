@@ -1,0 +1,33 @@
+---
+description: pwrseq_gen 的 plan 檔必須鏡像到專案 .cursor/plans/，不可只留在家目錄
+alwaysApply: true
+---
+
+# Plan 檔要放進專案
+
+Cursor 的 CreatePlan 工具固定把 `*.plan.md` 寫到使用者**家目錄** `~/.cursor/plans/`
+（Windows：`C:\Users\<user>\.cursor\plans\`）。本專案的 plan 屬於專案資產，應跟著
+git 版控，不該只留在家目錄。
+
+## 必須做的事
+
+每次 CreatePlan **回傳後的當下那一步**，就把該 `*.plan.md` 複製一份到專案目錄——
+**不是等執行階段才複製**：
+
+```
+<workspace>/.cursor/plans/<同檔名>.plan.md
+```
+
+- **即使還在 plan 模式也要立刻做**：plan 檔是 `.md`，plan 模式允許編輯/寫入 markdown，
+  所以沒有「等使用者確認再複製」的理由。CreatePlan 一回傳就複製。
+- 每次用檔案工具**更新**家目錄的 plan（改 todo／內容）後，同一步也要同步覆蓋專案副本。
+- 目錄不存在就先建立。
+- 家目錄那份是 Cursor 工具的工作副本（CreatePlan 固定寫這裡、更新 todo 也改這裡）；
+  專案那份是版控的真實來源。兩份不一致時，以**較新**的家目錄副本覆蓋專案副本。
+- 複製即可，不要搬移（刪掉家目錄副本會讓 CreatePlan 的後續更新找不到檔案）。
+
+## 為什麼
+
+使用者預期在 `<workspace>/.cursor/plans/` 看到專案的 plan；放在家目錄會：
+1. 找不到（使用者只翻專案目錄）
+2. 不受 git 版控、無法隨專案分享或回溯

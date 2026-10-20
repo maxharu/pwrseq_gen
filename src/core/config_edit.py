@@ -48,6 +48,152 @@ def move_item(items: list[T], from_idx: int, to_idx: int) -> bool:
     return True
 
 
+def group_rails_into_nodes(rails: Sequence) -> list[list]:
+    """把扁平 rails 依連續 group_base 收成「節點」清單：scalar 自成單元素 list，
+    vector 的連續 bit（同 group_base）收成一個 list。
+
+    序列化／Excel 收合與 GUI 的「一列一 Node」都需要這個 rail→node 的切分；集中一份，
+    避免各處各自 while 迴圈切分而語意漂移。vector bit 在 rails 必為連續（見 group_span）。
+    """
+    nodes: list[list] = []
+    i = 0
+    n = len(rails)
+    while i < n:
+        base = getattr(rails[i], "group_base", None)
+        if base is None:
+            nodes.append([rails[i]])
+            i += 1
+            continue
+        group = [rails[i]]
+        i += 1
+        while i < n and getattr(rails[i], "group_base", None) == base:
+            group.append(rails[i])
+            i += 1
+        nodes.append(group)
+    return nodes
+
+
+def node_spans(rails: Sequence) -> list[tuple[int, int]]:
+    """每個節點在扁平 rails 的 (start, count)；順序與 group_rails_into_nodes 一致。"""
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for node in group_rails_into_nodes(rails):
+        spans.append((start, len(node)))
+        start += len(node)
+    return spans
+
+
+def rail_index_to_node_index(rails: Sequence, rail_idx: int) -> int | None:
+    """扁平 rail 索引 → 所屬節點索引；越界回 None。"""
+    for ni, (start, count) in enumerate(node_spans(rails)):
+        if start <= rail_idx < start + count:
+            return ni
+    return None
+
+
+def node_index_to_rail_span(rails: Sequence, node_idx: int) -> tuple[int, int] | None:
+    """節點索引 → 扁平 rail 的 (start, count)；越界回 None。"""
+    spans = node_spans(rails)
+    if 0 <= node_idx < len(spans):
+        return spans[node_idx]
+    return None
+
+
+def move_node(rails: list, from_node: int, to_node: int) -> bool:
+    """把第 from_node 個節點整塊移到第 to_node 個節點位置（node 座標，pop+insert 語意）。
+
+    就地改 rails；vector 的連續 bit 當成一塊一起走。越界或沒動回 False。保留 rail 物件 identity。
+    """
+    nodes = group_rails_into_nodes(rails)
+    n = len(nodes)
+    if from_node == to_node:
+        return False
+    if not (0 <= from_node < n) or not (0 <= to_node < n):
+        return False
+    block = nodes.pop(from_node)
+    nodes.insert(to_node, block)
+    rails[:] = [r for node in nodes for r in node]
+    return True
+
+
+def delete_nodes(rails: list, node_indices: Iterable[int]) -> list[int]:
+    """刪除指定節點（node 座標），回傳實際刪掉的 node 索引（由大到小）。就地改 rails。
+
+    vector 整組一起刪；引用被刪 bit 的條件保持原樣（dangling，由 validator 反映），
+    與單一節點刪除的既有行為一致。
+    """
+    nodes = group_rails_into_nodes(rails)
+    removed: list[int] = []
+    for ni in sorted({i for i in node_indices if 0 <= i < len(nodes)}, reverse=True):
+        del nodes[ni]
+        removed.append(ni)
+    rails[:] = [r for node in nodes for r in node]
+    return removed
+
+
+def set_group_metadata(bits: Sequence, base: str | None, width_expr: str) -> None:
+    """把一組 bit rails 蓋上群組 metadata；base=None 表 scalar（清掉群組、width_expr=1）。
+
+    GUI 卡片收集回 config 時走這裡，群組 metadata 的規則（bit_index 連號、共用 width_expr）
+    只有一份，不會各處各自蓋而漂移。
+    """
+    if base is None:
+        for r in bits:
+            r.group_base = None
+            r.bit_index = 0
+            r.width_expr = "1"
+        return
+    for i, r in enumerate(bits):
+        r.group_base = base
+        r.bit_index = i
+        r.width_expr = width_expr
+
+
+def flatten_node_rails(nodes: Iterable[Sequence]) -> list:
+    """node 清單（每個是 bit rails 的 list）→ 扁平 rails；GUI 卡片收集回 config 用。"""
+    return [r for node in nodes for r in node]
+
+
+def resize_list(items: Sequence[T], n: int, factory) -> list[T]:
+    """把 items 調整成長度 n：多截少補（factory(i) 造新項），保留既有項目。
+
+    vector 卡片在 width/Vector 勾選改變時用這個增減 per-bit 狀態（條件或 wave），
+    已填好的 bit 不被洗掉。
+    """
+    out = list(items[:n])
+    for i in range(len(out), n):
+        out.append(factory(i))
+    return out
+
+
+def group_span(rails: Sequence, base: str) -> tuple[int, int] | None:
+    """回傳 `group_base == base` 的連續區段 (start, count)；找不到回 None。
+
+    vector 的 bit 在 config.rails 必為連續（from_dict 展開與 elaborate 都連續 append），
+    所以整組可用單一區段表示，群組的刪除／搬移就能復用既有的索引算術，而不必另立資料結構。
+    """
+    indices = [i for i, r in enumerate(rails) if getattr(r, "group_base", None) == base]
+    if not indices:
+        return None
+    return indices[0], len(indices)
+
+
+def move_group(items: list[T], start: int, count: int, to_idx: int) -> bool:
+    """把 items[start:start+count] 整塊移到以 to_idx（移除該塊後的座標）起算的位置。
+
+    這是 `move_item` 的群組版：越界夾住，位置沒變則回 False。就地改 items。
+    """
+    if count <= 0 or start < 0 or start + count > len(items):
+        return False
+    block = items[start:start + count]
+    rest = items[:start] + items[start + count:]
+    to_idx = max(0, min(to_idx, len(rest)))
+    if to_idx == start:
+        return False
+    items[:] = rest[:to_idx] + block + rest[to_idx:]
+    return True
+
+
 def remap_index_after_move(idx: int | None, from_idx: int, to_idx: int) -> int | None:
     """某項目被移動後，原本指向 idx 的游標該指向哪裡。
 

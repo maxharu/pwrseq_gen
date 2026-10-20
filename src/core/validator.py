@@ -4,7 +4,12 @@ Power Sequence 配置驗證
 - 名稱唯一性
 - 依賴存在性
 """
-from core.config_models import PowerSeqConfig
+import re
+
+from core.config_models import PowerSeqConfig, eval_width
+from core.naming import safe_name
+
+_PARAM_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 def check_duplicate_names(config: PowerSeqConfig) -> list[str]:
@@ -17,6 +22,63 @@ def check_duplicate_names(config: PowerSeqConfig) -> list[str]:
             duplicates.append(n)
         seen.add(n)
     return duplicates
+
+
+def check_identifier_collisions(config: PowerSeqConfig) -> list[tuple[str, str, str]]:
+    """展開後兩個不同節點名若 collapse 到同一個 Verilog/C 識別子，回傳 (name, other, ident)。
+
+    vector 的 bit 名 base[i] 經 safe_name 變成 base_i，可能與字面節點 base_i 撞號——
+    純名稱唯一性（check_duplicate_names）看不出來，但產生出來的程式會變成兩個同名訊號。
+    """
+    seen: dict[str, str] = {}
+    collisions: list[tuple[str, str, str]] = []
+    for r in config.rails:
+        ident = safe_name(r.name)
+        first = seen.get(ident)
+        if first is None:
+            seen[ident] = r.name
+        elif first != r.name:  # 同名重複由 check_duplicate_names 負責
+            collisions.append((r.name, first, ident))
+    return collisions
+
+
+def check_invalid_width(config: PowerSeqConfig) -> list[tuple[str, str]]:
+    """vector 群組的 width_expr 若非正整數，回傳 (base, width_expr)。
+
+    A2 階段 width 一律是整數字串；非正整數（0/負/非數）會讓展開失敗或產生空群組。
+    每個 group_base 只檢查一次。
+    """
+    bad: list[tuple[str, str]] = []
+    checked: set[str] = set()
+    for r in config.rails:
+        if r.group_base is None or r.group_base in checked:
+            continue
+        checked.add(r.group_base)
+        try:
+            if eval_width(r.width_expr, config.parameters) <= 0:
+                bad.append((r.group_base, r.width_expr))
+        except (ValueError, TypeError):
+            bad.append((r.group_base, r.width_expr))
+    return bad
+
+
+def check_parameters(config: PowerSeqConfig) -> list[str]:
+    """parameter 名需為合法識別子且不重複、值需為正整數；回傳可點擊格式的錯誤訊息。"""
+    errors: list[str] = []
+    seen: set[str] = set()
+    for p in getattr(config, "parameters", None) or []:
+        name = p.name or ""
+        if not _PARAM_NAME_RE.match(name):
+            errors.append(f"'{name}' is not a valid parameter name (must be an identifier)")
+        elif name in seen:
+            errors.append(f"'{name}' is a duplicate parameter name")
+        else:
+            seen.add(name)
+        if isinstance(p.value, bool) or not isinstance(p.value, int) or p.value <= 0:
+            errors.append(
+                f"'{name}' has invalid parameter value '{p.value}' (must be a positive integer)"
+            )
+    return errors
 
 
 def check_missing_deps(config: PowerSeqConfig) -> list[tuple[str, str]]:
@@ -117,10 +179,25 @@ def validate(config: PowerSeqConfig) -> tuple[bool, list[str]]:
     """
     errors = []
 
+    # Parameters (name legal/unique, value positive int)
+    errors.extend(check_parameters(config))
+
     # Duplicate names
     dup = check_duplicate_names(config)
     if dup:
         errors.append(f"Duplicate rail names: {', '.join(dup)}")
+
+    # Identifier collisions after expansion (vector FOO[2] vs literal FOO_2)
+    for name, other, ident in check_identifier_collisions(config):
+        errors.append(
+            f"'{name}' and '{other}' map to the same identifier '{ident}'"
+        )
+
+    # Vector width must be a positive integer
+    for base, wexpr in check_invalid_width(config):
+        errors.append(
+            f"'{base}' has invalid width '{wexpr}' (must be a positive integer)"
+        )
 
     # Missing dependencies
     missing = check_missing_deps(config)

@@ -1,3 +1,4 @@
+import copy
 import os
 import tkinter as tk
 from typing import Callable, Optional
@@ -5,10 +6,14 @@ from typing import Callable, Optional
 import customtkinter as ctk
 
 from core.cond_edit import CondEditModel
+from core.config_edit import resize_list, set_group_metadata
 from core.config_models import (
     DEFAULT_PULSE,
+    ConditionConfig,
     PowerRail,
     apply_input_wave_dict,
+    eval_width,
+    rail_input_wave_spec,
 )
 from core.group_logic import INTRA_OP_LABELS, intra_op_label, normalize_intra_op
 from core.timing_models import InputWaveSpec
@@ -819,24 +824,44 @@ class InputWaveCondFrame(ctk.CTkFrame):
 # RailEditorFrame — 單一 rail 的屬性編輯面板
 # ============================================================
 
-class RailEditorFrame(ctk.CTkFrame):
-    """單一 rail 編輯器；按 Apply 才寫入 config 並更新 Preview。"""
+DECL_TAB = "宣告"
+COND_TAB = "條件"
 
-    def __init__(self, master, rail: PowerRail,
+
+def _node_base_of(rails: list[PowerRail]) -> tuple[str, bool]:
+    """(base 名, 是否 vector)；vector 取 group_base，scalar 取節點名。"""
+    head = rails[0]
+    if head.group_base is not None:
+        return head.group_base, True
+    return head.name, False
+
+
+class RailEditorFrame(ctk.CTkFrame):
+    """節點編輯器（方案甲）：頂端 [宣告|條件] 分頁。
+
+    一張卡片 = 一個節點（vector 亦同）。宣告分頁管 IO 身分＋共用實體參數（含 Vector 勾選＋
+    寬度整數欄位）；條件分頁 per-bit（vector 以 Bit 選擇器切換，各 bit 條件獨立）。
+    `_bit_rails` 是每 bit 條件的真實來源；同一時間只掛一個 bit 的條件編輯器，切 bit／切 Type
+    時先收集回 `_bit_rails` 再重建，避免 N 份 widget。Apply 時 get_rails() 攤成 N 個 PowerRail。
+    """
+
+    def __init__(self, master, rails,
                  get_all_rails: Callable[[], list[PowerRail]],
                  get_pulses: Callable[[], list[str]],
                  on_apply: Optional[Callable[[], None]] = None,
-                 initial_input_wave_spec: Optional[InputWaveSpec] = None,
+                 get_parameters: Optional[Callable[[], list]] = None,
                  **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
-        self.rail = rail
         self.get_all_rails = get_all_rails
         self.get_pulses = get_pulses
+        self.get_parameters = get_parameters
         self.on_apply = on_apply
-        self._initial_input_wave_spec = initial_input_wave_spec or InputWaveSpec(
-            hi_mode="depends", lo_mode="constant_0",
-        )
-
+        rails = list(rails) or [PowerRail(name="N0", seq_type="output")]
+        self._base_init, self._is_vector_init = _node_base_of(rails)
+        # 每 bit 一份獨立副本（條件來源）；編輯不動到 config，直到 Apply。
+        self._bit_rails: list[PowerRail] = [copy.deepcopy(r) for r in rails]
+        self._active_bit = 0
+        self._cond_editor: Optional[dict] = None  # {"kind": "output"|"input", ...}
         self._build_ui()
 
     # ---- helpers ----
@@ -845,10 +870,15 @@ class RailEditorFrame(ctk.CTkFrame):
         return [r.name for r in self.get_all_rails()] + ["High", "Low"]
 
     def refresh_dep_options(self) -> None:
-        """刷新 Conditions / Input Timing 的 signal 下拉名單。"""
-        for sec in self.cond_sections.values():
-            sec.refresh_dep_options()
-        self.input_wave_frame.refresh_dep_options()
+        """刷新作用中 bit 的 Conditions / Input Timing 的 signal 下拉名單。"""
+        ed = self._cond_editor
+        if ed is None:
+            return
+        if ed["kind"] == "output":
+            for sec in ed["sections"].values():
+                sec.refresh_dep_options()
+        else:
+            ed["wave"].refresh_dep_options()
 
     def _is_pseqcell_for(self, name: str) -> bool:
         if name in (DEP_HIGH, DEP_LOW):
@@ -863,8 +893,8 @@ class RailEditorFrame(ctk.CTkFrame):
                 vals.append(v)
         return vals
 
-    def _make_section(self, title: str) -> tuple[ctk.CTkFrame, ctk.CTkFrame]:
-        wrap = ctk.CTkFrame(self, fg_color=("gray95", "gray19"), corner_radius=6)
+    def _make_section(self, parent, title: str) -> tuple[ctk.CTkFrame, ctk.CTkFrame]:
+        wrap = ctk.CTkFrame(parent, fg_color=("gray95", "gray19"), corner_radius=6)
         wrap.pack(fill="x", pady=(0, S_SM))
         header = ctk.CTkFrame(wrap, fg_color="transparent")
         header.pack(fill="x", padx=S_SM, pady=(S_SM, 0))
@@ -873,10 +903,65 @@ class RailEditorFrame(ctk.CTkFrame):
         body.pack(fill="x")
         return wrap, body
 
+    # ---- node identity ----
+    def base_name(self) -> str:
+        return self.entry_name.get().strip() or self._base_init
+
+    def is_vector(self) -> bool:
+        return bool(self.var_vector.get())
+
+    def seq_type(self) -> str:
+        return self.var_type.get()
+
+    def _parameters(self) -> list:
+        return self.get_parameters() if self.get_parameters else []
+
+    def _parse_width(self) -> int:
+        """width 欄位 → 位元數 N：先試公式（引用 parameter），失敗回退整數解析。"""
+        expr = self.entry_width.get().strip()
+        try:
+            return max(1, eval_width(expr, self._parameters()))
+        except (ValueError, TypeError):
+            return max(1, _safe_int(expr, len(self._bit_rails) or 1))
+
+    def _on_insert_param(self, name: str):
+        """『插入 parameter』下拉：把選到的 parameter 名插入 width 欄位游標處。"""
+        if not name:
+            return
+        try:
+            self.entry_width.insert("insert", name)
+        except Exception:
+            self.entry_width.insert(tk.END, name)
+
     # ---- UI build ----
     def _build_ui(self):
+        head = self._bit_rails[0]
+
+        mode_row = ctk.CTkFrame(self, fg_color="transparent")
+        mode_row.pack(fill="x", pady=(0, S_SM))
+        self._mode_seg = ctk.CTkSegmentedButton(
+            mode_row, values=[DECL_TAB, COND_TAB], command=self._on_mode_seg)
+        self._mode_seg.set(DECL_TAB)
+        self._mode_seg.pack(side="left")
+
+        self._decl_pane = ctk.CTkFrame(self, fg_color="transparent")
+        self._cond_pane = ctk.CTkFrame(self, fg_color="transparent")
+
+        self._build_decl_pane(head)
+        self._build_cond_pane()
+
+        self.apply_row = ctk.CTkFrame(self, fg_color="transparent")
+        ctk.CTkButton(
+            self.apply_row, text="Apply", width=88, command=self._on_apply_clicked,
+        ).pack(side="right")
+
+        self._on_type_toggle(initial=True)
+        self._show_mode(DECL_TAB)
+
+    def _build_decl_pane(self, head: PowerRail):
+        parent = self._decl_pane
         # --- General ---
-        _, gen_body = self._make_section("General")
+        _, gen_body = self._make_section(parent, "General")
         grid = ctk.CTkFrame(gen_body, fg_color="transparent")
         grid.pack(fill="x", padx=S_SM, pady=S_SM)
         for c in range(4):
@@ -885,24 +970,47 @@ class RailEditorFrame(ctk.CTkFrame):
         ctk.CTkLabel(grid, text="Name:", font=FONT_BODY).grid(
             row=0, column=0, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_name = ctk.CTkEntry(grid, width=160)
-        self.entry_name.insert(0, self.rail.name)
+        self.entry_name.insert(0, self._base_init)
         self.entry_name.grid(row=0, column=1, sticky="w", padx=(0, S_LG), pady=2)
 
         ctk.CTkLabel(grid, text="Type:", font=FONT_BODY).grid(
             row=0, column=2, sticky="w", padx=(0, S_SM), pady=2)
         type_row = ctk.CTkFrame(grid, fg_color="transparent")
         type_row.grid(row=0, column=3, sticky="w", pady=2)
-        self.var_type = ctk.StringVar(value=self.rail.seq_type)
+        self.var_type = ctk.StringVar(value=head.seq_type)
         self._type_seg = ctk.CTkSegmentedButton(
             type_row,
             values=[SEQ_TYPE_LABELS["output"], SEQ_TYPE_LABELS["input"]],
             command=self._on_type_seg_selected,
         )
-        self._type_seg.set(SEQ_TYPE_LABELS.get(self.rail.seq_type, "Output"))
+        self._type_seg.set(SEQ_TYPE_LABELS.get(head.seq_type, "Output"))
         self._type_seg.pack(side="left")
 
-        # --- Timing (output only): CYCLE / Pulse for PSEQCELL ---
-        self.pseq_timing_wrap, timing_body = self._make_section("Timing")
+        # Vector 勾選 + 寬度（整數期；公式/插入參數屬 C 階段）
+        self.var_vector = ctk.BooleanVar(value=self._is_vector_init)
+        ctk.CTkCheckBox(grid, text="Vector", variable=self.var_vector, width=80,
+                        command=self._on_vector_toggle).grid(
+            row=1, column=0, sticky="w", padx=(0, S_SM), pady=2)
+        ctk.CTkLabel(grid, text="Width/Bits:", font=FONT_BODY).grid(
+            row=1, column=2, sticky="w", padx=(0, S_SM), pady=2)
+        width_row = ctk.CTkFrame(grid, fg_color="transparent")
+        width_row.grid(row=1, column=3, sticky="w", pady=2)
+        self.entry_width = ctk.CTkEntry(width_row, width=100)
+        self.entry_width.insert(0, str(head.width_expr) if self._is_vector_init else str(len(self._bit_rails)))
+        self.entry_width.pack(side="left")
+        self.entry_width.bind("<Return>", lambda _e: self._on_vector_toggle(), add="+")
+        self.entry_width.bind("<FocusOut>", lambda _e: self._on_vector_toggle(), add="+")
+        # 『插入 parameter』下拉：把 parameter 名插進 width 欄位（空清單則留佔位）
+        param_names = [p.name for p in self._parameters()]
+        self.cmb_insert_param = ctk.CTkComboBox(
+            width_row, values=param_names or [""], width=64,
+            command=lambda name: (self._on_insert_param(name), self.cmb_insert_param.set("+")),
+        )
+        self.cmb_insert_param.set("+")
+        self.cmb_insert_param.pack(side="left", padx=(S_XS, 0))
+
+        # --- Timing (output only) ---
+        self.pseq_timing_wrap, timing_body = self._make_section(parent, "Timing")
         grid_t = ctk.CTkFrame(timing_body, fg_color="transparent")
         grid_t.pack(fill="x", padx=S_SM, pady=S_SM)
         for c in range(4):
@@ -911,79 +1019,60 @@ class RailEditorFrame(ctk.CTkFrame):
         ctk.CTkLabel(grid_t, text="CYCLE_HI:", font=FONT_BODY).grid(
             row=0, column=0, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_hi = ctk.CTkEntry(grid_t, width=100)
-        self.entry_hi.insert(0, str(self.rail.cycle_hi))
+        self.entry_hi.insert(0, str(head.cycle_hi))
         self.entry_hi.grid(row=0, column=1, sticky="w", padx=(0, S_LG), pady=2)
 
         ctk.CTkLabel(grid_t, text="CYCLE_LO:", font=FONT_BODY).grid(
             row=0, column=2, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_lo = ctk.CTkEntry(grid_t, width=100)
-        self.entry_lo.insert(0, str(self.rail.cycle_lo))
+        self.entry_lo.insert(0, str(head.cycle_lo))
         self.entry_lo.grid(row=0, column=3, sticky="w", pady=2)
 
         ctk.CTkLabel(grid_t, text="CYCLE_FORCE:", font=FONT_BODY).grid(
             row=1, column=0, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_cycle_force = ctk.CTkEntry(grid_t, width=100)
-        self.entry_cycle_force.insert(0, str(getattr(self.rail, "cycle_force", 2)))
+        self.entry_cycle_force.insert(0, str(getattr(head, "cycle_force", 2)))
         self.entry_cycle_force.grid(row=1, column=1, sticky="w", padx=(0, S_LG), pady=2)
 
         ctk.CTkLabel(grid_t, text="INIT:", font=FONT_BODY).grid(
             row=2, column=0, sticky="w", padx=(0, S_SM), pady=2)
-        self.var_pseq_init = ctk.StringVar(value="1" if getattr(self.rail, "init", 0) == 1 else "0")
+        self.var_pseq_init = ctk.StringVar(value="1" if getattr(head, "init", 0) == 1 else "0")
         cmb_pseq_init = ctk.CTkComboBox(grid_t, values=["0", "1"], variable=self.var_pseq_init, width=100)
         cmb_pseq_init.grid(row=2, column=1, sticky="w", padx=(0, S_LG), pady=2)
 
         ctk.CTkLabel(grid_t, text="FORCE:", font=FONT_BODY).grid(
             row=2, column=2, sticky="w", padx=(0, S_SM), pady=2)
         self.var_force_val = ctk.StringVar(
-            value="1" if getattr(self.rail, "force_val", 0) == 1 else "0")
+            value="1" if getattr(head, "force_val", 0) == 1 else "0")
         cmb_force_val = ctk.CTkComboBox(grid_t, values=["0", "1"], variable=self.var_force_val, width=100)
         cmb_force_val.grid(row=2, column=3, sticky="w", pady=2)
 
         pulses = self._pulse_values(
-            getattr(self.rail, "pulse_hi", DEFAULT_PULSE),
-            getattr(self.rail, "pulse_lo", DEFAULT_PULSE),
-            getattr(self.rail, "pulse_force", DEFAULT_PULSE),
+            getattr(head, "pulse_hi", DEFAULT_PULSE),
+            getattr(head, "pulse_lo", DEFAULT_PULSE),
+            getattr(head, "pulse_force", DEFAULT_PULSE),
         )
         ctk.CTkLabel(grid_t, text="Timing Hi:", font=FONT_BODY).grid(
             row=3, column=0, sticky="w", padx=(0, S_SM), pady=2)
-        self.var_pulse_hi = ctk.StringVar(value=getattr(self.rail, "pulse_hi", DEFAULT_PULSE) or DEFAULT_PULSE)
+        self.var_pulse_hi = ctk.StringVar(value=getattr(head, "pulse_hi", DEFAULT_PULSE) or DEFAULT_PULSE)
         cmb_pulse_hi = ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_hi, width=130)
         cmb_pulse_hi.grid(row=3, column=1, sticky="w", padx=(0, S_LG), pady=2)
 
         ctk.CTkLabel(grid_t, text="Timing Lo:", font=FONT_BODY).grid(
             row=3, column=2, sticky="w", padx=(0, S_SM), pady=2)
-        self.var_pulse_lo = ctk.StringVar(value=getattr(self.rail, "pulse_lo", DEFAULT_PULSE) or DEFAULT_PULSE)
+        self.var_pulse_lo = ctk.StringVar(value=getattr(head, "pulse_lo", DEFAULT_PULSE) or DEFAULT_PULSE)
         cmb_pulse_lo = ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_lo, width=130)
         cmb_pulse_lo.grid(row=3, column=3, sticky="w", pady=2)
 
         ctk.CTkLabel(grid_t, text="Timing Force:", font=FONT_BODY).grid(
             row=4, column=0, sticky="w", padx=(0, S_SM), pady=2)
-        self.var_pulse_force = ctk.StringVar(value=getattr(self.rail, "pulse_force", DEFAULT_PULSE) or DEFAULT_PULSE)
+        self.var_pulse_force = ctk.StringVar(value=getattr(head, "pulse_force", DEFAULT_PULSE) or DEFAULT_PULSE)
         cmb_pulse_force = ctk.CTkComboBox(grid_t, values=pulses, variable=self.var_pulse_force, width=130)
         cmb_pulse_force.grid(row=4, column=1, sticky="w", padx=(0, S_LG), pady=2)
 
-        # --- Conditions (output only) ---
-        self.cond_wrap, cond_body = self._make_section("Conditions")
-        self.cond_tabs = ctk.CTkTabview(cond_body, height=220)
-        self.cond_tabs.pack(fill="x", padx=S_SM, pady=S_SM)
-        self.cond_sections: dict[str, CondSectionFrame] = {}
-        for kind in ("hi", "lo", "force"):
-            theme = COND_THEME[kind]
-            self.cond_tabs.add(theme["name"])
-            tab = self.cond_tabs.tab(theme["name"])
-            sec = CondSectionFrame(
-                tab, kind,
-                get_dep_options=self._dep_options,
-                is_pseqcell_for=self._is_pseqcell_for,
-                model=CondEditModel.from_rail(self.rail, kind),
-                get_self_name=lambda: self.rail.name,
-            )
-            sec.pack(fill="both", expand=True, padx=S_SM, pady=S_SM)
-            self.cond_sections[kind] = sec
-
         # --- Debounce (input only) ---
-        self.deb_wrap, deb_body = self._make_section("Debounce")
-        self.var_deb_enable = ctk.BooleanVar(value=getattr(self.rail, "deb_enable", True))
+        self.deb_wrap, deb_body = self._make_section(parent, "Debounce")
+        self.var_deb_enable = ctk.BooleanVar(value=getattr(head, "deb_enable", True))
         enable_row = ctk.CTkFrame(deb_body, fg_color="transparent")
         enable_row.pack(fill="x", padx=S_SM, pady=S_SM)
         ctk.CTkCheckBox(enable_row, text="Enable Debounce",
@@ -999,64 +1088,52 @@ class RailEditorFrame(ctk.CTkFrame):
         ctk.CTkLabel(grid_d, text="CYCLE_HI:", font=FONT_BODY).grid(
             row=0, column=0, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_deb_cycle_hi = ctk.CTkEntry(grid_d, width=100)
-        self.entry_deb_cycle_hi.insert(0, str(getattr(self.rail, "deb_cycle_hi", 2)))
+        self.entry_deb_cycle_hi.insert(0, str(getattr(head, "deb_cycle_hi", 2)))
         self.entry_deb_cycle_hi.grid(row=0, column=1, sticky="w", padx=(0, S_LG), pady=2)
 
         ctk.CTkLabel(grid_d, text="CYCLE_LO:", font=FONT_BODY).grid(
             row=0, column=2, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_deb_cycle_lo = ctk.CTkEntry(grid_d, width=100)
-        self.entry_deb_cycle_lo.insert(0, str(getattr(self.rail, "deb_cycle_lo", 2)))
+        self.entry_deb_cycle_lo.insert(0, str(getattr(head, "deb_cycle_lo", 2)))
         self.entry_deb_cycle_lo.grid(row=0, column=3, sticky="w", pady=2)
 
         ctk.CTkLabel(grid_d, text="CYCLE_SYNC:", font=FONT_BODY).grid(
             row=1, column=0, sticky="w", padx=(0, S_SM), pady=2)
         self.entry_deb_cycle_sync = ctk.CTkEntry(grid_d, width=100)
-        self.entry_deb_cycle_sync.insert(0, str(getattr(self.rail, "deb_cycle_sync", 2)))
+        self.entry_deb_cycle_sync.insert(0, str(getattr(head, "deb_cycle_sync", 2)))
         self.entry_deb_cycle_sync.grid(row=1, column=1, sticky="w", padx=(0, S_LG), pady=2)
 
         ctk.CTkLabel(grid_d, text="INIT:", font=FONT_BODY).grid(
             row=1, column=2, sticky="w", padx=(0, S_SM), pady=2)
-        self.var_deb_init = ctk.StringVar(value="1" if getattr(self.rail, "deb_init", 0) == 1 else "0")
+        self.var_deb_init = ctk.StringVar(value="1" if getattr(head, "deb_init", 0) == 1 else "0")
         cmb_deb_init = ctk.CTkComboBox(grid_d, values=["0", "1"], variable=self.var_deb_init, width=100)
         cmb_deb_init.grid(row=1, column=3, sticky="w", pady=2)
 
         ctk.CTkLabel(grid_d, text="Timing Deb:", font=FONT_BODY).grid(
             row=2, column=0, sticky="w", padx=(0, S_SM), pady=2)
-        deb_pulses = self._pulse_values(getattr(self.rail, "deb_pulse", DEFAULT_PULSE))
-        self.var_deb_pulse = ctk.StringVar(value=getattr(self.rail, "deb_pulse", DEFAULT_PULSE) or DEFAULT_PULSE)
+        deb_pulses = self._pulse_values(getattr(head, "deb_pulse", DEFAULT_PULSE))
+        self.var_deb_pulse = ctk.StringVar(value=getattr(head, "deb_pulse", DEFAULT_PULSE) or DEFAULT_PULSE)
         cmb_deb_pulse = ctk.CTkComboBox(grid_d, values=deb_pulses, variable=self.var_deb_pulse, width=130)
         cmb_deb_pulse.grid(row=2, column=1, sticky="w", padx=(0, S_LG), pady=2)
 
-        # --- Timing Hi/Lo (input only): Schemdraw / timing-sim stimulus ---
-        self.input_wave_wrap, wave_body = self._make_section("Timing Hi/Lo")
-        self.input_wave_frame = InputWaveCondFrame(
-            wave_body,
-            self._initial_input_wave_spec,
-            get_dep_options=self._dep_options,
-            is_pseqcell_for=self._is_pseqcell_for,
-            get_self_name=lambda: self.rail.name,
-        )
-        self.input_wave_frame.pack(fill="x", padx=S_SM, pady=S_SM)
-
-        apply_row = ctk.CTkFrame(self, fg_color="transparent")
-        self.apply_row = apply_row
-        apply_row.pack(fill="x", padx=S_SM, pady=(0, S_SM))
-        ctk.CTkButton(
-            apply_row, text="Apply", width=88, command=self._on_apply_clicked,
-        ).pack(side="right")
-
-        self._on_type_toggle(initial=True)
-
         for entry in (
-            self.entry_name,
-            self.entry_hi,
-            self.entry_lo,
-            self.entry_cycle_force,
-            self.entry_deb_cycle_hi,
-            self.entry_deb_cycle_lo,
-            self.entry_deb_cycle_sync,
+            self.entry_name, self.entry_width,
+            self.entry_hi, self.entry_lo, self.entry_cycle_force,
+            self.entry_deb_cycle_hi, self.entry_deb_cycle_lo, self.entry_deb_cycle_sync,
         ):
             self._bind_disarm_node_delete_on_focus(entry)
+
+    def _build_cond_pane(self):
+        parent = self._cond_pane
+        self._bit_row = ctk.CTkFrame(parent, fg_color="transparent")
+        ctk.CTkLabel(self._bit_row, text="Bit:", font=FONT_BODY).pack(side="left", padx=(0, S_SM))
+        self._bit_seg = ctk.CTkSegmentedButton(
+            self._bit_row, values=["0"], command=self._on_bit_selected)
+        self._bit_seg.set("0")
+        self._bit_seg.pack(side="left")
+        self._cond_host = ctk.CTkFrame(parent, fg_color="transparent")
+        self._cond_host.pack(fill="x")
+        self._sync_bit_selector()
 
     def _bind_disarm_node_delete_on_focus(self, widget):
         def _on_focus_in(_event):
@@ -1066,10 +1143,130 @@ class RailEditorFrame(ctk.CTkFrame):
                 disarm()
         widget.bind("<FocusIn>", _on_focus_in, add="+")
 
+    # ---- per-bit condition editor ----
+    def _destroy_cond_editor(self):
+        for w in self._cond_host.winfo_children():
+            w.destroy()
+        self._cond_editor = None
+
+    def _build_bit_editor(self, bit_index: int):
+        """為第 bit_index 個 bit 建條件編輯器（host 須已清空）。"""
+        self._active_bit = bit_index
+        bit = self._bit_rails[bit_index]
+        if self.var_type.get() == "input":
+            frame = InputWaveCondFrame(
+                self._cond_host, rail_input_wave_spec(bit),
+                get_dep_options=self._dep_options,
+                is_pseqcell_for=self._is_pseqcell_for,
+                get_self_name=self.base_name,
+            )
+            frame.pack(fill="x", padx=S_SM, pady=S_SM)
+            self._cond_editor = {"kind": "input", "wave": frame}
+        else:
+            tabs = ctk.CTkTabview(self._cond_host, height=220)
+            tabs.pack(fill="x", padx=S_SM, pady=S_SM)
+            sections: dict[str, CondSectionFrame] = {}
+            for kind in ("hi", "lo", "force"):
+                theme = COND_THEME[kind]
+                tabs.add(theme["name"])
+                sec = CondSectionFrame(
+                    tabs.tab(theme["name"]), kind,
+                    get_dep_options=self._dep_options,
+                    is_pseqcell_for=self._is_pseqcell_for,
+                    model=CondEditModel.from_rail(bit, kind),
+                    get_self_name=self.base_name,
+                )
+                sec.pack(fill="both", expand=True, padx=S_SM, pady=S_SM)
+                sections[kind] = sec
+            self._cond_editor = {"kind": "output", "tabs": tabs, "sections": sections}
+
+    def _collect_active_bit(self):
+        """把作用中 bit 的條件編輯器內容收回 `_bit_rails[active]`。"""
+        ed = self._cond_editor
+        if ed is None or not (0 <= self._active_bit < len(self._bit_rails)):
+            return
+        rail = self._bit_rails[self._active_bit]
+        if ed["kind"] == "input":
+            apply_input_wave_dict(rail, ed["wave"].to_spec().to_dict())
+        else:
+            self._apply_output_sections(rail, ed["sections"])
+
+    @staticmethod
+    def _apply_output_sections(rail: PowerRail, secs: dict) -> None:
+        hi, lo, fo = secs["hi"], secs["lo"], secs["force"]
+        rail.depends_on = hi.get_flat_deps()
+        rail.depends_on_hi = hi.get_flat_deps()
+        rail.depends_on_lo = lo.get_flat_deps()
+        rail.depends_on_force = fo.get_flat_deps()
+        rail.depends_on_hi_groups = hi.get_groups()
+        rail.depends_on_lo_groups = lo.get_groups()
+        rail.depends_on_force_groups = fo.get_groups()
+        rail.depends_on_hi_inv = hi.get_inv_flat()
+        rail.depends_on_lo_inv = lo.get_inv_flat()
+        rail.depends_on_force_inv = fo.get_inv_flat()
+        rail.depends_on_hi_use = hi.get_use_flat()
+        rail.depends_on_lo_use = lo.get_use_flat()
+        rail.depends_on_force_use = fo.get_use_flat()
+        rail.depends_on_hi_inv_groups = hi.get_inv_groups()
+        rail.depends_on_lo_inv_groups = lo.get_inv_groups()
+        rail.depends_on_force_inv_groups = fo.get_inv_groups()
+        rail.depends_on_hi_use_groups = hi.get_use_groups()
+        rail.depends_on_lo_use_groups = lo.get_use_groups()
+        rail.depends_on_force_use_groups = fo.get_use_groups()
+        rail.depends_on_hi_group_inv = hi.get_group_inv()
+        rail.depends_on_lo_group_inv = lo.get_group_inv()
+        rail.depends_on_force_group_inv = fo.get_group_inv()
+        rail.depends_on_hi_intra_op = hi.get_group_intra_op()
+        rail.depends_on_lo_intra_op = lo.get_group_intra_op()
+        rail.depends_on_force_intra_op = fo.get_group_intra_op()
+
+    def _sync_bit_selector(self):
+        """依 Vector 勾選＋寬度，調整 `_bit_rails` 長度與 Bit 選擇器，重建作用中 bit 編輯器。"""
+        self._collect_active_bit()
+        self._destroy_cond_editor()
+        is_vec = bool(self.var_vector.get())
+        n = self._parse_width() if is_vec else 1
+        base = self.base_name()
+        seq_type = self.var_type.get()
+        self._bit_rails = resize_list(
+            self._bit_rails, n,
+            lambda i: PowerRail(name=f"{base}[{i}]", seq_type=seq_type),
+        )
+        if self._active_bit >= n:
+            self._active_bit = 0
+        if is_vec:
+            self._bit_seg.configure(values=[str(i) for i in range(n)])
+            self._bit_seg.set(str(self._active_bit))
+            self._bit_row.pack(fill="x", padx=S_SM, pady=(0, S_SM), before=self._cond_host)
+        else:
+            self._bit_row.pack_forget()
+        self._build_bit_editor(self._active_bit)
+
     # ---- callbacks ----
     def _on_apply_clicked(self):
         if self.on_apply:
             self.on_apply()
+
+    def _on_mode_seg(self, label: str):
+        self._show_mode(label)
+
+    def _show_mode(self, label: str):
+        self._decl_pane.pack_forget()
+        self._cond_pane.pack_forget()
+        self.apply_row.pack_forget()
+        if label == COND_TAB:
+            self._cond_pane.pack(fill="x")
+        else:
+            self._decl_pane.pack(fill="x")
+        self.apply_row.pack(fill="x", padx=S_SM, pady=(0, S_SM))
+
+    def _on_bit_selected(self, value: str):
+        self._collect_active_bit()
+        self._destroy_cond_editor()
+        self._build_bit_editor(_safe_int(value, 0))
+
+    def _on_vector_toggle(self):
+        self._sync_bit_selector()
 
     def _on_type_seg_selected(self, label: str):
         rev = {v: k for k, v in SEQ_TYPE_LABELS.items()}
@@ -1078,25 +1275,20 @@ class RailEditorFrame(ctk.CTkFrame):
             self.var_type.set(new_type)
         self._on_type_toggle()
 
-    def _repack_apply_row(self) -> None:
-        """pack 順序：切換 Type 後 re-pack 的 section 會跑到 Apply 後面，需重排到底。"""
-        self.apply_row.pack_forget()
-        self.apply_row.pack(fill="x", padx=S_SM, pady=(0, S_SM))
-
     def _on_type_toggle(self, initial: bool = False):
         is_input = self.var_type.get() == "input"
         if is_input:
             self.pseq_timing_wrap.pack_forget()
-            self.cond_wrap.pack_forget()
             self.deb_wrap.pack(fill="x", pady=(0, S_SM))
-            self.input_wave_wrap.pack(fill="x", pady=(0, S_SM))
             self._on_deb_toggle(initial=initial)
         else:
             self.deb_wrap.pack_forget()
-            self.input_wave_wrap.pack_forget()
             self.pseq_timing_wrap.pack(fill="x", pady=(0, S_SM))
-            self.cond_wrap.pack(fill="x", pady=(0, S_SM))
-        self._repack_apply_row()
+        if not initial:
+            # Type 改變 → 條件編輯器型態（Hi/Lo/Force ↔ Timing Hi/Lo）也要換
+            self._collect_active_bit()
+            self._destroy_cond_editor()
+            self._build_bit_editor(self._active_bit)
 
     def _on_deb_toggle(self, initial: bool = False):
         if self.var_deb_enable.get():
@@ -1104,122 +1296,88 @@ class RailEditorFrame(ctk.CTkFrame):
         else:
             self.deb_params.pack_forget()
 
+    # ---- physical (shared across bits) ----
+    def _apply_physical(self, rail: PowerRail, seq_type: str) -> None:
+        rail.seq_type = seq_type
+        if seq_type == "input":
+            rail.cycle_hi = 0
+            rail.cycle_lo = 0
+            rail.cycle_force = 2
+            rail.init = 0
+            rail.force_val = 0
+            rail.pulse_hi = DEFAULT_PULSE
+            rail.pulse_lo = DEFAULT_PULSE
+            rail.pulse_force = DEFAULT_PULSE
+            rail.deb_enable = self.var_deb_enable.get()
+            rail.deb_init = 1 if self.var_deb_init.get() == "1" else 0
+            rail.deb_cycle_hi = _safe_int(self.entry_deb_cycle_hi.get(), 2)
+            rail.deb_cycle_lo = _safe_int(self.entry_deb_cycle_lo.get(), 2)
+            rail.deb_cycle_sync = _safe_int(self.entry_deb_cycle_sync.get(), 2)
+            rail.deb_pulse = self.var_deb_pulse.get()
+            rail.cond = ConditionConfig()  # input 無 Verilog 條件；input-wave 保留
+        else:
+            rail.cycle_hi = _safe_int(self.entry_hi.get(), rail.cycle_hi)
+            rail.cycle_lo = _safe_int(self.entry_lo.get(), rail.cycle_lo)
+            rail.cycle_force = _safe_int(self.entry_cycle_force.get(), getattr(rail, "cycle_force", 2))
+            rail.init = 1 if self.var_pseq_init.get() == "1" else 0
+            rail.force_val = 1 if self.var_force_val.get() == "1" else 0
+            rail.pulse_hi = self.var_pulse_hi.get()
+            rail.pulse_lo = self.var_pulse_lo.get()
+            rail.pulse_force = self.var_pulse_force.get()
+            rail.deb_enable = False
+            rail.deb_init = 0
+            rail.deb_cycle_hi = 2
+            rail.deb_cycle_lo = 2
+            rail.deb_cycle_sync = 2
+            rail.deb_pulse = DEFAULT_PULSE
+            apply_input_wave_dict(rail, {})  # output 無 input-wave，歸零
+
     # ---- collect ----
-    def get_rail(self) -> PowerRail:
-        rail_name = self.entry_name.get().strip() or self.rail.name
-        cycle_hi = _safe_int(self.entry_hi.get(), self.rail.cycle_hi)
-        cycle_lo = _safe_int(self.entry_lo.get(), self.rail.cycle_lo)
-
-        hi = self.cond_sections["hi"]
-        lo = self.cond_sections["lo"]
-        fo = self.cond_sections["force"]
-        groups_hi = hi.get_groups()
-        groups_lo = lo.get_groups()
-        groups_force = fo.get_groups()
-        flat_hi = hi.get_flat_deps()
-        flat_lo = lo.get_flat_deps()
-        flat_force = fo.get_flat_deps()
-        hi_inv_groups = hi.get_inv_groups()
-        lo_inv_groups = lo.get_inv_groups()
-        force_inv_groups = fo.get_inv_groups()
-        hi_use_groups = hi.get_use_groups()
-        lo_use_groups = lo.get_use_groups()
-        force_use_groups = fo.get_use_groups()
-        hi_group_inv = hi.get_group_inv()
-        lo_group_inv = lo.get_group_inv()
-        force_group_inv = fo.get_group_inv()
-        hi_group_intra_op = hi.get_group_intra_op()
-        lo_group_intra_op = lo.get_group_intra_op()
-        force_group_intra_op = fo.get_group_intra_op()
-
+    def get_rails(self) -> list[PowerRail]:
+        """攤成 N 個 PowerRail（vector 帶群組 metadata，scalar 回單一 rail）。"""
+        base = self.base_name()
         seq_type = self.var_type.get()
-        if seq_type == "input":
-            cycle_hi, cycle_lo = 0, 0
-            groups_hi, groups_lo, groups_force = [], [], []
-            flat_hi, flat_lo, flat_force = [], [], []
-            hi_inv_groups = lo_inv_groups = force_inv_groups = []
-            hi_use_groups = lo_use_groups = force_use_groups = []
-            hi_group_inv = lo_group_inv = force_group_inv = []
-            hi_group_intra_op = lo_group_intra_op = force_group_intra_op = []
-
-        rail = PowerRail(
-            name=rail_name,
-            seq_type=seq_type,
-            depends_on=flat_hi,
-            depends_on_hi=flat_hi,
-            depends_on_lo=flat_lo,
-            depends_on_hi_groups=groups_hi,
-            depends_on_lo_groups=groups_lo,
-            depends_on_hi_inv=hi.get_inv_flat() if seq_type != "input" else {},
-            depends_on_lo_inv=lo.get_inv_flat() if seq_type != "input" else {},
-            depends_on_hi_use=hi.get_use_flat() if seq_type != "input" else {},
-            depends_on_lo_use=lo.get_use_flat() if seq_type != "input" else {},
-            depends_on_hi_inv_groups=hi_inv_groups,
-            depends_on_lo_inv_groups=lo_inv_groups,
-            depends_on_hi_use_groups=hi_use_groups,
-            depends_on_lo_use_groups=lo_use_groups,
-            depends_on_hi_group_inv=hi_group_inv,
-            depends_on_lo_group_inv=lo_group_inv,
-            depends_on_hi_intra_op=hi_group_intra_op,
-            depends_on_lo_intra_op=lo_group_intra_op,
-            depends_on_force=flat_force,
-            depends_on_force_groups=groups_force,
-            depends_on_force_inv=fo.get_inv_flat() if seq_type != "input" else {},
-            depends_on_force_use=fo.get_use_flat() if seq_type != "input" else {},
-            depends_on_force_inv_groups=force_inv_groups,
-            depends_on_force_use_groups=force_use_groups,
-            depends_on_force_group_inv=force_group_inv,
-            depends_on_force_intra_op=force_group_intra_op,
-            pulse_hi=self.var_pulse_hi.get() if seq_type != "input" else DEFAULT_PULSE,
-            pulse_lo=self.var_pulse_lo.get() if seq_type != "input" else DEFAULT_PULSE,
-            pulse_force=self.var_pulse_force.get() if seq_type != "input" else DEFAULT_PULSE,
-            deb_enable=self.var_deb_enable.get() if seq_type == "input" else False,
-            deb_init=1 if (seq_type == "input" and self.var_deb_init.get() == "1") else 0,
-            deb_cycle_hi=_safe_int(self.entry_deb_cycle_hi.get(), 2) if seq_type == "input" else 2,
-            deb_cycle_lo=_safe_int(self.entry_deb_cycle_lo.get(), 2) if seq_type == "input" else 2,
-            deb_cycle_sync=_safe_int(self.entry_deb_cycle_sync.get(), 2) if seq_type == "input" else 2,
-            deb_pulse=self.var_deb_pulse.get() if seq_type == "input" else DEFAULT_PULSE,
-            cycle_hi=cycle_hi,
-            cycle_lo=cycle_lo,
-            cycle_force=_safe_int(self.entry_cycle_force.get(), self.rail.cycle_force)
-            if seq_type != "input" else 2,
-            init=1 if (seq_type != "input" and self.var_pseq_init.get() == "1") else 0,
-            force_val=1 if (seq_type != "input" and self.var_force_val.get() == "1") else 0,
+        is_vec = bool(self.var_vector.get())
+        n = self._parse_width() if is_vec else 1
+        self._collect_active_bit()
+        self._bit_rails = resize_list(
+            self._bit_rails, n,
+            lambda i: PowerRail(name=f"{base}[{i}]", seq_type=seq_type),
         )
-        if seq_type == "input":
-            apply_input_wave_dict(rail, self.get_input_wave_spec().to_dict())
-        self.rail = rail
-        return rail
-
-    def get_input_wave_spec(self) -> InputWaveSpec:
-        if getattr(self, "input_wave_frame", None) is not None:
-            return self.input_wave_frame.to_spec()
-        return self._initial_input_wave_spec
+        if self._active_bit >= n:
+            self._active_bit = 0
+        out: list[PowerRail] = []
+        for i in range(n):
+            rail = copy.deepcopy(self._bit_rails[i])
+            rail.name = f"{base}[{i}]" if is_vec else base
+            self._apply_physical(rail, seq_type)
+            out.append(rail)
+        width_expr = self.entry_width.get().strip() or str(n)
+        set_group_metadata(out, base if is_vec else None, width_expr if is_vec else "1")
+        return out
 
 
 # ============================================================
-# CollapsibleRailFrame — accordion 卡片，header 採用 chip 化（A2）
+# CollapsibleRailFrame — accordion 卡片，一張卡片 = 一個節點（方案甲）
 # ============================================================
 
 class CollapsibleRailFrame(ctk.CTkFrame):
-    """Accordion wrapper：可點擊 header + 可摺疊 RailEditorFrame。"""
+    """Accordion wrapper：可點擊 header + 可摺疊 RailEditorFrame（節點 = N 個 bit rails）。"""
 
-    def __init__(self, master, rail: PowerRail,
+    def __init__(self, master, rails,
                  get_all_rails: Callable[[], list[PowerRail]],
                  get_pulses: Callable[[], list[str]],
                  on_apply: Optional[Callable[[], None]] = None,
-                 get_input_wave_spec: Optional[Callable[[str], InputWaveSpec]] = None,
-                 expanded: bool = False, **kwargs):
+                 expanded: bool = False,
+                 get_parameters: Optional[Callable[[], list]] = None,
+                 **kwargs):
         super().__init__(master, **kwargs)
-        self.rail = rail
+        self.rails = list(rails)
         self._expanded = expanded
         self._get_all_rails = get_all_rails
         self._get_pulses = get_pulses
+        self._get_parameters = get_parameters
         self._on_apply = on_apply
-        self._get_input_wave_spec = get_input_wave_spec
-        self._initial_input_wave_spec = (
-            get_input_wave_spec(rail.name) if get_input_wave_spec else InputWaveSpec()
-        )
         self.editor: Optional[RailEditorFrame] = None
 
         self._header = ctk.CTkFrame(self, fg_color=("gray86", "gray23"), corner_radius=6)
@@ -1243,29 +1401,53 @@ class CollapsibleRailFrame(ctk.CTkFrame):
         self._refresh_header()
         self._update_ui()
 
+    # ---- node identity ----
+    def base_name(self) -> str:
+        if self.editor is not None:
+            return self.editor.base_name()
+        base, _ = _node_base_of(self.rails)
+        return base
+
+    def is_vector(self) -> bool:
+        if self.editor is not None:
+            return self.editor.is_vector()
+        return self.rails[0].group_base is not None
+
+    def width_n(self) -> int:
+        return len(self.rails)
+
+    def _head(self) -> PowerRail:
+        return self.rails[0]
+
     def _refresh_header(self):
-        self._name_label.configure(text=self.rail.name)
+        base, is_vec = _node_base_of(self.rails)
+        head = self._head()
+        self._name_label.configure(text=base)
         for w in self._chips_holder.winfo_children():
             w.destroy()
-        type_label = SEQ_TYPE_LABELS.get(self.rail.seq_type, self.rail.seq_type)
-        pill = make_pill(self._chips_holder, type_label, self.rail.seq_type)
+        type_label = SEQ_TYPE_LABELS.get(head.seq_type, head.seq_type)
+        pill = make_pill(self._chips_holder, type_label, head.seq_type)
         pill.pack(side="left", padx=(0, S_SM))
         pill.bind("<Button-1>", lambda _: self.toggle())
+        if is_vec:
+            marker = make_chip(self._chips_holder, f"\u00d7{len(self.rails)}", fg=COND_THEME["force"]["text"])
+            marker.pack(side="left", padx=(0, S_SM))
+            marker.bind("<Button-1>", lambda _: self.toggle())
         chips: list[tuple[str, str | None, str | None]] = []
-        if self.rail.seq_type == "input":
-            if getattr(self.rail, "deb_enable", False):
+        if head.seq_type == "input":
+            if getattr(head, "deb_enable", False):
                 chips.append(("Deb:ON", None, None))
-                chips.append((f"HI:{getattr(self.rail, 'deb_cycle_hi', 2)}", None, None))
-                chips.append((f"LO:{getattr(self.rail, 'deb_cycle_lo', 2)}", None, None))
-                chips.append((f"INIT:{getattr(self.rail, 'deb_init', 0)}", None, None))
+                chips.append((f"HI:{getattr(head, 'deb_cycle_hi', 2)}", None, None))
+                chips.append((f"LO:{getattr(head, 'deb_cycle_lo', 2)}", None, None))
+                chips.append((f"INIT:{getattr(head, 'deb_init', 0)}", None, None))
             else:
                 chips.append(("Deb:OFF", ("gray40", "gray60"), None))
         else:
-            chips.append((f"HI:{self.rail.cycle_hi}", COND_THEME["hi"]["text"], None))
-            chips.append((f"LO:{self.rail.cycle_lo}", COND_THEME["lo"]["text"], None))
-            chips.append((f"F:{self.rail.cycle_force}", COND_THEME["force"]["text"], None))
-            chips.append((f"INIT:{getattr(self.rail, 'init', 0)}", None, None))
-            if getattr(self.rail, "force_val", 0) == 1:
+            chips.append((f"HI:{head.cycle_hi}", COND_THEME["hi"]["text"], None))
+            chips.append((f"LO:{head.cycle_lo}", COND_THEME["lo"]["text"], None))
+            chips.append((f"F:{head.cycle_force}", COND_THEME["force"]["text"], None))
+            chips.append((f"INIT:{getattr(head, 'init', 0)}", None, None))
+            if getattr(head, "force_val", 0) == 1:
                 chips.append(("FORCE:1", COND_THEME["force"]["text"], None))
         for text, fg, bg in chips:
             c = make_chip(self._chips_holder, text, fg=fg, bg=bg)
@@ -1276,11 +1458,11 @@ class CollapsibleRailFrame(ctk.CTkFrame):
         if self.editor is not None:
             return
         self.editor = RailEditorFrame(
-            self._body, self.rail,
+            self._body, self.rails,
             get_all_rails=self._get_all_rails,
             get_pulses=self._get_pulses,
             on_apply=self._on_apply,
-            initial_input_wave_spec=self._initial_input_wave_spec,
+            get_parameters=self._get_parameters,
         )
         self.editor.pack(fill="x", padx=S_SM, pady=(S_SM, 0))
 
@@ -1309,17 +1491,10 @@ class CollapsibleRailFrame(ctk.CTkFrame):
             self._expanded = False
             self._update_ui()
 
-    def get_rail(self) -> PowerRail:
+    def get_rails(self) -> list[PowerRail]:
         if self.editor is not None:
-            self.rail = self.editor.get_rail()
-        return self.rail
-
-    def get_input_wave_spec(self) -> InputWaveSpec:
-        if self.editor is not None:
-            spec = self.editor.get_input_wave_spec()
-            self._initial_input_wave_spec = spec
-            return spec
-        return self._initial_input_wave_spec
+            self.rails = self.editor.get_rails()
+        return self.rails
 
 
 # ============================================================
