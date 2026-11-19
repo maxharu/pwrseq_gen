@@ -157,11 +157,22 @@ class _VerilogCond(CondVisitor):
 
     def level(self, name: str) -> str:
         dep = self.name_to_rail.get(name)
+        # 被參照的是某 vector 的一個 bit：收合後是 bus，葉節點要走 bus 索引 `<bus>[i]`
+        if dep is not None and dep.group_base is not None:
+            idx = f"[{dep.bit_index}]"
+            if dep.seq_type == "output":
+                return f"{_group_sig(dep)}{idx}"
+            if dep.seq_type == "input" and getattr(dep, "deb_enable", False):
+                return f"{_group_sig(dep)}_deb{idx}"
+            return f"{_group_port(dep, 'i')}{idx}"
         if dep is not None and dep.seq_type == "output":
             return internal_sig(name)
         return _get_input_signal(name, self.name_to_rail)
 
     def cond(self, name: str, kind: str) -> str:
+        dep = self.name_to_rail.get(name)
+        if dep is not None and dep.group_base is not None:
+            return f"{_group_sig(dep)}_{kind}[{dep.bit_index}]"
         return f"{internal_sig(name)}_{kind}"
 
     def invert(self, operand: str) -> str:
@@ -303,9 +314,11 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
         w_hi = max(len(s) + 3 for s in cond_sigs)     # "_hi"
         w_lo = max(len(s) + 3 for s in cond_sigs)     # "_lo"
         w_fc = max(len(s) + 6 for s in cond_sigs)     # "_force"
+        # width 前綴欄對齊：純量（無前綴）補等寬空白，讓 `_hi` 名稱與 vector 行同欄。
+        w_wp = max(len(_width_prefix(r)) for r in cond_heads)
         for r in cond_heads:
             s = _group_sig(r)
-            wp = _width_prefix(r)
+            wp = _width_prefix(r).ljust(w_wp)
             lines.append(
                 f"wire {wp}{(s + '_hi').ljust(w_hi)}, "
                 f"{(s + '_lo').ljust(w_lo)}, "
@@ -360,15 +373,30 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
 
     if sequenced:
         # iHi, iLo assignments (F-DEP-08: group 內 &，group 間 |)
+        # 群組逐 bit 索引展開（每 bit 渲染自己的條件，condition wire/PSEQCELL 仍是整條 bus）；
+        # 非群組維持原樣（單一 assign，無索引）。
         renderer = _VerilogCond(name_to_rail)
         for r in sequenced:
             s = _group_sig(r)
-            for kind, no_cond_note in _NO_CONDITION_NOTES.items():
-                tree = resolve_condition(r, kind, name_to_rail)
-                expr = tree.accept(renderer)
-                note = f"  {no_cond_note}" if isinstance(tree, Const) else ""
-                lines.append(f"    assign {s}_{kind} = {expr};{note}")
-            lines.append("")
+            if r.group_base is None:
+                for kind, no_cond_note in _NO_CONDITION_NOTES.items():
+                    tree = resolve_condition(r, kind, name_to_rail)
+                    expr = tree.accept(renderer)
+                    note = f"  {no_cond_note}" if isinstance(tree, Const) else ""
+                    lines.append(f"    assign {s}_{kind} = {expr};{note}")
+                lines.append("")
+            else:
+                bits = sorted(
+                    (x for x in node_order_rails if x.group_base == r.group_base),
+                    key=lambda x: x.bit_index,
+                )
+                for b in bits:
+                    for kind, no_cond_note in _NO_CONDITION_NOTES.items():
+                        tree = resolve_condition(b, kind, name_to_rail)
+                        expr = tree.accept(renderer)
+                        note = f"  {no_cond_note}" if isinstance(tree, Const) else ""
+                        lines.append(f"    assign {s}_{kind}[{b.bit_index}] = {expr};{note}")
+                    lines.append("")
 
         # PSEQCELL instances (per-rail pulse selection)
         # Parameter order per src/reference/PSEQCELL.v

@@ -77,7 +77,7 @@ class PowerSeqGUI(ctk.CTk):
         self.minsize(1000, 650)
 
         self._topmost = False
-        self._inspect_mode = False
+        self._inspect_mode = True
         self._show_preview = True
         self._preview_pane_in_paned = False
         self._paned_sash_drag = False
@@ -192,7 +192,7 @@ class PowerSeqGUI(ctk.CTk):
         self._sep(toolbar)
 
         # group: view toggles
-        self._inspect_var = tk.BooleanVar(value=False)
+        self._inspect_var = tk.BooleanVar(value=True)
         cb_ins = ctk.CTkCheckBox(toolbar, text="Inspect", variable=self._inspect_var,
                                   width=80, command=self._toggle_inspect)
         cb_ins.pack(side="left", padx=(0, S_SM))
@@ -292,19 +292,21 @@ class PowerSeqGUI(ctk.CTk):
             on_delete=self._delete_selected_from_node_list,
             on_activate=self._arm_node_list_delete,
             on_disarm=self._disarm_node_list_delete,
+            get_parameters=self._get_parameters,
         )
         self._nodes_header = self._make_collapsible_header(
             left_wrap, "Nodes", lambda: self.node_list)
         self._nodes_header.grid(row=0, column=0, sticky="ew", padx=S_XS, pady=(S_XS, 0))
         self.node_list.grid(row=1, column=0, sticky="nsew", padx=S_XS, pady=(S_XS, 0))
 
-        self.parameter_panel = ParameterPanel(left_wrap, on_change=self._on_parameters_changed)
+        self.parameter_panel = ParameterPanel(
+            left_wrap,
+            on_change=self._on_param_dims_changed,
+        )
         self._param_header = self._make_collapsible_header(
             left_wrap, "Parameters", lambda: self.parameter_panel)
         self._param_header.grid(row=2, column=0, sticky="ew", padx=S_XS, pady=(S_SM, 0))
         self.parameter_panel.grid(row=3, column=0, sticky="ew", padx=S_XS, pady=(0, S_SM))
-        self.parameter_panel.entry_name.bind(
-            "<FocusIn>", lambda _e: self._disarm_node_list_delete(), add="+")
 
         self.pulse_panel = PulsePanel(left_wrap, on_change=self._on_pulses_changed)
         self._timing_header = self._make_collapsible_header(
@@ -493,6 +495,7 @@ class PowerSeqGUI(ctk.CTk):
             on_apply=_on_apply,
             expanded=expanded,
             get_parameters=self._get_parameters,
+            get_dimensions=self._get_dimensions,
         )
         holder.append(cf)
         return cf
@@ -569,8 +572,11 @@ class PowerSeqGUI(ctk.CTk):
 
     # ---- collect ----
     def _collect_config(self) -> PowerSeqConfig:
+        # 純建構器：只讀各卡片狀態組出並回傳 PowerSeqConfig，不就地改寫 self.config_obj。
+        # （曾在此 `self.config_obj.rails = rails`，但 _apply_node 會先依『改動前的
+        #  config』算出 rail span，若 _push_undo() 內部的本函式中途覆寫 config.rails，
+        #  span 便過期、slice 會殘留重複 bit。改動點一律由呼叫端用回傳值提交。）
         rails = flatten_node_rails(cf.get_rails() for cf in self.collapsible_frames)
-        self.config_obj.rails = rails
         steps, hscale = self._timing_globals_from_toolbar()
         has_input = any(r.seq_type == "input" for r in rails)
         timing_scenario = None
@@ -578,7 +584,6 @@ class PowerSeqGUI(ctk.CTk):
             timing_scenario = {"steps": steps}
             if hscale != 1:
                 timing_scenario["hscale"] = hscale
-        self.config_obj.timing_scenario = timing_scenario
         return PowerSeqConfig(
             rails=rails,
             module_name=self.config_obj.module_name,
@@ -586,11 +591,15 @@ class PowerSeqGUI(ctk.CTk):
             pulse_period_ns=self.config_obj.pulse_period_ns,
             pulses=getattr(self.config_obj, "pulses", None) or [DEFAULT_PULSE],
             parameters=list(getattr(self.config_obj, "parameters", None) or []),
+            dimensions=list(getattr(self.config_obj, "dimensions", None) or []),
             timing_scenario=timing_scenario,
         )
 
     def _get_parameters(self) -> list:
         return list(getattr(self.config_obj, "parameters", None) or [])
+
+    def _get_dimensions(self) -> list:
+        return list(getattr(self.config_obj, "dimensions", None) or [])
 
     def _get_pulses(self) -> list[str]:
         return getattr(self.config_obj, "pulses", None) or [DEFAULT_PULSE]
@@ -628,7 +637,7 @@ class PowerSeqGUI(ctk.CTk):
 
         primary = self.node_list.get_primary()
         self.node_list.set_nodes(nodes, primary_idx=primary)
-        self.parameter_panel.set_parameters(self._get_parameters())
+        self.parameter_panel.set_from_config(self._get_parameters(), self._get_dimensions())
         self.pulse_panel.set_pulses(self._get_pulses())
         self._apply_inspect_mode()
         self._update_validation()
@@ -798,12 +807,15 @@ class PowerSeqGUI(ctk.CTk):
         self._update_stats()
 
     # ---- pulses ----
-    def _on_parameters_changed(self, new_params: list):
+    def _on_param_dims_changed(self, new_params: list, new_dims: list):
+        """維度 parameter（＝全域維度）變更：同時更新 parameters 與 dimensions。
+
+        值/清單變更 → 經序列化 round-trip 以新 parameters 重算各群組展開 N（維度 parameter 的
+        最大值變更時，引用它的向量寬度會跟著重算）。無效引用交由 validator 回報，不中斷 UI。"""
         self._push_undo()
         self.config_obj = self._collect_config()
         self.config_obj.parameters = list(new_params)
-        # 值/清單變更 → 經序列化 round-trip 以新 parameters 重算各群組展開 N。
-        # width 引用已刪除的 parameter 等無效情況交由 validator 回報，不中斷 UI。
+        self.config_obj.dimensions = list(new_dims)
         try:
             self.config_obj = PowerSeqConfig.from_dict(self.config_obj.to_dict())
         except (ValueError, TypeError):

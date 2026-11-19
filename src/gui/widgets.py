@@ -6,7 +6,12 @@ from typing import Callable, Optional
 import customtkinter as ctk
 
 from core.cond_edit import CondEditModel
-from core.config_edit import resize_list, set_group_metadata
+from core.config_edit import (
+    resize_list,
+    set_group_metadata,
+    vector_shape_label,
+    width_expr_from_dims,
+)
 from core.config_models import (
     DEFAULT_PULSE,
     ConditionConfig,
@@ -15,9 +20,17 @@ from core.config_models import (
     eval_width,
     rail_input_wave_spec,
 )
+from core.config_models import _bit_name as _bit_name
 from core.group_logic import INTRA_OP_LABELS, intra_op_label, normalize_intra_op
 from core.timing_models import InputWaveSpec
 from gui.theme import *
+
+# vector 相依下拉的消費模式（方案甲 GUI 糖衣；僅影響「新增相依」時如何展開成具體 base[i]）。
+VEC_MODE_SAME = "同索引"      # → base[active_bit]
+VEC_MODE_ALL = "全部(AND)"    # → base[0..N-1]，整組 intra_op=and
+VEC_MODE_ANY = "任一(OR)"     # → base[0..N-1]，整組 intra_op=or
+VEC_MODE_PICK = "指定"        # → base[k]
+VEC_MODES = (VEC_MODE_SAME, VEC_MODE_ALL, VEC_MODE_ANY, VEC_MODE_PICK)
 
 # ============================================================
 # CondSectionFrame — Hi / Lo / Force 共用條件區塊（B1）
@@ -37,6 +50,7 @@ class CondSectionFrame(ctk.CTkFrame):
                  show_group_inv: bool = True,
                  on_change: Optional[Callable[[], None]] = None,
                  get_self_name: Optional[Callable[[], str]] = None,
+                 vec_dep=None,
                  **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.kind = kind
@@ -46,6 +60,8 @@ class CondSectionFrame(ctk.CTkFrame):
         self.is_pseqcell_for = is_pseqcell_for
         self.on_change = on_change
         self.show_group_inv = show_group_inv
+        # vector 相依展開器（RailEditorFrame 注入；None=不收合，行為與過去一致）。
+        self.vec_dep = vec_dep
 
         # 唯一的真實來源。結構操作一律先改它，再 _rebuild_groups_ui() 重繪；
         # 下面那些 *_vars / rows / group_frames 都只是當下畫面的對照表。
@@ -85,7 +101,7 @@ class CondSectionFrame(ctk.CTkFrame):
     def refresh_dep_options(self) -> None:
         """只更新各 group 的 signal ComboBox values（不重建 UI）。"""
         opts = self.get_dep_options() or [""]
-        for gf in self.group_frames:
+        for gi, gf in enumerate(self.group_frames):
             combo = gf.get("combo")
             if combo is None:
                 continue
@@ -95,6 +111,7 @@ class CondSectionFrame(ctk.CTkFrame):
                 combo.set(cur)
             else:
                 combo.set(opts[0])
+            self._refresh_vec_controls(gi)
 
     def _allowed_use_labels(self, name: str) -> list[str]:
         """可選的 use 標籤。自我參照時移除會造成同欄位組合迴圈的選項。
@@ -172,9 +189,21 @@ class CondSectionFrame(ctk.CTkFrame):
         title_label.pack(side="left", padx=(0, S_SM))
 
         dep_options = self.get_dep_options() or [""]
-        combo = ctk.CTkComboBox(header, values=dep_options, width=100)
+        combo = ctk.CTkComboBox(
+            header, values=dep_options, width=100,
+            command=lambda _v, s=gi_slot: self._refresh_vec_controls(s[0]))
         combo.pack(side="left", padx=(0, S_SM))
         combo.set(dep_options[0])
+
+        # vector 消費模式 + 指定 bit（固定佔位，選到 vector base 時才顯示內容，保持排序）
+        vec_slot = ctk.CTkFrame(header, fg_color="transparent")
+        vec_slot.pack(side="left", padx=(0, S_SM))
+        mode_var = ctk.StringVar(value=VEC_MODE_PICK)
+        mode_menu = ctk.CTkOptionMenu(
+            vec_slot, values=list(VEC_MODES), variable=mode_var, width=96,
+            command=lambda _v, s=gi_slot: self._refresh_bit_menu(s[0]))
+        bit_var = ctk.StringVar(value="0")
+        bit_menu = ctk.CTkOptionMenu(vec_slot, values=["0"], variable=bit_var, width=56)
 
         ctk.CTkButton(header, text="+ Add", width=56,
                       command=lambda s=gi_slot: self._add_cond_to_group(s[0])).pack(
@@ -210,6 +239,11 @@ class CondSectionFrame(ctk.CTkFrame):
         self.group_frames.append({
             "frame": frame,
             "combo": combo,
+            "vec_slot": vec_slot,
+            "mode_menu": mode_menu,
+            "mode_var": mode_var,
+            "bit_menu": bit_menu,
+            "bit_var": bit_var,
             "list_frame": list_frame,
             "gi_slot": gi_slot,
             "title_label": title_label,
@@ -217,6 +251,50 @@ class CondSectionFrame(ctk.CTkFrame):
 
         for ii, name in enumerate(group):
             self._add_cond_row(gi, name, ii)
+
+        self._refresh_vec_controls(gi)
+
+    # ---- vector 相依下拉：模式 / bit 控制 ----
+    def _refresh_vec_controls(self, gi: int):
+        """依目前 combo 選取顯示/隱藏模式與 bit 控制：選到 vector base 才出現。"""
+        if not (0 <= gi < len(self.group_frames)):
+            return
+        gf = self.group_frames[gi]
+        mode_menu, bit_menu = gf["mode_menu"], gf["bit_menu"]
+        width = self.vec_dep.width_of(gf["combo"].get()) if self.vec_dep else None
+        if width is None:
+            mode_menu.pack_forget()
+            bit_menu.pack_forget()
+            return
+        # owner 非 vector 時「同索引」無意義，從模式清單移除
+        modes = list(VEC_MODES)
+        if not self.vec_dep.owner_is_vector():
+            modes = [m for m in modes if m != VEC_MODE_SAME]
+        mode_menu.configure(values=modes)
+        if gf["mode_var"].get() not in modes:
+            gf["mode_var"].set(modes[0])
+        mode_menu.pack(side="left", padx=(0, S_XS))
+        bit_menu.configure(values=[str(i) for i in range(width)])
+        if _safe_int(gf["bit_var"].get(), 0) >= width:
+            gf["bit_var"].set("0")
+        self._refresh_bit_menu(gi)
+
+    def _refresh_bit_menu(self, gi: int):
+        """bit 下拉僅在模式=指定且選取為 vector 時顯示。"""
+        if not (0 <= gi < len(self.group_frames)):
+            return
+        gf = self.group_frames[gi]
+        is_vec = self.vec_dep and self.vec_dep.width_of(gf["combo"].get()) is not None
+        if is_vec and gf["mode_var"].get() == VEC_MODE_PICK:
+            gf["bit_menu"].pack(side="left")
+        else:
+            gf["bit_menu"].pack_forget()
+
+    def _set_vec_mode(self, gi: int, mode: str):
+        """設定第 gi 組的消費模式（等同使用者操作模式下拉）。"""
+        if 0 <= gi < len(self.group_frames):
+            self.group_frames[gi]["mode_var"].set(mode)
+            self._refresh_bit_menu(gi)
 
     def _add_cond_row(self, gi: int, name: str, ii: int | None = None):
         if ii is None:
@@ -316,11 +394,29 @@ class CondSectionFrame(ctk.CTkFrame):
         sel = gf["combo"].get()
         if not sel:
             return
-        dep_key = DEP_HIGH if sel == "High" else (DEP_LOW if sel == "Low" else sel)
-        if not self.model.add_dep(gi, dep_key):
-            return
-        self._add_cond_row(gi, dep_key)
-        self._fire_change()
+        names, group_op = self._expand_selection(gf, sel)
+        if group_op is not None and 0 <= gi < len(self.model.group_intra_op):
+            # 全部/任一：reduction 由整組 intra_op 承載（and/or）
+            self.model.group_intra_op[gi] = group_op
+            var = self.group_intra_op_vars.get(gi)
+            if var is not None:
+                var.set(intra_op_label(group_op))
+        added = False
+        for name in names:
+            dep_key = DEP_HIGH if name == "High" else (DEP_LOW if name == "Low" else name)
+            if self.model.add_dep(gi, dep_key):
+                self._add_cond_row(gi, dep_key)
+                added = True
+        if added:
+            self._fire_change()
+
+    def _expand_selection(self, gf: dict, sel: str) -> tuple[list[str], str | None]:
+        """把 combo 選取（含 vector 模式/ bit）展開成具體相依名與需設定的 group op。"""
+        if self.vec_dep is None:
+            return ([sel], None)
+        mode = gf["mode_var"].get()
+        bit = _safe_int(gf["bit_var"].get(), 0)
+        return self.vec_dep.expand(sel, mode, bit)
 
     def _remove_cond_by_key(self, key: tuple[int, int]):
         if not self.model.remove_dep(*key):
@@ -621,6 +717,7 @@ class InputWaveSidePanel(ctk.CTkFrame):
         get_self_name: Callable[[], str],
         on_change: Optional[Callable[[], None]] = None,
         on_layout_change: Optional[Callable[[], None]] = None,
+        vec_dep=None,
         **kwargs,
     ):
         super().__init__(master, fg_color="transparent", **kwargs)
@@ -684,6 +781,7 @@ class InputWaveSidePanel(ctk.CTkFrame):
             show_group_inv=True,
             on_change=self._fire_change,
             get_self_name=get_self_name,
+            vec_dep=vec_dep,
         )
         self._on_mode_change()
 
@@ -755,6 +853,7 @@ class InputWaveCondFrame(ctk.CTkFrame):
         is_pseqcell_for: Callable[[str], bool],
         get_self_name: Callable[[], str],
         on_change: Optional[Callable[[], None]] = None,
+        vec_dep=None,
         **kwargs,
     ):
         super().__init__(master, fg_color="transparent", **kwargs)
@@ -772,6 +871,7 @@ class InputWaveCondFrame(ctk.CTkFrame):
                 get_self_name=get_self_name,
                 on_change=on_change,
                 on_layout_change=self._sync_tab_height,
+                vec_dep=vec_dep,
             )
             panel.pack(fill="x", padx=S_SM, pady=S_SM)
             setattr(self, f"_{side}_panel", panel)
@@ -828,6 +928,18 @@ DECL_TAB = "宣告"
 COND_TAB = "條件"
 
 
+class _VecDepHelper:
+    """注入 CondSectionFrame 的 vector 相依展開器。
+
+    由 RailEditorFrame 建立（唯一知道 vector 結構／目前 active bit 的地方）。CondSectionFrame
+    只透過這三個方法與 vector 互動，不自行理解群組結構。"""
+
+    def __init__(self, width_of, owner_is_vector, expand):
+        self.width_of = width_of              # (sel) -> int | None
+        self.owner_is_vector = owner_is_vector  # () -> bool
+        self.expand = expand                  # (sel, mode, bit) -> (names, group_op)
+
+
 def _node_base_of(rails: list[PowerRail]) -> tuple[str, bool]:
     """(base 名, 是否 vector)；vector 取 group_base，scalar 取節點名。"""
     head = rails[0]
@@ -850,24 +962,68 @@ class RailEditorFrame(ctk.CTkFrame):
                  get_pulses: Callable[[], list[str]],
                  on_apply: Optional[Callable[[], None]] = None,
                  get_parameters: Optional[Callable[[], list]] = None,
+                 get_dimensions: Optional[Callable[[], list]] = None,
                  **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.get_all_rails = get_all_rails
         self.get_pulses = get_pulses
         self.get_parameters = get_parameters
+        self.get_dimensions = get_dimensions
         self.on_apply = on_apply
         rails = list(rails) or [PowerRail(name="N0", seq_type="output")]
         self._base_init, self._is_vector_init = _node_base_of(rails)
+        # 初始維度：由 head.dim_params 推（1D/2D）；legacy 向量（無 dim_params）骨架預設 1 維，
+        # 寬度沿用載入時的 width_expr（無全域維度時仍能保留既有 bus 寬度）。
+        init_dims = list(getattr(rails[0], "dim_params", None) or [])[:2]
+        self._dim_params_init = init_dims
+        self._dim_count_init = len(init_dims) if init_dims else (1 if self._is_vector_init else 0)
+        self._width_expr_init = str(getattr(rails[0], "width_expr", "1") or "1")
         # 每 bit 一份獨立副本（條件來源）；編輯不動到 config，直到 Apply。
         self._bit_rails: list[PowerRail] = [copy.deepcopy(r) for r in rails]
         self._active_bit = 0
         self._cond_editor: Optional[dict] = None  # {"kind": "output"|"input", ...}
+        self._vec_dep = _VecDepHelper(
+            self._dep_vector_width, self._owner_is_vector, self._expand_dep)
         self._build_ui()
 
     # ---- helpers ----
     def _dep_options(self) -> list[str]:
-        # 允許選自己：output 可參照自身的 Hi/Lo/Force condition（用 use 下拉指定欄位）
-        return [r.name for r in self.get_all_rails()] + ["High", "Low"]
+        """相依下拉選項：vector 收合成每個 base 一筆（不逐 bit 展開），scalar 用節點名，末端 High/Low。"""
+        seen: set[str] = set()
+        out: list[str] = []
+        for r in self.get_all_rails():
+            key = r.group_base if r.group_base is not None else r.name
+            if key not in seen:
+                seen.add(key)
+                out.append(key)
+        return out + ["High", "Low"]
+
+    def _dep_vector_width(self, sel: str) -> int | None:
+        """sel 是 vector base 時回傳 bit 數，否則 None（scalar / High / Low）。"""
+        n = sum(1 for r in self.get_all_rails() if r.group_base == sel)
+        return n or None
+
+    def _owner_is_vector(self) -> bool:
+        return self.is_vector()
+
+    def _expand_dep(self, sel: str, mode: str, bit: int) -> tuple[list[str], str | None]:
+        """把 (base, 模式, bit) 展開成具體相依名與需設定的 group op（方案甲 GUI 糖衣）。
+
+        scalar / High / Low 原樣回傳；vector 依模式產生具體 base[i]：
+          同索引→目前 active bit；全部/任一→全 bit + and/or；指定→base[k]。"""
+        if sel in ("High", "Low"):
+            return ([sel], None)
+        n = self._dep_vector_width(sel)
+        if n is None:
+            return ([sel], None)
+        if mode == VEC_MODE_SAME:
+            return ([_bit_name(sel, min(self._active_bit, n - 1))], None)
+        if mode == VEC_MODE_ALL:
+            return ([_bit_name(sel, i) for i in range(n)], "and")
+        if mode == VEC_MODE_ANY:
+            return ([_bit_name(sel, i) for i in range(n)], "or")
+        # VEC_MODE_PICK（或未知模式）→ 指定 bit
+        return ([_bit_name(sel, max(0, min(bit, n - 1)))], None)
 
     def refresh_dep_options(self) -> None:
         """刷新作用中 bit 的 Conditions / Input Timing 的 signal 下拉名單。"""
@@ -908,7 +1064,7 @@ class RailEditorFrame(ctk.CTkFrame):
         return self.entry_name.get().strip() or self._base_init
 
     def is_vector(self) -> bool:
-        return bool(self.var_vector.get())
+        return self._dim_count() >= 1
 
     def seq_type(self) -> str:
         return self.var_type.get()
@@ -916,22 +1072,40 @@ class RailEditorFrame(ctk.CTkFrame):
     def _parameters(self) -> list:
         return self.get_parameters() if self.get_parameters else []
 
-    def _parse_width(self) -> int:
-        """width 欄位 → 位元數 N：先試公式（引用 parameter），失敗回退整數解析。"""
-        expr = self.entry_width.get().strip()
-        try:
-            return max(1, eval_width(expr, self._parameters()))
-        except (ValueError, TypeError):
-            return max(1, _safe_int(expr, len(self._bit_rails) or 1))
+    def _global_dims(self) -> list[str]:
+        """目前已宣告的全域維度 parameter 名（維度1=row、維度2=col）。"""
+        return list(self.get_dimensions()) if self.get_dimensions else []
 
-    def _on_insert_param(self, name: str):
-        """『插入 parameter』下拉：把選到的 parameter 名插入 width 欄位游標處。"""
-        if not name:
-            return
+    def _dim_count(self) -> int:
+        return _safe_int(self.var_dim_count.get(), 0)
+
+    def _selected_dim_params(self) -> list[str]:
+        """依維度個數讀各 Bits 下拉，回有效（存在於全域維度）的維度名清單。"""
+        dims = self._global_dims()
+        out: list[str] = []
+        for i in range(self._dim_count()):
+            if i < len(self._dim_menus):
+                val = self._dim_menus[i].get()
+                if val in dims:
+                    out.append(val)
+        return out
+
+    def _width_expr(self) -> str:
+        """由所選維度推寬度公式（0→"1"、1→P1、2→P1*P2）。
+
+        維度個數 ≥ 1 但尚無有效維度（legacy 向量，或全域維度未宣告）時，沿用載入時的 width_expr，
+        避免把既有 bus 寬度塌成 1。"""
+        dims = self._selected_dim_params()
+        if dims:
+            return width_expr_from_dims(dims)
+        return self._width_expr_init if self.is_vector() else "1"
+
+    def _parse_width(self) -> int:
+        """由維度寬度公式求位元數 N（以具體 parameter 值代入 eval_width）。"""
         try:
-            self.entry_width.insert("insert", name)
-        except Exception:
-            self.entry_width.insert(tk.END, name)
+            return max(1, eval_width(self._width_expr(), self._parameters()))
+        except (ValueError, TypeError):
+            return max(1, len(self._bit_rails) or 1)
 
     # ---- UI build ----
     def _build_ui(self):
@@ -986,28 +1160,20 @@ class RailEditorFrame(ctk.CTkFrame):
         self._type_seg.set(SEQ_TYPE_LABELS.get(head.seq_type, "Output"))
         self._type_seg.pack(side="left")
 
-        # Vector 勾選 + 寬度（整數期；公式/插入參數屬 C 階段）
-        self.var_vector = ctk.BooleanVar(value=self._is_vector_init)
-        ctk.CTkCheckBox(grid, text="Vector", variable=self.var_vector, width=80,
-                        command=self._on_vector_toggle).grid(
-            row=1, column=0, sticky="w", padx=(0, S_SM), pady=2)
-        ctk.CTkLabel(grid, text="Width/Bits:", font=FONT_BODY).grid(
+        # 維度個數 [0/1/2] + Bits 維度 parameter 下拉（取代舊 Vector 勾選＋自由公式 Width）
+        self.var_dim_count = ctk.StringVar(value=str(self._dim_count_init))
+        dim_row = ctk.CTkFrame(grid, fg_color="transparent")
+        dim_row.grid(row=1, column=0, columnspan=2, sticky="w", padx=(0, S_SM), pady=2)
+        ctk.CTkLabel(dim_row, text="維度", font=FONT_BODY).pack(side="left", padx=(0, S_XS))
+        ctk.CTkOptionMenu(
+            dim_row, values=["0", "1", "2"], variable=self.var_dim_count, width=56,
+            command=self._on_dim_count_changed).pack(side="left")
+        ctk.CTkLabel(grid, text="Bits:", font=FONT_BODY).grid(
             row=1, column=2, sticky="w", padx=(0, S_SM), pady=2)
-        width_row = ctk.CTkFrame(grid, fg_color="transparent")
-        width_row.grid(row=1, column=3, sticky="w", pady=2)
-        self.entry_width = ctk.CTkEntry(width_row, width=100)
-        self.entry_width.insert(0, str(head.width_expr) if self._is_vector_init else str(len(self._bit_rails)))
-        self.entry_width.pack(side="left")
-        self.entry_width.bind("<Return>", lambda _e: self._on_vector_toggle(), add="+")
-        self.entry_width.bind("<FocusOut>", lambda _e: self._on_vector_toggle(), add="+")
-        # 『插入 parameter』下拉：把 parameter 名插進 width 欄位（空清單則留佔位）
-        param_names = [p.name for p in self._parameters()]
-        self.cmb_insert_param = ctk.CTkComboBox(
-            width_row, values=param_names or [""], width=64,
-            command=lambda name: (self._on_insert_param(name), self.cmb_insert_param.set("+")),
-        )
-        self.cmb_insert_param.set("+")
-        self.cmb_insert_param.pack(side="left", padx=(S_XS, 0))
+        self.dim_bits_row = ctk.CTkFrame(grid, fg_color="transparent")
+        self.dim_bits_row.grid(row=1, column=3, sticky="w", pady=2)
+        self._dim_menus: list[ctk.CTkOptionMenu] = []
+        self._render_dim_bits()
 
         # --- Timing (output only) ---
         self.pseq_timing_wrap, timing_body = self._make_section(parent, "Timing")
@@ -1117,7 +1283,7 @@ class RailEditorFrame(ctk.CTkFrame):
         cmb_deb_pulse.grid(row=2, column=1, sticky="w", padx=(0, S_LG), pady=2)
 
         for entry in (
-            self.entry_name, self.entry_width,
+            self.entry_name,
             self.entry_hi, self.entry_lo, self.entry_cycle_force,
             self.entry_deb_cycle_hi, self.entry_deb_cycle_lo, self.entry_deb_cycle_sync,
         ):
@@ -1127,13 +1293,57 @@ class RailEditorFrame(ctk.CTkFrame):
         parent = self._cond_pane
         self._bit_row = ctk.CTkFrame(parent, fg_color="transparent")
         ctk.CTkLabel(self._bit_row, text="Bit:", font=FONT_BODY).pack(side="left", padx=(0, S_SM))
-        self._bit_seg = ctk.CTkSegmentedButton(
-            self._bit_row, values=["0"], command=self._on_bit_selected)
-        self._bit_seg.set("0")
-        self._bit_seg.pack(side="left")
+        # 每 bit 一個複選框（勾選=連動）；_active_bit=顯示/編輯的錨點。
+        self._bit_box = ctk.CTkFrame(self._bit_row, fg_color="transparent")
+        self._bit_box.pack(side="left")
+        ctk.CTkLabel(self._bit_row, text="連動編輯：勾選的 bit 會一起套用（Shift 連選）",
+                     font=FONT_HINT, text_color="gray").pack(side="left", padx=(S_MD, 0))
+        self._bit_link_vars: list[ctk.BooleanVar] = []
+        self._bit_checkboxes: list[ctk.CTkCheckBox] = []
+        self._anchor_idx: Optional[int] = None
+        self._suspend_broadcast = False
         self._cond_host = ctk.CTkFrame(parent, fg_color="transparent")
         self._cond_host.pack(fill="x")
         self._sync_bit_selector()
+
+    def _rebuild_bit_checkboxes(self, n: int):
+        """重建 bit 複選框；寬度不變時沿用目前勾選，寬度改變時重設為只勾錨點。"""
+        prev = [v.get() for v in self._bit_link_vars]
+        keep = len(prev) == n
+        for w in self._bit_box.winfo_children():
+            w.destroy()
+        self._bit_link_vars = []
+        self._bit_checkboxes = []
+        for i in range(n):
+            checked = prev[i] if keep else (i == self._active_bit)
+            var = ctk.BooleanVar(value=checked)
+            cb = ctk.CTkCheckBox(self._bit_box, text=str(i), variable=var, width=44)
+            cb.pack(side="left", padx=(0, S_XS))
+            handler = lambda e, idx=i: self._on_bit_checkbox_click(idx, e)
+            cb._canvas.bind("<Button-1>", handler)
+            cb._text_label.bind("<Button-1>", handler)
+            self._bit_link_vars.append(var)
+            self._bit_checkboxes.append(cb)
+
+    def _on_bit_checkbox_click(self, idx: int, event):
+        """Explorer 風格 anchor + Shift 區間（取代 CTkCheckBox 內建 toggle）。"""
+        shift = bool(event.state & 0x0001)
+        if shift and self._bit_link_vars:
+            anchor = self._anchor_idx if self._anchor_idx is not None else 0
+            new_state = not self._bit_link_vars[idx].get()
+            lo, hi = sorted((anchor, idx))
+            for i in range(lo, hi + 1):
+                self._bit_link_vars[i].set(new_state)
+        else:
+            self._bit_link_vars[idx].set(not self._bit_link_vars[idx].get())
+            self._anchor_idx = idx
+        self._view_bit(idx)
+
+    def _view_bit(self, idx: int):
+        """切換檢視/編輯的錨點 bit（只收集+重建，不廣播）。"""
+        self._collect_active_bit()
+        self._destroy_cond_editor()
+        self._build_bit_editor(idx)
 
     def _bind_disarm_node_delete_on_focus(self, widget):
         def _on_focus_in(_event):
@@ -1153,32 +1363,108 @@ class RailEditorFrame(ctk.CTkFrame):
         """為第 bit_index 個 bit 建條件編輯器（host 須已清空）。"""
         self._active_bit = bit_index
         bit = self._bit_rails[bit_index]
-        if self.var_type.get() == "input":
-            frame = InputWaveCondFrame(
-                self._cond_host, rail_input_wave_spec(bit),
-                get_dep_options=self._dep_options,
-                is_pseqcell_for=self._is_pseqcell_for,
-                get_self_name=self.base_name,
-            )
-            frame.pack(fill="x", padx=S_SM, pady=S_SM)
-            self._cond_editor = {"kind": "input", "wave": frame}
-        else:
-            tabs = ctk.CTkTabview(self._cond_host, height=220)
-            tabs.pack(fill="x", padx=S_SM, pady=S_SM)
-            sections: dict[str, CondSectionFrame] = {}
-            for kind in ("hi", "lo", "force"):
-                theme = COND_THEME[kind]
-                tabs.add(theme["name"])
-                sec = CondSectionFrame(
-                    tabs.tab(theme["name"]), kind,
+        # 建構期間暫停廣播：避免 widget 初始化觸發的 on_change 誤覆蓋其他 bit。
+        self._suspend_broadcast = True
+        try:
+            if self.var_type.get() == "input":
+                frame = InputWaveCondFrame(
+                    self._cond_host, rail_input_wave_spec(bit),
                     get_dep_options=self._dep_options,
                     is_pseqcell_for=self._is_pseqcell_for,
-                    model=CondEditModel.from_rail(bit, kind),
                     get_self_name=self.base_name,
+                    vec_dep=self._vec_dep,
+                    on_change=self._on_cond_live_change,
                 )
-                sec.pack(fill="both", expand=True, padx=S_SM, pady=S_SM)
-                sections[kind] = sec
-            self._cond_editor = {"kind": "output", "tabs": tabs, "sections": sections}
+                frame.pack(fill="x", padx=S_SM, pady=S_SM)
+                self._cond_editor = {"kind": "input", "wave": frame}
+            else:
+                tabs = ctk.CTkTabview(self._cond_host, height=220)
+                tabs.pack(fill="x", padx=S_SM, pady=S_SM)
+                sections: dict[str, CondSectionFrame] = {}
+                for kind in ("hi", "lo", "force"):
+                    theme = COND_THEME[kind]
+                    tabs.add(theme["name"])
+                    sec = CondSectionFrame(
+                        tabs.tab(theme["name"]), kind,
+                        get_dep_options=self._dep_options,
+                        is_pseqcell_for=self._is_pseqcell_for,
+                        model=CondEditModel.from_rail(bit, kind),
+                        get_self_name=self.base_name,
+                        vec_dep=self._vec_dep,
+                        on_change=self._on_cond_live_change,
+                    )
+                    sec.pack(fill="both", expand=True, padx=S_SM, pady=S_SM)
+                    sections[kind] = sec
+                self._cond_editor = {"kind": "output", "tabs": tabs, "sections": sections}
+        finally:
+            self._suspend_broadcast = False
+
+    # ---- 多 bit 即時共編 ----
+    def _on_cond_live_change(self):
+        """條件編輯事件：收回錨點 bit，再把條件鏡射到其他勾選 bit（自動同索引替換）。"""
+        if self._suspend_broadcast:
+            return
+        self._collect_active_bit()
+        self._broadcast_to_linked()
+
+    def _linked_targets(self) -> list[int]:
+        checked = {i for i, v in enumerate(self._bit_link_vars) if v.get()}
+        checked.add(self._active_bit)  # 錨點恆為來源
+        return sorted(i for i in checked if i != self._active_bit)
+
+    def _broadcast_to_linked(self):
+        if not (0 <= self._active_bit < len(self._bit_rails)):
+            return
+        src = self._bit_rails[self._active_bit]
+        for j in self._linked_targets():
+            self._copy_cond_reindexed(src, self._bit_rails[j], self._active_bit, j)
+
+    def _reindex_name(self, name: str, src: int, dst: int) -> str:
+        """V[src] → V[dst]（僅當 V 是 vector base 且索引==src）；其餘（scalar/常數/固定索引）原樣。"""
+        p = name.rfind("[")
+        if p < 0 or not name.endswith("]"):
+            return name
+        base, idx = name[:p], name[p + 1:-1]
+        if idx.isdigit() and int(idx) == src and self._dep_vector_width(base) is not None:
+            return _bit_name(base, dst)
+        return name
+
+    def _copy_cond_reindexed(self, src: PowerRail, dst: PowerRail, src_bit: int, dst_bit: int):
+        """把 src 的條件鏡射到 dst：名稱欄位做同索引替換，位置性欄位原樣複製。"""
+        def r(nm: str) -> str:
+            return self._reindex_name(nm, src_bit, dst_bit)
+
+        if src.seq_type == "input":
+            for side in ("hi", "lo"):
+                setattr(dst, f"{side}_mode", getattr(src, f"{side}_mode"))
+                setattr(dst, f"{side}_wave", getattr(src, f"{side}_wave"))
+                setattr(dst, f"{side}_groups",
+                        [[r(n) for n in g] for g in getattr(src, f"{side}_groups")])
+                setattr(dst, f"{side}_inv_groups",
+                        copy.deepcopy(getattr(src, f"{side}_inv_groups")))
+                setattr(dst, f"{side}_use_groups",
+                        copy.deepcopy(getattr(src, f"{side}_use_groups")))
+                setattr(dst, f"{side}_group_inv", list(getattr(src, f"{side}_group_inv")))
+                setattr(dst, f"{side}_intra_op", list(getattr(src, f"{side}_intra_op")))
+            return
+        for kind in ("hi", "lo", "force"):
+            setattr(dst, f"depends_on_{kind}",
+                    [r(n) for n in getattr(src, f"depends_on_{kind}")])
+            setattr(dst, f"depends_on_{kind}_groups",
+                    [[r(n) for n in g] for g in getattr(src, f"depends_on_{kind}_groups")])
+            setattr(dst, f"depends_on_{kind}_inv",
+                    {r(k): v for k, v in getattr(src, f"depends_on_{kind}_inv").items()})
+            setattr(dst, f"depends_on_{kind}_use",
+                    {r(k): v for k, v in getattr(src, f"depends_on_{kind}_use").items()})
+            setattr(dst, f"depends_on_{kind}_inv_groups",
+                    copy.deepcopy(getattr(src, f"depends_on_{kind}_inv_groups")))
+            setattr(dst, f"depends_on_{kind}_use_groups",
+                    copy.deepcopy(getattr(src, f"depends_on_{kind}_use_groups")))
+            setattr(dst, f"depends_on_{kind}_group_inv",
+                    list(getattr(src, f"depends_on_{kind}_group_inv")))
+            setattr(dst, f"depends_on_{kind}_intra_op",
+                    list(getattr(src, f"depends_on_{kind}_intra_op")))
+        dst.depends_on = list(dst.depends_on_hi)
 
     def _collect_active_bit(self):
         """把作用中 bit 的條件編輯器內容收回 `_bit_rails[active]`。"""
@@ -1224,7 +1510,7 @@ class RailEditorFrame(ctk.CTkFrame):
         """依 Vector 勾選＋寬度，調整 `_bit_rails` 長度與 Bit 選擇器，重建作用中 bit 編輯器。"""
         self._collect_active_bit()
         self._destroy_cond_editor()
-        is_vec = bool(self.var_vector.get())
+        is_vec = self.is_vector()
         n = self._parse_width() if is_vec else 1
         base = self.base_name()
         seq_type = self.var_type.get()
@@ -1235,8 +1521,8 @@ class RailEditorFrame(ctk.CTkFrame):
         if self._active_bit >= n:
             self._active_bit = 0
         if is_vec:
-            self._bit_seg.configure(values=[str(i) for i in range(n)])
-            self._bit_seg.set(str(self._active_bit))
+            self._anchor_idx = self._active_bit
+            self._rebuild_bit_checkboxes(n)
             self._bit_row.pack(fill="x", padx=S_SM, pady=(0, S_SM), before=self._cond_host)
         else:
             self._bit_row.pack_forget()
@@ -1255,15 +1541,47 @@ class RailEditorFrame(ctk.CTkFrame):
         self._cond_pane.pack_forget()
         self.apply_row.pack_forget()
         if label == COND_TAB:
+            self._cond_host.pack(fill="x")
+            # 進條件分頁時依目前 Vector/width 重算 Bit 選擇器與每 bit 編輯器，
+            # 否則 width 改後若未觸發 <FocusOut>/<Return>，Bit 選擇器會停在舊值。
+            self._sync_bit_selector()
             self._cond_pane.pack(fill="x")
         else:
             self._decl_pane.pack(fill="x")
         self.apply_row.pack(fill="x", padx=S_SM, pady=(0, S_SM))
 
     def _on_bit_selected(self, value: str):
-        self._collect_active_bit()
-        self._destroy_cond_editor()
-        self._build_bit_editor(_safe_int(value, 0))
+        # 相容舊呼叫端/測試：等同切換檢視 bit（不廣播）。
+        self._view_bit(_safe_int(value, 0))
+
+    def _render_dim_bits(self):
+        """依維度個數重建 Bits 下拉（選項＝已宣告的全域維度）；無全域維度時顯示佔位。"""
+        for w in self.dim_bits_row.winfo_children():
+            w.destroy()
+        self._dim_menus = []
+        count = self._dim_count()
+        dims = self._global_dims()
+        for slot in range(count):
+            values = dims or ["(宣告維度)"]
+            cur = self._dim_params_init[slot] if slot < len(self._dim_params_init) else ""
+            if cur not in dims:
+                cur = dims[slot] if slot < len(dims) else (dims[0] if dims else values[0])
+            if slot > 0:
+                ctk.CTkLabel(self.dim_bits_row, text="×", font=FONT_BODY).pack(side="left", padx=2)
+            menu = ctk.CTkOptionMenu(
+                self.dim_bits_row, values=values, width=110,
+                command=lambda _v: self._on_dim_pick())
+            menu.set(cur)
+            menu.pack(side="left")
+            self._dim_menus.append(menu)
+
+    def _on_dim_count_changed(self, _value: str):
+        self._dim_params_init = self._selected_dim_params()
+        self._render_dim_bits()
+        self._sync_bit_selector()
+
+    def _on_dim_pick(self):
+        self._sync_bit_selector()
 
     def _on_vector_toggle(self):
         self._sync_bit_selector()
@@ -1337,7 +1655,9 @@ class RailEditorFrame(ctk.CTkFrame):
         """攤成 N 個 PowerRail（vector 帶群組 metadata，scalar 回單一 rail）。"""
         base = self.base_name()
         seq_type = self.var_type.get()
-        is_vec = bool(self.var_vector.get())
+        is_vec = self.is_vector()
+        dims = self._selected_dim_params()
+        width_expr = self._width_expr()
         n = self._parse_width() if is_vec else 1
         self._collect_active_bit()
         self._bit_rails = resize_list(
@@ -1352,8 +1672,9 @@ class RailEditorFrame(ctk.CTkFrame):
             rail.name = f"{base}[{i}]" if is_vec else base
             self._apply_physical(rail, seq_type)
             out.append(rail)
-        width_expr = self.entry_width.get().strip() or str(n)
-        set_group_metadata(out, base if is_vec else None, width_expr if is_vec else "1")
+        set_group_metadata(
+            out, base if is_vec else None, width_expr if is_vec else "1",
+            dims if is_vec else None)
         return out
 
 
@@ -1370,6 +1691,7 @@ class CollapsibleRailFrame(ctk.CTkFrame):
                  on_apply: Optional[Callable[[], None]] = None,
                  expanded: bool = False,
                  get_parameters: Optional[Callable[[], list]] = None,
+                 get_dimensions: Optional[Callable[[], list]] = None,
                  **kwargs):
         super().__init__(master, **kwargs)
         self.rails = list(rails)
@@ -1377,6 +1699,7 @@ class CollapsibleRailFrame(ctk.CTkFrame):
         self._get_all_rails = get_all_rails
         self._get_pulses = get_pulses
         self._get_parameters = get_parameters
+        self._get_dimensions = get_dimensions
         self._on_apply = on_apply
         self.editor: Optional[RailEditorFrame] = None
 
@@ -1430,7 +1753,9 @@ class CollapsibleRailFrame(ctk.CTkFrame):
         pill.pack(side="left", padx=(0, S_SM))
         pill.bind("<Button-1>", lambda _: self.toggle())
         if is_vec:
-            marker = make_chip(self._chips_holder, f"\u00d7{len(self.rails)}", fg=COND_THEME["force"]["text"])
+            params = self._get_parameters() if self._get_parameters else []
+            marker = make_chip(self._chips_holder, vector_shape_label(self.rails, params),
+                               fg=COND_THEME["force"]["text"])
             marker.pack(side="left", padx=(0, S_SM))
             marker.bind("<Button-1>", lambda _: self.toggle())
         chips: list[tuple[str, str | None, str | None]] = []
@@ -1463,6 +1788,7 @@ class CollapsibleRailFrame(ctk.CTkFrame):
             get_pulses=self._get_pulses,
             on_apply=self._on_apply,
             get_parameters=self._get_parameters,
+            get_dimensions=self._get_dimensions,
         )
         self.editor.pack(fill="x", padx=S_SM, pady=(S_SM, 0))
 

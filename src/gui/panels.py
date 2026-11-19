@@ -6,6 +6,7 @@ from typing import Any, Callable, Optional
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
+from core.config_edit import vector_shape_label
 from core.config_models import (
     DEFAULT_PULSE,
     Parameter,
@@ -35,6 +36,7 @@ class NodeListPanel(ctk.CTkFrame):
                  on_delete: Callable[[], None],
                  on_activate: Callable[[], None],
                  on_disarm: Callable[[], None],
+                 get_parameters: Optional[Callable[[], list]] = None,
                  **kwargs):
         super().__init__(master, **kwargs)
         self.on_select = on_select
@@ -45,6 +47,7 @@ class NodeListPanel(ctk.CTkFrame):
         self.on_delete = on_delete
         self.on_activate = on_activate
         self.on_disarm = on_disarm
+        self._get_parameters = get_parameters
         self._nodes: list[list[PowerRail]] = []  # 一個節點 = 一個或多個 bit rails（vector 不展開）
         self._selected: set[int] = set()
         self._primary_idx: Optional[int] = None
@@ -121,13 +124,15 @@ class NodeListPanel(ctk.CTkFrame):
             return head.group_base, True
         return head.name, False
 
-    @classmethod
-    def _node_label(cls, node: list[PowerRail]) -> str:
-        base, is_vec = cls._node_base(node)
-        return f"{base} [\u00d7{len(node)}]" if is_vec else base
+    def _node_label(self, node: list[PowerRail]) -> str:
+        base, is_vec = self._node_base(node)
+        if not is_vec:
+            return base
+        params = self._get_parameters() if self._get_parameters else []
+        return f"{base} [{vector_shape_label(node, params)}]"
 
     def node_labels(self) -> list[str]:
-        """各節點的顯示字串（vector 以 `base [×N]` 標記）。"""
+        """各節點的顯示字串（vector 以 `base [×N]` 或 2 維 `base [row×col]` 標記）。"""
         return [self._node_label(n) for n in self._nodes]
 
     def set_nodes(self, nodes: list[list[PowerRail]], primary_idx: Optional[int] = None):
@@ -478,120 +483,131 @@ class PulsePanel(ctk.CTkFrame):
 # ============================================================
 
 class ParameterPanel(ctk.CTkFrame):
-    """左側 parameter 管理區（列式 UI，風格對齊 PulsePanel）。
+    """左側全域維度設定區（對齊 PseqGeneratorNewFunction.txt §1）。
 
-    一個 parameter = 一個具名整數常數（name=value）；width 公式可引用、產生 Verilog
-    #(parameter) / C #define。on_change 回傳新的 list[Parameter]（有序）。
+    維度即 parameter：選「維度個數 N(0~2)」後直接長出 N 列「名稱＋最大值」欄位，填了就同時
+    建立該 parameter 並標記為維度1(row)/維度2(col)——不需先去別處新增 parameter。本應用的
+    parameter 就是維度本身（dims-only）。on_change 回傳 (parameters, dimensions)，兩者同序。
     """
 
-    _ROW_H = 30
-    _MAX_SCROLL_H = 150
+    _DIM_AXES = ("row", "col")
+    _DEFAULT_MAX = 2  # 新維度預設最大值（≥1；使用者再改）
 
-    def __init__(self, master, on_change: Callable[[list], None], **kwargs):
+    def __init__(
+        self,
+        master,
+        on_change: Callable[[list, list], None],
+        **kwargs,
+    ):
         super().__init__(master, **kwargs)
         self.on_change = on_change
-        self._params: list[Parameter] = []
-        self._selected_idx: Optional[int] = None
-        self._row_widgets: dict[int, ctk.CTkFrame] = {}
+        self._params: list[Parameter] = []  # 維度 parameter（同時即 dimensions，依序 row、col）
+        self._name_entries: list[ctk.CTkEntry] = []
+        self._val_entries: list[ctk.CTkEntry] = []
         self._build_ui()
-        self._render()
+        self._render_rows()
 
     def _build_ui(self):
-        entry_row = ctk.CTkFrame(self, fg_color="transparent")
-        entry_row.pack(fill="x", padx=S_SM, pady=(0, S_SM))
-        self.entry_name = ctk.CTkEntry(entry_row, placeholder_text="Name")
-        self.entry_name.pack(side="left", fill="x", expand=True)
-        self.entry_value = ctk.CTkEntry(entry_row, placeholder_text="Value", width=64)
-        self.entry_value.pack(side="left", padx=(S_XS, 0))
-        for e in (self.entry_name, self.entry_value):
-            e.bind("<Return>", lambda _e: self._on_add())
-            e.bind("<KP_Enter>", lambda _e: self._on_add())
+        dim_row = ctk.CTkFrame(self, fg_color="transparent")
+        dim_row.pack(fill="x", padx=S_SM, pady=(0, S_SM))
+        ctk.CTkLabel(dim_row, text="維度個數").pack(side="left")
+        self.opt_dim_count = ctk.CTkOptionMenu(
+            dim_row, values=["0", "1", "2"], width=56, command=self._on_dim_count)
+        self.opt_dim_count.set("0")
+        self.opt_dim_count.pack(side="left", padx=(S_XS, 0))
+        self.dim_hint = ctk.CTkLabel(dim_row, text="", font=FONT_HINT, text_color="gray")
+        self.dim_hint.pack(side="left", padx=(S_SM, 0))
 
-        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.scroll.pack(fill="x", padx=S_XS, pady=(0, S_SM))
+        self.rows_host = ctk.CTkFrame(self, fg_color="transparent")
+        self.rows_host.pack(fill="x", padx=S_SM, pady=(0, S_SM))
 
-        btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.pack(fill="x", padx=S_SM, pady=(0, S_SM))
-        btn_row.columnconfigure(0, weight=1)
-        btn_row.columnconfigure(1, weight=1)
-        ctk.CTkButton(btn_row, text="+ Add", command=self._on_add).grid(
-            row=0, column=0, sticky="ew", padx=(0, S_XS))
-        ctk.CTkButton(btn_row, text="- Delete", command=self._on_del).grid(
-            row=0, column=1, sticky="ew", padx=(S_XS, 0))
+    # ---- helpers ----
+    def _default_name(self, taken: set[str]) -> str:
+        i = 1
+        while f"P{i}" in taken:
+            i += 1
+        return f"P{i}"
 
-    def _row_bg(self, idx: int) -> tuple[str, str]:
-        if idx == self._selected_idx:
-            return ("#cfe0ff", "#264c80")
-        return ("gray86", "gray22")
+    def _dimensions(self) -> list[str]:
+        return [p.name for p in self._params]
 
-    def _update_scroll_height(self):
-        n = max(1, len(self._params))
-        h = min(max(self._ROW_H + 6, n * self._ROW_H + 6), self._MAX_SCROLL_H)
-        try:
-            self.scroll.configure(height=h)
-        except Exception:
-            pass
+    def _emit(self):
+        self.on_change(list(self._params), self._dimensions())
 
-    def _render(self):
-        for w in self.scroll.winfo_children():
+    def _render_rows(self):
+        for w in self.rows_host.winfo_children():
             w.destroy()
-        self._row_widgets.clear()
+        self._name_entries = []
+        self._val_entries = []
         for idx, p in enumerate(self._params):
-            bg = self._row_bg(idx)
-            row = ctk.CTkFrame(self.scroll, fg_color=bg, corner_radius=4, height=28)
-            row.pack(fill="x", pady=1, padx=S_XS)
-            self._row_widgets[idx] = row
-            lbl = ctk.CTkLabel(row, text=f"{p.name} = {p.value}", font=FONT_MONO, anchor="w")
-            lbl.pack(side="left", fill="x", expand=True, padx=(S_SM, S_SM), pady=2)
-            for w in (row, lbl):
-                w.bind("<ButtonPress-1>", lambda _e, i=idx: self._on_row_press(i))
-        self._update_scroll_height()
+            row = ctk.CTkFrame(self.rows_host, fg_color="transparent")
+            row.pack(fill="x", pady=2)
+            axis = self._DIM_AXES[idx] if idx < len(self._DIM_AXES) else ""
+            ctk.CTkLabel(row, text=f"維度{idx + 1}（{axis}）", font=FONT_BODY,
+                         width=92, anchor="w").pack(side="left")
+            name_e = ctk.CTkEntry(row, placeholder_text="名稱")
+            name_e.insert(0, p.name)
+            name_e.pack(side="left", fill="x", expand=True, padx=(0, S_XS))
+            ctk.CTkLabel(row, text="最大", font=FONT_HINT).pack(side="left", padx=(0, S_XS))
+            val_e = ctk.CTkEntry(row, width=56)
+            val_e.insert(0, str(p.value))
+            val_e.pack(side="left")
+            for e in (name_e, val_e):
+                e.bind("<Return>", lambda _ev: self._commit_rows())
+                e.bind("<KP_Enter>", lambda _ev: self._commit_rows())
+                e.bind("<FocusOut>", lambda _ev: self._commit_rows())
+            self._name_entries.append(name_e)
+            self._val_entries.append(val_e)
+        self._update_dim_hint()
 
-    def _on_row_press(self, idx: int):
-        self._selected_idx = idx
-        for i, row in self._row_widgets.items():
+    def _update_dim_hint(self):
+        self.dim_hint.configure(
+            text="選維度個數即新增維度（row／col）" if not self._params else "")
+
+    def _commit_rows(self):
+        """把各列的名稱／最大值讀回 self._params（名稱空白沿用舊值、最大值非正整數沿用舊值），再 emit。"""
+        changed = False
+        taken: set[str] = set()
+        for idx, p in enumerate(self._params):
+            if idx >= len(self._name_entries):
+                break
+            name = self._name_entries[idx].get().strip() or p.name
+            if name in taken:  # 名稱重複：暫沿用舊值，交由 validator 提示
+                name = p.name
+            taken.add(name)
+            raw = self._val_entries[idx].get().strip()
             try:
-                row.configure(fg_color=self._row_bg(i))
-            except Exception:
-                pass
+                value = int(raw)
+                if value < 1:
+                    value = p.value
+            except ValueError:
+                value = p.value
+            if name != p.name or value != p.value:
+                changed = True
+            self._params[idx] = Parameter(name=name, value=value)
+        if changed:
+            self._emit()
 
-    def set_parameters(self, params: list):
-        self._params = list(params) if params else []
-        if self._selected_idx is not None and self._selected_idx >= len(self._params):
-            self._selected_idx = None
-        self._render()
+    def _on_dim_count(self, value: str):
+        count = int(value)
+        self._commit_rows()  # 先把目前欄位值收回，避免切換時丟失
+        params = self._params[:count]
+        taken = {p.name for p in params}
+        while len(params) < count:
+            name = self._default_name(taken)
+            taken.add(name)
+            params.append(Parameter(name=name, value=self._DEFAULT_MAX))
+        self._params = params
+        self._render_rows()
+        self._emit()
 
-    def _parse_new(self) -> tuple[Optional[Parameter], Optional[str]]:
-        """讀 name/value 欄位 → (Parameter, None) 或 (None, 錯誤訊息)；不觸發 UI 對話框。"""
-        name = self.entry_name.get().strip()
-        raw = self.entry_value.get().strip()
-        if not name:
-            return None, "Enter parameter name"
-        if any(p.name == name for p in self._params):
-            return None, f"Parameter '{name}' already exists"
-        try:
-            value = int(raw)
-        except ValueError:
-            return None, "Value must be an integer"
-        return Parameter(name=name, value=value), None
-
-    def _on_add(self):
-        param, err = self._parse_new()
-        if err:
-            messagebox.showwarning("Notice", err)
-            return
-        self.on_change(self._params + [param])
-        self.entry_name.delete(0, tk.END)
-        self.entry_value.delete(0, tk.END)
-
-    def _on_del(self):
-        if self._selected_idx is None:
-            messagebox.showinfo("Notice", "Select a parameter to delete")
-            return
-        idx = self._selected_idx
-        new_list = [p for i, p in enumerate(self._params) if i != idx]
-        self._selected_idx = None
-        self.on_change(new_list)
+    def set_from_config(self, params: list, dims: list):
+        """由 config 載入（開檔／undo／新建）：依 dims 順序取維度 parameter，同步個數下拉與欄位。"""
+        lookup = {p.name: p.value for p in (params or [])}
+        names = [d for d in (dims or []) if isinstance(d, str) and d][:2]
+        self._params = [Parameter(name=n, value=int(lookup.get(n, self._DEFAULT_MAX))) for n in names]
+        self.opt_dim_count.set(str(len(self._params)))
+        self._render_rows()
 
 
 # ============================================================

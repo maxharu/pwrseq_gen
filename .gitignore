@@ -26,6 +26,9 @@ node_modules/
 output/
 doc/
 
+# GUI working save file (default save target; user scratch, not a project asset)
+powerseq.json
+
 # Excel lock files
 ~$*
 

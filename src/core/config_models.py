@@ -320,6 +320,7 @@ class PowerRail:
     group_base: str | None = None  # 所屬 vector 的 base 名；None=單一節點
     bit_index: int = 0  # 在群組內的 bit 位置
     width_expr: str = "1"  # 群組寬度字串（整數期 "2"；公式期如 "NUM_CPU*2"）
+    dim_params: list[str] = field(default_factory=list)  # 所選 0~2 維名（row=dim_params[0]、col=dim_params[1]），供 take/slice 認得幾何
 
     def __post_init__(
         self,
@@ -701,7 +702,7 @@ def _rail_to_dict(rail: PowerRail) -> dict:
 
 
 # from_dict 展開 vector 時，這些鍵是群組 metadata／逐 bit 容器，不屬於共用物理欄位。
-_VECTOR_META_KEYS = frozenset({"name", "seq_type", "width_expr", "bits"})
+_VECTOR_META_KEYS = frozenset({"name", "seq_type", "width_expr", "bits", "dim_params"})
 
 
 def _group_to_dict(group: list[PowerRail]) -> dict:
@@ -713,6 +714,8 @@ def _group_to_dict(group: list[PowerRail]) -> dict:
         "seq_type": seq_label,
         "width_expr": head.width_expr,
     }
+    if head.dim_params:
+        d["dim_params"] = list(head.dim_params)
     d.update(_rail_physical_dict(head))
     d["bits"] = [_rail_cond_dict(r) for r in group]
     return d
@@ -825,6 +828,7 @@ def _expand_vector_dict(r: dict, seq_type: str, parameters=None) -> list[PowerRa
     width_expr = str(r.get("width_expr", "1"))
     n = eval_width(width_expr, parameters)
     bits = r.get("bits") or []
+    dim_params = [str(p) for p in (r.get("dim_params") or []) if isinstance(p, str) and p][:2]
     physical = {k: v for k, v in r.items() if k not in _VECTOR_META_KEYS}
     out: list[PowerRail] = []
     for i in range(n):
@@ -833,6 +837,7 @@ def _expand_vector_dict(r: dict, seq_type: str, parameters=None) -> list[PowerRa
         rail.group_base = base
         rail.bit_index = i
         rail.width_expr = width_expr
+        rail.dim_params = list(dim_params)
         out.append(rail)
     return out
 
@@ -853,6 +858,17 @@ def _parse_parameters(raw) -> list["Parameter"]:
     return out
 
 
+def _parse_dimensions(raw) -> list[str]:
+    """dimensions 原始清單 → 有序名稱 list（最多取前 2 個）；非字串項目略過。
+
+    名稱是否存在於 parameters、是否重複、個數上限等交由 validator 檢查，這裡只做型別正規化。"""
+    out: list[str] = []
+    for name in raw or []:
+        if isinstance(name, str) and name:
+            out.append(name)
+    return out[:2]
+
+
 @dataclass
 class PowerSeqConfig:
     """完整 Power Sequence 規格"""
@@ -862,6 +878,7 @@ class PowerSeqConfig:
     pulse_period_ns: float = 100.0
     pulses: list[str] = field(default_factory=lambda: [DEFAULT_PULSE])  # Pulse 來源列表，每個為單一訊號（無 _Hi/_Lo/_Force）
     parameters: list[Parameter] = field(default_factory=list)  # 具名整數常數（width 公式可引用）
+    dimensions: list[str] = field(default_factory=list)  # 0~2 個全域維度，指向 parameters 名稱（維度1=row、維度2=col）
     timing_scenario: dict | None = None  # 可選：Timing 匯出設定（見 timing_sim.TimingScenario）
 
     def rename_rail(self, old_name: str, new_name: str) -> bool:
@@ -947,6 +964,8 @@ class PowerSeqConfig:
         }
         if self.parameters:
             d["parameters"] = [{"name": p.name, "value": p.value} for p in self.parameters]
+        if self.dimensions:
+            d["dimensions"] = list(self.dimensions)
         d["rails"] = _collapse_rails_to_dicts(self.rails)
         wd = _timing_globals_from_dict(self.timing_scenario)
         if wd:
@@ -961,9 +980,13 @@ class PowerSeqConfig:
             wd_raw.get("inputs") if isinstance(wd_raw.get("inputs"), dict) else {}
         )
         parameters = _parse_parameters(d.get("parameters"))
+        dimensions = _parse_dimensions(d.get("dimensions"))
         rails = []
         for r in d.get("rails", []):
             seq_type = _normalize_seq_type(r.get("seq_type", "output"))
+            if "parametric" in r:
+                # 舊版 parametric 收合格式已移除（改用維度+slice 模型）：略過不載入。
+                continue
             if "width_expr" in r:
                 # vector 收合格式：展開成 N 個 base[i]（N 由 width_expr+parameters 算），共用物理 + 逐 bit 條件。
                 rails.extend(_expand_vector_dict(r, seq_type, parameters))
@@ -984,5 +1007,6 @@ class PowerSeqConfig:
             pulse_period_ns=d.get("pulse_period_ns", 100.0),
             pulses=_normalize_pulse_list(d.get("pulses")),
             parameters=parameters,
+            dimensions=dimensions,
             timing_scenario=timing_scenario,
         )

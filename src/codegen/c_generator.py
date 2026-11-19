@@ -9,13 +9,24 @@ import os
 from datetime import datetime
 
 from core.cond_ir import CondVisitor, resolve_condition
-from core.config_models import PowerRail, PowerSeqConfig, pulse_suffix
+from core.config_models import PowerRail, PowerSeqConfig, eval_width, pulse_suffix
 from core.group_logic import c_intra_expr
 from core.naming import internal_sig, safe_name
 
 
 def _gpio_macro(name: str) -> str:
     return safe_name(name).upper()
+
+
+def _c_member(rail: PowerRail) -> str:
+    """rail 在 C 結構裡的引用名（甲案）：群組 bit → 陣列索引 `base[i]`；非群組 → 成員名。
+
+    C 把 vector 收合成 `pwrcell_t base[N]`，所以 init / handle / 條件賦值、以及條件式裡引用
+    另一個 bit 的 `.condition`，一律走索引而非舊的 `base_i` 成員名。宣告那一行（含 N）另外處理。
+    """
+    if rail.group_base is not None:
+        return f"{internal_sig(rail.group_base)}[{rail.bit_index}]"
+    return internal_sig(rail.name)
 
 
 def _filename_to_c_names(filepath: str) -> tuple[str, str, str]:
@@ -75,8 +86,9 @@ class _CCond(CondVisitor):
     準位一律讀回 GPIO（output 也是），只有 use=hi/lo/force 才讀 pwrcell 的條件欄位。
     """
 
-    def __init__(self, var_name: str):
+    def __init__(self, var_name: str, name_to_rail: dict[str, PowerRail] | None = None):
         self.var_name = var_name
+        self.name_to_rail = name_to_rail or {}
 
     def const(self, value: int) -> str:
         return "1" if value else "0"
@@ -85,7 +97,10 @@ class _CCond(CondVisitor):
         return f"oemgpio_DI_Get({_gpio_macro(name)})"
 
     def cond(self, name: str, kind: str) -> str:
-        return f"{self.var_name}.{internal_sig(name)}.{kind}.condition"
+        # vector bit 的 .condition 要走陣列索引（base[i]），與結構宣告一致
+        rail = self.name_to_rail.get(name)
+        member = _c_member(rail) if rail is not None else internal_sig(name)
+        return f"{self.var_name}.{member}.{kind}.condition"
 
     def invert(self, operand: str) -> str:
         return f"!{operand}"
@@ -216,10 +231,19 @@ def generate_c(
     lines.append("typedef struct")
     lines.append("{")
 
-    w_member = max((len(internal_sig(r.name)) for r in sequenced), default=0)
+    # 群組（vector）收合成一行陣列宣告 `pwrcell_t base[N];`（在 bit 0 處），其餘 bit 不再各自宣告。
+    decl_names: list[str] = []
     for r in sequenced:
-        m = internal_sig(r.name)
-        lines.append(f"    pwrcell_t {m.ljust(w_member)};")
+        if r.group_base is not None:
+            if r.bit_index != 0:
+                continue
+            n = eval_width(r.width_expr, config.parameters)
+            decl_names.append(f"{internal_sig(r.group_base)}[{n}]")
+        else:
+            decl_names.append(internal_sig(r.name))
+    w_member = max((len(d) for d in decl_names), default=0)
+    for d in decl_names:
+        lines.append(f"    pwrcell_t {d.ljust(w_member)};")
 
     if time_fields:
         w_tf = max(len(f) for f in time_fields)
@@ -239,12 +263,12 @@ def generate_c(
 
     # Static initializer
     lines.append(f"{type_name} {var_name} = {{")
-    w_init = max((len(internal_sig(r.name)) for r in sequenced), default=0)
+    w_init = max((len(_c_member(r)) for r in sequenced), default=0)
     w_chi = max((len(str(r.cycle_hi)) for r in sequenced), default=1)
     w_clo = max((len(str(r.cycle_lo)) for r in sequenced), default=1)
     w_polar = max((len(str(getattr(r, "force_val", 0))) for r in sequenced), default=1)
     for i, r in enumerate(sequenced):
-        m = internal_sig(r.name)
+        m = _c_member(r)
         comma = "," if i < len(sequenced) - 1 else ""
         hi_c = str(r.cycle_hi).rjust(w_chi)
         lo_c = str(r.cycle_lo).rjust(w_clo)
@@ -267,9 +291,9 @@ def generate_c(
     ))
     lines.append(f"void {prefix}_Init(void)")
     lines.append("{")
-    w_init_call = max((len(internal_sig(r.name)) for r in sequenced), default=0)
+    w_init_call = max((len(_c_member(r)) for r in sequenced), default=0)
     for r in sequenced:
-        m = internal_sig(r.name)
+        m = _c_member(r)
         lines.append(f"    pwrcell_Init(&{var_name}.{m.ljust(w_init_call)});")
     if time_fields:
         lines.append("")
@@ -284,6 +308,33 @@ def generate_c(
         lines.append("{")
         lines.append(f"    {var_name}.time_isr.{f} = 1;")
         lines.append("}")
+        lines.append("")
+
+    # vector 群組（依序、去重）：base → 該群組的 bit rails（按 bit_index）。供 GPIO 表與 handle 迴圈共用。
+    vector_groups: list[tuple[str, list[PowerRail]]] = []
+    seen_bases: set[str] = set()
+    for r in sequenced:
+        if r.group_base is not None and r.group_base not in seen_bases:
+            seen_bases.add(r.group_base)
+            bits = sorted(
+                (x for x in sequenced if x.group_base == r.group_base),
+                key=lambda x: x.bit_index,
+            )
+            vector_groups.append((r.group_base, bits))
+
+    # GPIO 參考表（僅在有 vector 時輸出）：把 vector handle 從 N 行收成「表 + for」。
+    # 每 bit 用 header 既有的 <MACRO>_PORT（port 指標）/ <MACRO>_BIT（pin 整數），不需改 firmware；
+    # typedef 自成一體，無 vector 的檔完全不出現這些。
+    if vector_groups:
+        lines.extend(_c_banner_title_block(" GPIO Reference Table"))
+        lines.append("typedef struct { GPIO_T* port; UINT32 pin; } pwrseq_gpio_ref_t;")
+        for base, bits in vector_groups:
+            tbl = f"{internal_sig(base)}_gpio"
+            n = eval_width(bits[0].width_expr, config.parameters)
+            entries = ", ".join(
+                f"{{ {_gpio_macro(b.name)}_PORT, {_gpio_macro(b.name)}_BIT }}" for b in bits
+            )
+            lines.append(f"static const pwrseq_gpio_ref_t {tbl}[{n}] = {{ {entries} }};")
         lines.append("")
 
     # mainLoop
@@ -304,10 +355,11 @@ def generate_c(
 
     lines.append(_C_HANDLER_BEGIN)
 
-    w_cell = max((len(internal_sig(r.name)) for r in sequenced), default=0)
-    renderer = _CCond(var_name)
+    w_cell = max((len(_c_member(r)) for r in sequenced), default=0)
+    renderer = _CCond(var_name, name_to_rail)
+
     for r in sequenced:
-        s = internal_sig(r.name)
+        s = _c_member(r)
         hi_expr = resolve_condition(r, "hi", name_to_rail).accept(renderer)
         lo_expr = resolve_condition(r, "lo", name_to_rail).accept(renderer)
         force_expr = resolve_condition(r, "force", name_to_rail).accept(renderer)
@@ -316,31 +368,43 @@ def generate_c(
         lines.append(f"    {var_name}.{s.ljust(w_cell)}.force.condition = {force_expr};")
         lines.append("")
 
-    # pwrcell_handle — align args
-    handle_specs = []
-    for r in sequenced:
-        s = internal_sig(r.name)
-        ph = getattr(r, "pulse_hi", "default") or "default"
-        pl = getattr(r, "pulse_lo", "default") or "default"
-        arg_hi = _pulse_time_expr(ph, var_name)
-        arg_lo = _pulse_time_expr(pl, var_name)
-        handle_specs.append({
-            "member": s,
-            "arg_hi": arg_hi,
-            "arg_lo": arg_lo,
+    # pwrcell_handle：非 vector 逐行（引數對齊，維持原樣）；vector 收成 GPIO 表 + for 迴圈。
+    # 迴圈 body 同構、只差 GPIO：time 引數（arg_hi/arg_lo）全 bit 共用，取 bit 0 代表整組。
+    scalar_specs = [
+        {
+            "member": _c_member(r),
+            "arg_hi": _pulse_time_expr(getattr(r, "pulse_hi", "default") or "default", var_name),
+            "arg_lo": _pulse_time_expr(getattr(r, "pulse_lo", "default") or "default", var_name),
             "gpio": _gpio_macro(r.name),
-        })
+        }
+        for r in sequenced
+        if r.group_base is None
+    ]
+    w_m = max((len(h["member"]) for h in scalar_specs), default=0)
+    w_ah = max((len(h["arg_hi"]) for h in scalar_specs), default=0)
+    w_al = max((len(h["arg_lo"]) for h in scalar_specs), default=0)
+    w_g = max((len(h["gpio"]) for h in scalar_specs), default=0)
 
-    w_m = max(len(h["member"]) for h in handle_specs)
-    w_ah = max(len(h["arg_hi"]) for h in handle_specs)
-    w_al = max(len(h["arg_lo"]) for h in handle_specs)
-    w_g = max(len(h["gpio"]) for h in handle_specs)
-
-    for h in handle_specs:
-        lines.append(
-            f"    pwrcell_handle(&{var_name}.{h['member'].ljust(w_m)}, "
-            f"{h['arg_hi'].ljust(w_ah)}, {h['arg_lo'].ljust(w_al)}, {h['gpio'].ljust(w_g)});"
-        )
+    scalar_iter = iter(scalar_specs)
+    emitted_bases: set[str] = set()
+    for r in sequenced:
+        if r.group_base is None:
+            h = next(scalar_iter)
+            lines.append(
+                f"    pwrcell_handle(&{var_name}.{h['member'].ljust(w_m)}, "
+                f"{h['arg_hi'].ljust(w_ah)}, {h['arg_lo'].ljust(w_al)}, {h['gpio'].ljust(w_g)});"
+            )
+        elif r.group_base not in emitted_bases:
+            emitted_bases.add(r.group_base)
+            base = internal_sig(r.group_base)
+            n = eval_width(r.width_expr, config.parameters)
+            arg_hi = _pulse_time_expr(getattr(r, "pulse_hi", "default") or "default", var_name)
+            arg_lo = _pulse_time_expr(getattr(r, "pulse_lo", "default") or "default", var_name)
+            lines.append(f"    for (UINT8 i = 0; i < {n}; i++)")
+            lines.append(
+                f"        pwrcell_handle(&{var_name}.{base}[i], "
+                f"{arg_hi}, {arg_lo}, {base}_gpio[i].port, {base}_gpio[i].pin);"
+            )
 
     lines.append(_C_HANDLER_END)
     lines.append("")

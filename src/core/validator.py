@@ -81,6 +81,30 @@ def check_parameters(config: PowerSeqConfig) -> list[str]:
     return errors
 
 
+def check_dimensions(config: PowerSeqConfig) -> list[str]:
+    """全域維度驗證：個數 0~2、名稱需存在於 parameters、不重複、該 parameter 最大值 ≥ 1。"""
+    errors: list[str] = []
+    dims = getattr(config, "dimensions", None) or []
+    if len(dims) > 2:
+        errors.append(f"Too many dimensions ({len(dims)}); at most 2 are allowed")
+    param_values = {p.name: p.value for p in getattr(config, "parameters", None) or []}
+    seen: set[str] = set()
+    for name in dims:
+        if name in seen:
+            errors.append(f"'{name}' is a duplicate dimension")
+            continue
+        seen.add(name)
+        if name not in param_values:
+            errors.append(f"dimension '{name}' is not a defined parameter")
+        else:
+            value = param_values[name]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                errors.append(
+                    f"dimension '{name}' has invalid max value '{value}' (must be an integer >= 1)"
+                )
+    return errors
+
+
 def check_missing_deps(config: PowerSeqConfig) -> list[tuple[str, str]]:
     """檢查 depends_on_hi / depends_on_lo 中的名稱是否存在（排除 __HIGH__/__LOW__ 常數）"""
     valid_names = {r.name for r in config.rails}
@@ -181,6 +205,9 @@ def validate(config: PowerSeqConfig) -> tuple[bool, list[str]]:
 
     # Parameters (name legal/unique, value positive int)
     errors.extend(check_parameters(config))
+
+    # Global dimensions (count 0~2, exist in parameters, unique, max >= 1)
+    errors.extend(check_dimensions(config))
 
     # Duplicate names
     dup = check_duplicate_names(config)

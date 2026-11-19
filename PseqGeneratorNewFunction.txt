@@ -1,0 +1,225 @@
+pwrseq_gen 新功能設計: 以「維度 + slice」取代 parametric
+============================================================
+
+0. 總覽
+	- 移除現有 parametric 自由運算式的作法, 改成「維度 + slice」模型.
+	- 本專案應用最多 2 維: parameter 定義 0~2 個全域維度, 每個 signal 各自選 0/1/2 維.
+	- 條件以 slice(分段)授權, 每一段編成一條 generate for 內的 if 分支.
+	- 設計期不需要知道 parameter 的實際值: RTL 一律符號化(見 4.1), 只有 GUI 畫格子、
+	  sim 跑幾個 bit 時才需要具體數字(用 parameter 預設值=最大值).
+
+	名詞:
+	- row = 第一維度(ParamName1), genvar 慣例 gv_row(例 gv_cpu).
+	- col = 第二維度(ParamName2), genvar 慣例 gv_col(例 gv_mem).
+	- 2 維訊號為單一扁平匯流排, 列優先(row-major), 扁平索引 = gv_row*M + gv_col (M=col 維度大小).
+
+
+1. Parameter 設定
+	1.1 維度個數下拉選單: 支援 0~2 個維度.
+	1.2 當維度為 N(N:0~2), 產生 N 個 parameter 欄位, 每欄輸入「名稱 + 預設值」.
+	1.3 預設值 = 該應用中的「最大值」, 作為 slice 規劃的畫布(見 4.1).
+
+	[UI] Parameter 設定(宣告頁上方)
+	    +- Parameters ---------------------------------------------+
+	    | 維度個數: [2 v]   (0 / 1 / 2)                            |
+	    | 維度1  名稱:[NUM_CPU     ]   預設(最大):[4]              |
+	    | 維度2  名稱:[NUM_CPU_MEM ]   預設(最大):[2]              |
+	    +----------------------------------------------------------+
+
+
+2. Signal 宣告
+	2.1 每個 signal 增加「維度」下拉選單, 選項為 0 .. (parameter 維度數).
+	2.2 宣告頁的 Bits 欄改成 []x[] 兩格, 每格一個下拉選單(可選某 parameter 或 1), 預設 1:
+	    a. 維度 0: 1-bit 訊號, 無額外標示 -> Verilog: xxx
+	    b. 維度 1: 1 維 vector, 標示 [N] (N=第一維度值) -> Verilog: [<ParamName1> - 1:0] xxx
+	    c. 維度 2: 2 維 vector, 標示 [NxM] (N=第一維, M=第二維) -> Verilog: [<ParamName1> * <ParamName2> - 1:0] xxx
+
+	2.3 模型約束: 1 維訊號恆等於第一維度(row)
+	    - 1 維訊號的唯一軸恆為第一維度(row, ParamName1); 宣告一律 [ParamName1-1:0].
+	    - 沒有「只有 col」的 1 維向量; 需要「只有 col」的形狀時, 宣告成 2 維、令 row=1 x col=M.
+	    - 因此 1 維被引用訊號只有 row 類 take(見 3.2), 沒有也不需要 col 類選項;
+	      oneDim[gv_col]、oneDim[gv_row*M+gv_col]、oneDim[gv_col-1] 對 1 維訊號無意義.
+	    - 相容性自動成立: 維度是全域共用 parameter, 2 維輸出的 row 軸與 1 維訊號同為 ParamName1,
+	      所以 assign twoDim[gv_row*M+gv_col] = oneDim[gv_row] 軸長天生相符、不會越界.
+
+	[UI] Signal 宣告(每個 signal 一列)
+	    +- Signal 宣告 -------------------------------------------------------------+
+	    | 名稱                  類型    維度   Bits                      標示        |
+	    | event_ddr_pfail_p   [out v] [2 v]  [NUM_CPU v] x [NUM_CPU_MEM v]  [NxM]    |
+	    | vccd_hv_pg          [in  v] [1 v]  [NUM_CPU v] x [1          v]  [N]       |
+	    | sys_pok             [out v] [0 v]  [1       v] x [1          v]  (1-bit)   |
+	    +----------------------------------------------------------------------------+
+
+
+3. 條件授權: 維度與 take 選項
+	引用別訊號(RHS)時, 依被引用訊號的維度, 選單提供對應的 take 取法.
+
+	3.1 0 維訊號: 無額外選項(直接引用).
+	3.2 1 維訊號: 多一組 row take
+	    1) Same row      : assign xxx[gv_cpu] = aaa[gv_cpu];
+	    2) Specific row  : assign xxx[gv_cpu] = aaa[0];   (亦可相對偏移, 見 3.6)
+	    3) All row AND   : assign xxx[gv_cpu] = &aaa;
+	    4) All row OR    : assign xxx[gv_cpu] = |aaa;
+	3.3 2 維訊號: 多 row take + col take 兩組(各自 Same / Specific / All AND / All OR).
+
+	3.4 跨維度引用規則: 「Same X」需要輸出有對應的 genvar
+	    - 任一軸要用 Same, 輸出必須有該軸的 genvar 可對齊; 輸出沒有的軸, 必須用
+	      Specific / All-AND / All-OR 收斂掉, 不能用 Same.
+	    - 輸出維度 > 被引用維度(2D 輸出引用 1D 訊號): 1D 訊號只有 row, 沿輸出多出來的 col
+	      自動廣播(見 2.3). OK.
+	    - 輸出維度 < 被引用維度(1D 輸出引用 2D 訊號): 輸出沒有 col genvar, 故 col 只能
+	      Specific column / All column AND|OR, 不能 Same column.
+	      Ex: assign oneDimOut_lo[gv_cpu] = twoDimSig_lo[gv_cpu*C + 0];   (row=Same, col=Specific 0)
+
+	3.5 2 維被引用訊號的 row x col 組合(設 C=col 維度大小, 扁平索引 aaa[r*C+c])
+	    連續窗(col 方向)以 +: 表示; 跨步(row 方向, 間隔 C)歸約需特別處理.
+	        Same row       + Same col       : aaa[gv_row*C + gv_col]
+	        Same row       + Specific col j : aaa[gv_row*C + j]
+	        Same row       + All col AND    : &aaa[gv_row*C +: C]                 (連續窗)
+	        Same row       + All col OR     : |aaa[gv_row*C +: C]                 (連續窗)
+	        Specific row k + Same col       : aaa[k*C + gv_col]
+	        Specific row k + Specific col j : aaa[k*C + j]
+	        Specific row k + All col AND    : &aaa[k*C +: C]                      (連續窗)
+	        All row AND    + Same col       : (aaa[0*C+gv_col] & aaa[1*C+gv_col] & ...)  (跨步 C, 需特別處理)
+	        All row AND    + Specific col j : (aaa[0*C+j] & aaa[1*C+j] & ...)            (跨步 C, 需特別處理)
+	        All row AND    + All col AND    : &aaa                                (整條連續)
+	        All row OR     + ...            : 同上以 | 替換
+	    實作備註: 連續窗(col 方向)可直接用 part-select + 歸約; 跨步(row 方向, 間隔 C)的歸約
+	             需用 generate 累積或展開成多項 AND/OR, 不能用單一 part-select.
+
+	3.6 相對偏移 take + 進階運算式逃生口
+	    背景: Specific row 原只有絕對常數 aaa[0], 表達不出 aaa[gv_row-1] 這種相對偏移;
+	          定序常見的 ripple(row0 特殊、其餘依賴前一個)因此寫不出來.
+	    1) Specific 從絕對常數擴成索引算式/偏移:
+	       - 絕對: aaa[k]
+	       - 相對: aaa[gv_row-1]、aaa[gv_row+1]  (2D 同理 aaa[(gv_row-1)*M+gv_col]、aaa[gv_row*M+(gv_col-1)])
+	       - 越界(gv_row-1 在 row0)用分組解: 邊界 row/col 自成一組給常數, 其餘組用偏移. 見 4 ripple 範例.
+	    2) 進階運算式逃生口: 固定選單(Same/Specific/All-AND/All-OR)點不出來的條件可直接輸入運算式,
+	       保留原 parametric 的表達力, 避免移除 parametric 後功能回歸.
+
+	3.7 取用(Hi/Lo/Force)維度: 與維度/slice 正交, 保留.
+	    - 引用別的 output 時, 可取其 準位 / Hi 條件 / Lo 條件 / Force 條件.
+	    - 命名: xxx_hi / xxx_lo / xxx_force 為該 output 的條件線; 無後綴為準位
+	      (input 為腳位、deb input 補 _deb).
+	    - 只有 output 有 Hi/Lo/Force; input 只有準位.
+	    - Ex: assign ddr_pcamp_a1_lo[gv_cpu] = ddr_pwrok_lo[gv_cpu*NUM_CPU_MEM];  (取 ddr_pwrok 的 Lo 條件)
+
+
+4. Slice 切片
+	每個 slice = generate for 內的一條 if 分支. slice 把輸出的 row/col 分成數組,
+	每組共用一份條件.
+
+	4.1 符號化切段(parameter 實際值未知/可變時)
+	    觀念前提:
+	    - Verilog parameter 是 elaboration-time 常數(實例化時定死), 不是 runtime 變數;
+	      所謂「可變」是指不同實例可帶不同值, RTL 一份、用符號(NUM_ROW)寫、對任何值都成立.
+	    規則:
+	    1) parameter 預設值 = 應用最大值, 作為 slice 規劃畫布:
+	       - GUI 用最大值畫 0..max-1 格子; 任何實際 N <= max 自動是子集(迴圈只跑到 NUM_ROW-1).
+	    2) slice 存成「對 genvar 的符號化述詞」, 不是固定 bit 清單:
+	       - 勾 row {0,1} -> 存 gv_row==0 || gv_row==1, 不是 [0,1].
+	       - slice 順序 = if/else if 優先權, else 墊底.
+	    3) else(catch-all)覆蓋「符號化剩餘 gv_row 範圍」, 由迴圈界線 NUM_ROW 決定, 非畫面剩格:
+	       - else 必為最後一個且唯一; 沒被切走的 row 永遠落在 else.
+	       - 例: 4-row 切出 {0,1}、{3}、else, 不同 N 的行為:
+	           N=3 : {0,1}命中 row0,1 ; {3}不觸發(無 row3) ; else = row2
+	           N=4 : {0,1}命中 row0,1 ; {3}命中 row3      ; else = row2
+	           N=6 : {0,1}命中 row0,1 ; {3}命中 row3      ; else = row2,4,5
+	         重點: else 綁符號 NUM_ROW, 自動吸收代表值以上多出來的 row(N=6 的 row4,5);
+	               絕對 slice 在 N 不足時自動失效(N=3 的 {3}), 不報錯.
+	    4) 絕對 row 與相對 row 兩種選取語意:
+	       - 絕對 row k: 只有實例 N > k 時才存在.
+	       - 相對 row(對任何 N 成立): 第一個->gv_row==0 ; 最後一個->gv_row==NUM_ROW-1 ;
+	         前 k 個->gv_row<k ; 其餘->else. 邊界需求(首/尾特殊)請用相對 row.
+	    5) 驗證:
+	       - 代表值下某述詞不可達 -> 警告, 不報錯(符號上仍合法).
+	       - 改預設值(最大值)只是重繪格子, 已存述詞不受影響.
+
+	4.2 slice 軸: row / col / 兩者
+	    - 1 維訊號只有 row 軸; 2 維訊號可切 row / col / 兩者.
+	    - col slice 述詞用 gv_col, 界線 NUM_COL(ParamName2); else 綁 NUM_COL.
+	    - 4.1 的所有規則(符號化 / 最大值畫布 / else=符號剩餘 / 絕對 vs 相對)原封不動套到 col 軸
+	      (把 gv_row/NUM_ROW 換成 gv_col/NUM_COL).
+
+	4.3 Verilog 展開
+	    1) 只切 row: if(gv_row 述詞) 包住整個內層(或整句 assign).
+	       Ex: 4 row 分成 {0,1}、{2}、else
+	           generate
+	           for (gv_row=0; gv_row<NUM_ROW; gv_row=gv_row+1) begin
+	               if (gv_row==0 || gv_row==1) begin
+	                   assign xxx[gv_row] = ...;
+	               end else if (gv_row==2) begin
+	                   assign xxx[gv_row] = ...;
+	               end else begin
+	                   assign xxx[gv_row] = ...;
+	               end
+	           end
+	           endgenerate
+	    2) 只切 col: 內層 for(gv_col) 內放 if(gv_col 述詞).
+	       Ex: x15_pseq.v event_ddr_pfail_case1_p (col 群組 {0} vs 其餘, 兩段引用不同訊號)
+	           for (gv_cpu=0; gv_cpu<NUM_CPU; gv_cpu=gv_cpu+1)
+	             for (gv_mem=0; gv_mem<NUM_CPU_MEM; gv_mem=gv_mem+1)
+	               if (gv_mem==0) assign ev[(gv_cpu*NUM_CPU_MEM)+gv_mem] = oDDR_PWROK[...] &  ddr_pcamp_ch0_i_lo_deb[gv_cpu];
+	               else           assign ev[(gv_cpu*NUM_CPU_MEM)+gv_mem] = oDDR_PWROK[...] & ~ddr_pcamp_i_deb[(gv_cpu*NUM_CPU_MEM)+gv_mem];
+	    3) row、col 同時切: 外層 if(gv_row 述詞) 內再包內層 if(gv_col 述詞)(巢狀分段).
+	    4) ripple 範例(用分組避越界, 見 3.6):
+	           group row0  : assign xxx[gv_row] = 1'b1;           (初始條件)
+	           group else  : assign xxx[gv_row] = aaa[gv_row-1];
+
+	4.4 slice 的 UI: 分組標籤 + 規則清單 + 選擇器切換編輯器
+	    (取代「勾選 row -> 按 Slice -> 就地切段、每段內嵌編輯器」的舊做法; 舊做法頁面過長、
+	     換組麻煩、符號維度時 checkbox 笨重、「其餘」易被誤解為剩格.)
+	    1) 分組標籤取代「勾選->Slice->鎖定」:
+	       - 每個 row/col 一個下拉標籤: A / B / ... / else, 同標籤共用一份條件.
+	       - 換組只改標籤, 不用 Delete 重來; 天生支援非連續(row0、row2 都標 A).
+	       - else 第一等群組: 未指派者預設落在 else.
+	    2) 底層存「有序規則清單(符號述詞)」, checkbox 只是挑選輔助:
+	       - 小的具體維度 -> checkbox 格挑, 自動產生述詞.
+	       - 大的或 parameter 符號維度 -> 不列舉, 用區段選擇: 第一個/最後一個/前 k 個/指定 k/其餘.
+	       - 規則有序 = if/else if 優先權, else 墊底、唯一.
+	    3) 條件編輯器用「選擇器切換」而非每段內嵌:
+	       - 「群組/Slice」下拉, 選到哪組就在同一編輯區顯示那組 hi/lo/force, 一次一組, 頁高固定.
+	       - 沿用專案現有 bit-selector pattern(2D 的 Col 選擇器亦同), 不堆 N 份 widget.
+	    4) 群組數量: 動態, 非固定:
+	       - 下限: 只有一個 else(= 不切片, 所有 row 共用一份).
+	       - 上界 = 代表值最大值 N(每組至少吃 1 個 row); 實務通常 2~4 組.
+	       - 空群組自動移除; else 恆最後、唯一、不可刪不可改.
+	       - row 下拉選項 = 現有群組 + else + 「新增...」; 選「新增...」長出新群組.
+
+	[UI] 條件頁 - 1 維訊號(row slice)
+	    +- 條件: event_ddr_pfail_case2_p   (1維, row=NUM_CPU) --------------------+
+	    | 切片軸: [row v]                                                        |
+	    |                                                                        |
+	    | Row 分組            Slice 條件   群組:[A v]  (A = gv_cpu==0)            |
+	    |  row0 [A    v]      +--------------------------------------------------+|
+	    |  row1 [A    v]      | 訊號         取用  取法        ~  比較  rhs       ||
+	    |  row2 [else v]      | oDDR_PWROK    -   All col OR       ...            ||
+	    |  (其餘 -> else)     | vccd_hv_pg    -   Same row    ~                   ||
+	    |                     +--------------------------------------------------+|
+	    |                      [上移][下移][刪群組][新增群組]                     |
+	    +------------------------------------------------------------------------+
+
+	[UI] 條件頁 - 2 維訊號(col slice + col 選擇器)
+	    +- 條件: event_ddr_pfail_case1_p  (2維 NUM_CPU x NUM_CPU_MEM) ------------+
+	    | 切片軸: [col v]   (row / col / 兩者)                                    |
+	    |                                                                        |
+	    | Col 分組            Slice 條件   群組:[A v]  (A = gv_mem==0)            |
+	    |  col0 [A    v]      +--------------------------------------------------+|
+	    |  col* [else v]      | 訊號              取用  取法      ~  ...          ||
+	    |  (其餘 -> else)     | oDDR_PWROK         -   Same            ...        ||
+	    |                     | ddr_pcamp_ch0_i    lo  Same row                   ||
+	    |                     +--------------------------------------------------+|
+	    |                      [上移][下移][刪群組][新增群組]                     |
+	    +------------------------------------------------------------------------+
+	    (2 維另可用 row 分組 + col 選擇器: col 選擇器逐-col 枚舉, 適合各 col 行為互異;
+	     col slice 用述詞分段, 適合「col0 一種、其餘一種」規律分段; 兩者可並存.)
+
+
+5. 已驗證可表達的實例(對照本設計)
+	a. event_ddr_pfail_case1_p (2D): col slice {0} vs else; 兩段 Same row + Same col, 1D 取用 lo_deb,
+	   2D 取 ~deb. -> 4.3(2) + 3.5 + 3.7.
+	b. event_ddr_pfail_case2_p (1D):
+	       assign event_ddr_pfail_case2_p[gv_cpu] = (|oDDR_PWROK[gv_cpu*NUM_CPU_MEM+:NUM_CPU_MEM]) & ~vccd_hv_pg_deb[gv_cpu];
+	   -> oDDR_PWROK: Same row + All col OR(3.5 連續窗); vccd_hv_pg_deb: 1D Same row + inv. 跨維度合規(3.4).
+	c. ddr_pcamp_a1_lo (1D 取 2D 的 Lo): assign ddr_pcamp_a1_lo[gv_cpu] = ddr_pwrok_lo[gv_cpu*NUM_CPU_MEM];
+	   -> row=Same, col=Specific 0(3.4/3.7).

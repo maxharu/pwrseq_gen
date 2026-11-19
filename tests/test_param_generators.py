@@ -104,8 +104,10 @@ class TestCParameterDefine:
         out = generate_c(_plain_config())
         assert "#define NUM_CPU" not in out
 
-    def test_body_uses_expanded_pwrcells(self):
+    def test_body_uses_expanded_literal_n(self):
         out = generate_c(_param_config())
-        # 公式寬度 NUM_CPU*2=4 → body 展開成 4 個具體 pwrcell（不引用 #define）
-        assert "pwrcell_t vout_0" in out
-        assert "pwrcell_t vout_3" in out
+        # 公式寬度 NUM_CPU*2=4 → 陣列宣告用具體數值 4（甲案），不引用 #define 符號
+        assert "pwrcell_t vout[4];" in out
+        assert "vout[NUM_CPU" not in out
+        # 逐 bit 條件展開到第 4 個 bit（索引）
+        assert "power_var.vout[3].hi.condition" in out

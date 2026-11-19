@@ -51,6 +51,25 @@ def _config() -> PowerSeqConfig:
         return PowerSeqConfig.from_dict(json.load(f))
 
 
+def _vector_config() -> PowerSeqConfig:
+    """甲案 vector C 的黃金來源：scalar input + 2-bit output，兩 bit 條件刻意不同（鎖逐 bit 展開）。"""
+    return PowerSeqConfig.from_dict({
+        "module_name": "PWRSEQ_VEC",
+        "rails": [
+            {"name": "EN", "seq_type": "input"},
+            {
+                "name": "VOUT",
+                "seq_type": "output",
+                "width_expr": "2",
+                "bits": [
+                    {"depends_on_hi_groups": [["EN"]]},
+                    {"depends_on_hi_groups": [["EN"]], "depends_on_force_groups": [["EN"]]},
+                ],
+            },
+        ],
+    })
+
+
 def _as_json(obj) -> str:
     return json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
@@ -85,6 +104,11 @@ def test_verilog_golden():
 
 def test_c_golden():
     _check_golden("demo.c", generate_c(_config(), "pwrseq_demo.c"))
+
+
+def test_c_vector_golden():
+    """甲案 vector C 形狀：陣列宣告 + 索引 handle/條件（逐 bit）。demo.c（無 vector）不受此影響。"""
+    _check_golden("demo_vector.c", generate_c(_vector_config(), "pwrseq_vec.c"))
 
 
 def test_drawio_golden():

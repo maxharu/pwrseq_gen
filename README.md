@@ -8,6 +8,19 @@
 
 - **節點編輯**：Input／Output 節點、Hi／Lo／Force 三段條件、群組內 AND／OR／XOR 運算、debounce 設定；
   **vector 節點**（一個 base 展開成 N 個 bit、每 bit 條件獨立）與 **parameter**（具名整數常數，vector 寬度可用公式引用）。
+  條件相依下拉在選取的相依為 vector 時**收合成一筆 base**（不逐 bit 展開），並提供消費模式：同索引（`base[i]`，對應目前 bit）、
+  全部（`&`，整組 AND）、任一（`|`，整組 OR）、指定 bit；按新增時於 GUI 層展開成具體 `base[i]` 相依（儲存格式不變）。
+  條件分頁的 bit 以**複選框**呈現（Shift 連選）：勾選多個 bit 時為**即時共編**——編輯錨點 bit 會同步套用到其他勾選 bit，
+  並自動替換同索引相依（`V[錨點]→V[目標]`，固定索引與 scalar 不動）。
+- **全域維度（dimensions）**：parameter 面板直接以「**維度個數 [0/1/2]**」下拉宣告維度——選了 N 就長出 N 列
+  「**名稱＋最大值**」欄位，填進去即同時建立該 parameter 並標記為維度1(row)/維度2(col)；本應用的 parameter
+  就是維度本身（dims-only，不需另外新增 parameter）。該 parameter 的值即該維度最大值，供「維度＋slice」條件模型
+  （取代舊 parametric）辨識 signal 的 2D bus 結構。
+- **Signal 維度宣告**：節點宣告頁以「**維度 [0/1/2]**」下拉＋「**Bits**」維度 parameter 下拉取代舊的自由公式寬度欄位：
+  0 維＝純量、1 維＝`[P1-1:0]`、2 維＝flat bus `[P1*P2-1:0]`；Bits 下拉只列**已宣告的全域維度**（row=維度1、col=維度2），
+  所選維度存進 `dim_params` 供後續 take/slice 認得幾何；左側 Node 清單與卡片標記對 2 維訊號顯示 `[row×col]`（如 `[2×4]`）、
+  其餘顯示 `[×N]`。目前落地的是宣告骨架（維度→寬度、round-trip、Verilog 宣告、形狀標記）；
+  take 選項與 slice 條件（條件頁仍為逐 bit，尚無 slice）在後續階段實作，詳見 `PseqGeneratorNewFunction.txt` 與 `ROADMAP.md`。
 - **程式碼產生**：
   - Verilog（`verilog_generator.py`）
   - C（`c_generator.py`）
@@ -127,10 +140,21 @@ templates/               Excel／Draw.io／時序圖範本與資產
   依 `eval_width(width_expr)` 展開成 N 個獨立 `PowerRail`（canonical 名 `base[i]`），每個帶群組 metadata
   （`group_base` / `bit_index` / `width_expr`）。config 以**扁平 rails + 群組 metadata** 保存：`to_dict` 把同群組收合成
   一筆（保留 `width_expr` 字串）、`from_dict` 以 `eval_width(width_expr, parameters)` 展開。Verilog 把群組收合成一條 bus
-  （`[k-1:0]` 或公式 `[(EXPR)-1:0]` + 單一 `PSEQCELL WIDTH`），C 逐 rail 展成 N 個 `pwrcell`。
+  （`[k-1:0]` 或公式 `[(EXPR)-1:0]` + 單一 `PSEQCELL WIDTH`），但 condition assign 逐 bit 索引展開
+  （`assign base_hi[i] = …`，每 bit 渲染自己的條件）；C 收合成陣列 `pwrcell_t base[N]`
+  並以索引 `base[i]` 引用；`pwrcell_handle` 收成「GPIO 表（`pwrseq_gpio_ref_t base_gpio[N]`）+ `for`
+  迴圈」，條件賦值仍逐 bit（保留每 bit 條件可不同）。
 - **Parameter**：`PowerSeqConfig.parameters` 是有序的 `Parameter(name, value)` 清單；vector 寬度公式可引用
   （Verilog 產生 `#(parameter NAME = VAL, ...)`、C 產生 `#define`）。`width_expr` 一律存字串（整數期 `"2"`、
   公式期如 `"NUM_CPU*2"`）。
+- **全域維度（dimensions）**：`PowerSeqConfig.dimensions` 是 0～2 個 parameter 名稱（維度1＝row、維度2＝col），
+  該 parameter 的值即該維度最大值。`to_dict` 僅在非空時輸出 `"dimensions"` 鍵（空則省略，舊檔 byte 不變）、
+  `from_dict` 做型別正規化並最多取前 2 個。validator 檢查個數 0～2、名稱需存在於 `parameters`、不重複、最大值 ≥ 1。
+  這是「維度＋slice」條件模型的地基（取代已移除的 parametric）；take 選項與 slice 條件在後續階段實作。
+- **Signal 維度（`dim_params`）**：vector 群組可帶 0～2 個維度名（`PowerRail.dim_params`，row＝`dim_params[0]`、
+  col＝`dim_params[1]`）。GUI 宣告頁用「維度 [0/1/2]」下拉＋Bits 維度下拉決定 `width_expr`（0→`"1"`、1→`P1`、
+  2→`P1*P2`，沿用 `eval_width`），`dim_params` 隨群組收合進 `to_dict`（非空才輸出）/`from_dict` round-trip，
+  2D flat bus 的 Verilog 宣告即公式路徑 `[(P1*P2)-1:0]`。無 `dim_params` 的既有向量沿用原 `width_expr`（骨架不破壞舊檔）。
 - **舊檔相容**：`to_dict` / `from_dict` 就是存檔格式本身，無版本號、無 migration 層。舊 JSON 缺欄位一律給預設——
   **無群組 metadata = 單一節點（`width_expr` 預設 `"1"`）**、**無 `parameters` = 空清單**；且 `to_dict` 僅在
   `parameters` 非空時才輸出該鍵，確保無 parameter 的舊檔產生的輸出 byte 不變（由 `tests/golden/` 鎖定）。

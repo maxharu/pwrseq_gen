@@ -1,4 +1,4 @@
-# pwrseq_gen 技術債與改善計畫
+﻿# pwrseq_gen 技術債與改善計畫
 
 本檔記錄已盤點出的架構問題與處理順序。設計層級的功能提案另見 `doc/FUTURE.md`。
 
@@ -431,6 +431,77 @@ undo 回到載入狀態時 dirty 誤判。`_saving` 改走 `begin_save()` 的原
 
 ### 刻意延後（走乙，見 `doc/FUTURE.md`）
 
-body 維持在「Verilog bit 0 代表整條 bus／C 逐 bit 攤平成 N 份獨立結構」的最小可行狀態。
-真正的 **body 迴圈化**（Verilog `generate` 迴圈做真 per-bit 條件渲染、C 改用陣列 + 迴圈）
-會改變既有 vector 的輸出形狀，屬於獨立一輪，記在 `doc/FUTURE.md`。
+B5 當時 body assign 先用 bit 0 的條件代表整條 bus；該限制已在後續「Verilog vector 條件逐 bit
+展開」一輪移除（見下），跨 bit 葉節點參照也已索引化（見下）。仍延後的只剩**可選的 `generate`
+迴圈收合行數**（非正確性缺口，見 `doc/FUTURE.md`）。
+
+### 追加（獨立小輪）：C vector 輸出甲案化
+
+**一個刻意的輸出形狀變更**：C 產生器對 vector 群組原本逐 bit 攤平成 N 份獨立成員
+（`pwrcell_t vout_0; vout_1; …` + 各自的 init / handle / 條件），現改為**陣列宣告
+`pwrcell_t base[N];` + 所有引用走索引 `base[i]`**（static initializer、`pwrcell_Init`、
+`pwrcell_handle`、條件賦值 LHS，以及條件式裡引用其他 bit `.condition` 的 RHS——`_CCond`
+改吃 `name_to_rail` 以 `base[i]` 輸出）。**條件仍逐 bit 展開**（每 bit 一行，不做 `for` 迴圈），
+保留每 bit 條件可不同。Verilog、`cond_ir` 與非群組 rail 的成員名一律不變。
+
+### 追加（獨立小輪）：C vector handle 迴圈化
+
+**接續甲案的另一個刻意輸出形狀變更**：vector 的 `pwrcell_handle` 從 N 行離散呼叫改為
+**「GPIO 表 + `for` 迴圈」**——對每個 vector base 輸出一張 `static const pwrseq_gpio_ref_t
+base_gpio[N]`（每 bit 填 header 既有的 `<MACRO>_PORT`（`GPIO_T*` port 指標）/ `<MACRO>_BIT`
+（pin 整數）），再用 `for (UINT8 i = 0; i < N; i++) pwrcell_handle(&var.base[i], arg_hi, arg_lo,
+base_gpio[i].port, base_gpio[i].pin);` 取代。typedef `pwrseq_gpio_ref_t` 自成一體寫進產出 C 檔
+（不需改 firmware），只在有 vector 時出現。time 引數（arg_hi/arg_lo）全 bit 共用，取 bit 0 代表；
+**條件賦值與 static initializer 仍逐 bit**（刻意不迴圈，保 per-bit 獨立）。非群組 rail 的 handle
+行完全不變。
+
+兩輪都只影響**含 vector 的 C 輸出**：`tests/golden/demo_vector.c` 鎖住新形狀；
+無 vector 的 `tests/golden/demo.c` byte 不變。剩下的 Verilog `generate` 迴圈與 C 條件賦值迴圈化
+仍記在 `doc/FUTURE.md`。
+
+### 追加（獨立小輪）：Verilog vector 條件逐 bit 展開
+
+**一個刻意的輸出形狀變更**：Verilog 的 vector condition assign 從「bit 0 的條件代表整條 bus」
+（`assign base_hi = …`）改為**逐 bit 索引展開**——群組的 head 蔓開該群組所有 bit（依 `bit_index`），
+每 bit 渲染**自己的**條件：`assign base_hi[i] = …;` / `base_lo[i]` / `base_force[i]`，每 bit 三行後
+空一行，`No-condition` 注解沿用（該 bit 的樹是 `Const` 才加）。非群組 rail 的 assign 完全不變（無索引）。
+condition wire（`wire [k-1:0] base_hi, …`）、單一 `PSEQCELL`/`DEB` WIDTH=k、bus port、
+`Continuous Assignment` 全部不變，只有 condition assign 區塊改成逐 bit。這才真正輸出 bit 1..N-1
+各自的條件（先前被收合忽略）。
+
+只影響**含 vector 的 Verilog 輸出**；無 vector 的 `tests/golden/demo.v` byte 不變（非群組路徑沒動），
+新形狀由 `tests/test_vector_generators.py` 的逐 bit 測試鎖定。
+
+### 追加（獨立小輪）：Verilog 跨 bit 葉節點參照索引化
+
+**接續逐 bit 展開的正確性修補**：某 vector bit 的條件若引用**別 vector 的具體 bit**（如 `VOUT[i]`
+的條件依賴 `PG[i]`），`_VerilogCond` 原本把葉節點名直接過 `internal_sig`，產出收合後根本不存在的
+訊號 `pg_0` / `pg_0_deb` / `pg_0_hi`。現改為：被參照 rail 有 `group_base` 時，葉節點渲染成收合 bus
+的索引 `<bus>[bit_index]`，分四類——output 準位 `pg[i]`、input 無 deb `iPG[i]`、input 有 deb
+`pg_deb[i]`、`cond`（iHi/iLo/iForce）`pg_{kind}[i]`；`<bus>` 用 `_group_sig`/`_group_port`，
+`i` 用 `bit_index`。非群組 rail 的渲染完全不變，`cond_ir` 語意不動（只改 `_VerilogCond` 渲染層）。
+`tests/test_vector_generators.py::TestVerilogCrossBitLeaf` 覆蓋四類；`demo.v` byte 不變。
+
+---
+
+## 進行中（以「維度 + slice」取代 parametric）
+
+舊的「參數化向量條件 v2（freeexpr + domain 迴圈，pexpr）」已**整組移除**，改以 `PseqGeneratorNewFunction.txt`
+描述的「維度 + slice」模型重建條件授權。非 parametric 的黃金輸出（`tests/golden/`）byte 全程不變。分階段落地：
+
+- **階段A（已完成）— 移除 parametric 全鏈路**：刪 `core/pexpr.py`、`core/pexpr_build.py`；
+  `config_models` 移除 `ParametricNode`、`PowerRail.pexpr_{hi,lo,force}`、`param_node`、`"parametric"` 收合格式
+  （`from_dict` 遇舊鍵略過不載入）；verilog/c/sim/validator 的 parametric 路徑與 `check_parametric` 一併移除；
+  GUI 移除 `ParametricCondFrame` 與 Parametric 切換。`eval_width`（寬度公式）保留，後續 2D `P1*P2` 會用到。
+- **階段B（已完成）— Parameter 全域維度骨架**：`PowerSeqConfig.dimensions`（0～2 個，指向 parameter 名稱，
+  維度1＝row、維度2＝col，parameter 值即最大值）；`to_dict` 非空才輸出、`from_dict` 正規化並最多取 2 個；
+  `validator.check_dimensions`（個數 0～2、名稱存在、不重複、最大值 ≥ 1）；`ParameterPanel` 改為對齊
+  `PseqGeneratorNewFunction.txt` §1 的 dims-only 流程——「維度個數」下拉選 N 即長出 N 列「名稱＋最大值」欄位，
+  parameter 即維度本身（不需另外新增 parameter），`on_change(params, dims)` 單一回呼。
+  `tests/test_dimensions.py`、`tests/test_gui_parameters.py`。
+- **階段C（已完成）— Signal 維度宣告骨架**：signal 可選 0/1/2 維 → `width_expr`（0→`"1"`、1→`P1`、2→`P1*P2`，
+  由 `config_edit.width_expr_from_dims` 單一來源推導）；群組 dict／`PowerRail` 存 `dim_params`（非空才序列化、round-trip）；
+  `RailEditorFrame` 宣告列改「維度 [0/1/2]」下拉＋Bits 維度 parameter 下拉（只列全域維度，無維度時沿用舊 `width_expr`，
+  不破壞既有向量）；Verilog 2D flat bus 走既有公式路徑 `[(P1*P2)-1:0]`。`tests/test_dimensions.py`、`tests/test_gui_parameters.py`。
+- **後續**：take 選項（Same／Specific(+相對偏移)／All AND|OR）、slice（符號述詞＋分組標籤＋else、row/col 軸）
+  的 IR 與 generate-for 發射，再接 C／sim／drawio／excel 後端與 GUI 條件頁。

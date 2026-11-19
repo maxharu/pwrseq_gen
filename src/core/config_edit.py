@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from typing import TypeVar
 
+from core.param_expr import eval_width
+
 T = TypeVar("T")
 
 
@@ -131,22 +133,55 @@ def delete_nodes(rails: list, node_indices: Iterable[int]) -> list[int]:
     return removed
 
 
-def set_group_metadata(bits: Sequence, base: str | None, width_expr: str) -> None:
-    """把一組 bit rails 蓋上群組 metadata；base=None 表 scalar（清掉群組、width_expr=1）。
+def set_group_metadata(
+    bits: Sequence, base: str | None, width_expr: str, dim_params: Sequence | None = None,
+) -> None:
+    """把一組 bit rails 蓋上群組 metadata；base=None 表 scalar（清掉群組、width_expr=1、dim_params 清空）。
 
-    GUI 卡片收集回 config 時走這裡，群組 metadata 的規則（bit_index 連號、共用 width_expr）
-    只有一份，不會各處各自蓋而漂移。
+    GUI 卡片收集回 config 時走這裡，群組 metadata 的規則（bit_index 連號、共用 width_expr、
+    共用 dim_params）只有一份，不會各處各自蓋而漂移。dim_params 是所選 0~2 維名（row、col）。
     """
     if base is None:
         for r in bits:
             r.group_base = None
             r.bit_index = 0
             r.width_expr = "1"
+            r.dim_params = []
         return
+    dims = list(dim_params or [])
     for i, r in enumerate(bits):
         r.group_base = base
         r.bit_index = i
         r.width_expr = width_expr
+        r.dim_params = list(dims)
+
+
+def vector_shape_label(node: Sequence, parameters=None) -> str:
+    """vector 群組的形狀標記：2 維→`"{row}×{col}"`（以 parameter 值代入），其餘→`"×{N}"`。
+
+    row＝eval_width(dim_params[0])、col＝eval_width(dim_params[1])；無法求值或乘積 ≠ N 時退回 `"×N"`。"""
+    n = len(node)
+    head = node[0] if n else None
+    dims = list(getattr(head, "dim_params", None) or []) if head is not None else []
+    if len(dims) == 2:
+        try:
+            row = eval_width(dims[0], parameters)
+            col = eval_width(dims[1], parameters)
+            if row > 0 and col > 0 and row * col == n:
+                return f"{row}\u00d7{col}"
+        except (ValueError, TypeError):
+            pass
+    return f"\u00d7{n}"
+
+
+def width_expr_from_dims(dim_params: Sequence | None) -> str:
+    """由所選維度名推 vector 寬度公式：0 維→"1"（純量）、1 維→P1、2 維→"P1*P2"。
+
+    維度名即 parameter 名（最大值），乘積交由 eval_width 以具體 parameter 值求 N。"""
+    dims = [str(d) for d in (dim_params or []) if d][:2]
+    if not dims:
+        return "1"
+    return "*".join(dims)
 
 
 def flatten_node_rails(nodes: Iterable[Sequence]) -> list:
