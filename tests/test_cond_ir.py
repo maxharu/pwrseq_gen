@@ -147,6 +147,9 @@ class _Renderer(CondVisitor):
     def any_group(self, groups):
         return " | ".join(groups)
 
+    def take_ref(self, node):
+        return f"{node.base}#take"
+
 
 def test_accept_folds_children_before_the_visitor_sees_them():
     rail = PowerRail(

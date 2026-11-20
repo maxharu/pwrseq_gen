@@ -1,4 +1,4 @@
-﻿# pwrseq_gen 技術債與改善計畫
+# pwrseq_gen 技術債與改善計畫
 
 本檔記錄已盤點出的架構問題與處理順序。設計層級的功能提案另見 `doc/FUTURE.md`。
 
@@ -503,5 +503,34 @@ condition wire（`wire [k-1:0] base_hi, …`）、單一 `PSEQCELL`/`DEB` WIDTH=
   由 `config_edit.width_expr_from_dims` 單一來源推導）；群組 dict／`PowerRail` 存 `dim_params`（非空才序列化、round-trip）；
   `RailEditorFrame` 宣告列改「維度 [0/1/2]」下拉＋Bits 維度 parameter 下拉（只列全域維度，無維度時沿用舊 `width_expr`，
   不破壞既有向量）；Verilog 2D flat bus 走既有公式路徑 `[(P1*P2)-1:0]`。`tests/test_dimensions.py`、`tests/test_gui_parameters.py`。
-- **後續**：take 選項（Same／Specific(+相對偏移)／All AND|OR）、slice（符號述詞＋分組標籤＋else、row/col 軸）
-  的 IR 與 generate-for 發射，再接 C／sim／drawio／excel 後端與 GUI 條件頁。
+- **階段D（進行中）— take 取法＋符號化 generate-for**：讓維度 vector 的條件以「head 一份符號條件＋每引用項帶 row/col take」
+  表達，Verilog 改走 generate-for，修好「1 維輸出引用 2 維訊號」的列優先幾何 bug（原本 `sig_4[i]` 直接對應 → 正確
+  `sig_4[gv_row*M + col-take]`）。分步：
+  - D1 運算式產生器 `core/take_expr.py`（`Take`／`take_expr`／`take_from_dict`，對照 3.1~3.6）：0 維直接引用、1 維 row take
+    （Same／Specific(+相對偏移)／All AND|OR）、2 維列優先扁平 `bus[row*M + col]` 的乾淨組合；「All row 搭配逐 col」跨步歸約（3.5）
+    明確不支援並報錯。`tests/test_take_expr.py`。
+  - B1 存儲：`ConditionConfig` 加 `depends_on_{kind}_take_groups`（與 use_groups 平行 per-group per-item，幾何不入存），
+    非空才序列化、round-trip、舊檔 byte 不變。
+  - B2 IR：`cond_ir` 新增葉節點 `TakeRef` 與 `CondVisitor.take_ref`（abstract，強制六個 visitor 面對）；`resolve_item` 對
+    「被引用 rail 有 dim_params＋帶 take」包成 `TakeRef`；Verilog visitor 走 `take_expr` 符號渲染，C／sim／drawio／時序
+    四後端先放 `NotImplementedError` 佔位（無維度 config 不觸發 → ci 綠）。
+  - B3 Verilog generate-for：`group_base` 且 `dim_params` 的 vector condition assign 改 `for(gv_row[/gv_col])`＋具名 scope；
+    legacy vector（無 dim_params）續走逐 bit，byte 不變。`tests/test_take_ir.py`。
+  - B4 GUI 條件頁 take 編輯：`CondEditModel` 加 `take` 平行欄（`from_rail`/`from_initial` 載入、`add_dep(take=)`、
+    `to_take_groups`），`CondSectionFrame.get_take_groups` → `_apply_output_sections` 回寫 `rail.depends_on_{kind}_take_groups`；
+    `RailEditorFrame._expand_dep` 在「owner 與 dep 皆維度向量」時改走 symbolic take（只掛 base[0] 把手，幾何由 take 承載），
+    1 維 owner 參照 2 維來源時 row=same、col 由模式下拉決定（全部AND／任一OR／指定欄），其餘向量續走 legacy 逐 bit。
+    owner 維度 < dep 維度時模式下拉移除「同索引」（對缺的軸無意義，`_drop_same_for` 經 `_VecDepHelper` 注入 `CondSectionFrame`）。
+    `tests/test_cond_edit_take.py`、`tests/test_gui_take.py`。
+- **§6 取法 UI（已完成）— 條件頁 per-row 取法編輯器**：以 `core/take_rules.py` 為單一規則來源，依
+  「輸出維度 × 被引用維度」枚舉合法取法形狀（`take_forms`）、預設（`default_form`）與 `形狀+n/m ↔ take dict`
+  映射（`form_to_take`／`take_to_form`），§3.4（輸出缺軸不得用 gv_col）、§3.5（跨步 All-row 不列入＝隱藏）
+  由此收斂。GUI（[src/gui/widgets.py](src/gui/widgets.py)）：維度向量相依不再用 header 模式/bit，改在相依列上
+  兩層呈現「取法下拉＋第二行 n/m 子選項」，變更即寫回 `model.take`、隨 `get_rails` 帶出；
+  `_expand_dep` 加入時套 `take_rules` 預設 take（取代 `_symbolic_take`/`_drop_same_for`）。
+  1 維 dep：相對偏移／指定絕對／全部AND／全部OR；2 維 dep：row 偏移 + {指定col／全col OR／全col AND}，
+  輸出 2 維再加 row 偏移 + col 偏移（gv_col，n=m=0 即完全對齊）。scalar／legacy 非維度向量維持原狀。
+  `tests/test_take_rules.py`、`tests/test_gui_take.py`、`tests/test_take_ir.py::TestVerilogSection6Forms`。
+- **後續**：§4.4 條件頁大改版（分組標籤／Slice／規則清單）；§3.5 跨步 All-row 歸約；
+  §3.6.2 自由運算式逃生口；階段F 把 C／sim／drawio／excel 的 `take_ref` 佔位換成具體材質化（`take_cells`）；
+  slice（符號述詞＋分組標籤＋else、row/col 軸）。

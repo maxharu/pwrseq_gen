@@ -166,17 +166,18 @@ class TestVectorDepCollapse:
                              get_all_rails=_mixed_rails, get_pulses=lambda: ["PSEQ"])
         try:
             ed._on_bit_selected("1")
+            # legacy 向量（無 dim_params）續走逐 bit，take 恆為 None（第三元素）
             # 同索引 → 用 active bit（1）
-            assert ed._expand_dep("V", VEC_MODE_SAME, 0) == (["V[1]"], None)
+            assert ed._expand_dep("V", VEC_MODE_SAME, 0) == (["V[1]"], None, None)
             # 全部/任一 → 全 bit + group_op
-            assert ed._expand_dep("V", VEC_MODE_ALL, 0) == (["V[0]", "V[1]"], "and")
-            assert ed._expand_dep("V", VEC_MODE_ANY, 0) == (["V[0]", "V[1]"], "or")
+            assert ed._expand_dep("V", VEC_MODE_ALL, 0) == (["V[0]", "V[1]"], "and", None)
+            assert ed._expand_dep("V", VEC_MODE_ANY, 0) == (["V[0]", "V[1]"], "or", None)
             # 指定 → base[k]
-            assert ed._expand_dep("V", VEC_MODE_PICK, 0) == (["V[0]"], None)
-            assert ed._expand_dep("V", VEC_MODE_PICK, 1) == (["V[1]"], None)
+            assert ed._expand_dep("V", VEC_MODE_PICK, 0) == (["V[0]"], None, None)
+            assert ed._expand_dep("V", VEC_MODE_PICK, 1) == (["V[1]"], None, None)
             # scalar / High / Low 原樣
-            assert ed._expand_dep("A", VEC_MODE_PICK, 0) == (["A"], None)
-            assert ed._expand_dep("High", VEC_MODE_SAME, 0) == (["High"], None)
+            assert ed._expand_dep("A", VEC_MODE_PICK, 0) == (["A"], None, None)
+            assert ed._expand_dep("High", VEC_MODE_SAME, 0) == (["High"], None, None)
         finally:
             ed.destroy()
 

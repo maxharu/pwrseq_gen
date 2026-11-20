@@ -12,6 +12,11 @@ from core.config_models import DEFAULT_PULSE, PowerRail, PowerSeqConfig, pulse_v
 from core.constants import DEP_HIGH, DEP_LOW
 from core.group_logic import verilog_intra_expr
 from core.naming import internal_sig, safe_name
+from core.take_expr import take_expr
+
+# 維度 vector 的 generate-for genvar 名（1 維用 row、2 維加 col）。
+GV_ROW = "gv_row"
+GV_COL = "gv_col"
 
 
 def _filename_to_module_and_guard(filepath: str) -> tuple[str, str]:
@@ -185,6 +190,12 @@ class _VerilogCond(CondVisitor):
     def any_group(self, groups: list[str]) -> str:
         return " | ".join(groups)
 
+    def take_ref(self, node) -> str:
+        base = internal_sig(node.base)
+        bus = base if node.use == "level" else f"{base}_{node.use}"
+        return take_expr(bus, node.ref_ndim, node.row, node.col,
+                         col_size=node.col_size, gv_row=GV_ROW, gv_col=GV_COL)
+
 
 def _sep() -> str:
     return "////////////////////////////////////////////////////////////////////////////////"
@@ -192,6 +203,37 @@ def _sep() -> str:
 
 def _section(title: str) -> list[str]:
     return [_sep(), f"// {title:<74} //", _sep()]
+
+
+def _emit_dim_vector_cond(lines: list[str], head: PowerRail, s: str,
+                          renderer: "_VerilogCond", name_to_rail: dict) -> None:
+    """維度 vector 的條件走 generate-for：head 一份符號條件（含 take）套整條 bus。
+
+    1 維：for(gv_row<P1) assign s_kind[gv_row]；2 維：巢狀 for，LHS flat = gv_row*P2+gv_col。"""
+    dims = head.dim_params
+    p1 = dims[0]
+    two_d = len(dims) >= 2
+    lines.append("    generate")
+    lines.append(f"    for ({GV_ROW}=0; {GV_ROW}<{p1}; {GV_ROW}={GV_ROW}+1) begin : g_{s}")
+    if two_d:
+        p2 = dims[1]
+        lines.append(
+            f"        for ({GV_COL}=0; {GV_COL}<{p2}; {GV_COL}={GV_COL}+1) begin : g_{s}_c")
+        indent = "            "
+        lhs_idx = f"{GV_ROW}*{p2} + {GV_COL}"
+    else:
+        indent = "        "
+        lhs_idx = GV_ROW
+    for kind, no_cond_note in _NO_CONDITION_NOTES.items():
+        tree = resolve_condition(head, kind, name_to_rail)
+        expr = tree.accept(renderer)
+        note = f"  {no_cond_note}" if isinstance(tree, Const) else ""
+        lines.append(f"{indent}assign {s}_{kind}[{lhs_idx}] = {expr};{note}")
+    if two_d:
+        lines.append("        end")
+    lines.append("    end")
+    lines.append("    endgenerate")
+    lines.append("")
 
 
 def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None) -> str:
@@ -376,6 +418,12 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
         # 群組逐 bit 索引展開（每 bit 渲染自己的條件，condition wire/PSEQCELL 仍是整條 bus）；
         # 非群組維持原樣（單一 assign，無索引）。
         renderer = _VerilogCond(name_to_rail)
+        dim_vectors = [r for r in sequenced if r.group_base is not None and r.dim_params]
+        if dim_vectors:
+            lines.append(f"    genvar {GV_ROW};")
+            if any(len(r.dim_params) >= 2 for r in dim_vectors):
+                lines.append(f"    genvar {GV_COL};")
+            lines.append("")
         for r in sequenced:
             s = _group_sig(r)
             if r.group_base is None:
@@ -385,6 +433,8 @@ def generate_verilog(config: PowerSeqConfig, output_filename: str | None = None)
                     note = f"  {no_cond_note}" if isinstance(tree, Const) else ""
                     lines.append(f"    assign {s}_{kind} = {expr};{note}")
                 lines.append("")
+            elif r.dim_params:
+                _emit_dim_vector_cond(lines, r, s, renderer, name_to_rail)
             else:
                 bits = sorted(
                     (x for x in node_order_rails if x.group_base == r.group_base),

@@ -54,6 +54,9 @@ class _BoolEval(CondVisitor):
     def any_group(self, groups: list[int]) -> int:
         return 1 if any(groups) else 0
 
+    def take_ref(self, node):
+        raise NotImplementedError
+
 
 def _expected(rail, hl, name_to_rail, assignment: dict[str, int]) -> int:
     return resolve_condition(rail, hl, name_to_rail).accept(_BoolEval(assignment))

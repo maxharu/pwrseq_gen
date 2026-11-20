@@ -112,6 +112,9 @@ class _CCond(CondVisitor):
     def any_group(self, groups: list[str]) -> str:
         return " | ".join(groups)
 
+    def take_ref(self, node):
+        raise NotImplementedError("dim-vector take 尚未接線（階段F：C 後端）")
+
 
 _C_BANNER_INNER = 56  # power.c：// 與結尾 // 之間固定 56 字元
 

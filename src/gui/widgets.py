@@ -22,6 +22,7 @@ from core.config_models import (
 )
 from core.config_models import _bit_name as _bit_name
 from core.group_logic import INTRA_OP_LABELS, intra_op_label, normalize_intra_op
+from core.take_rules import default_form, form_to_take, take_forms, take_to_form
 from core.timing_models import InputWaveSpec
 from gui.theme import *
 
@@ -69,6 +70,7 @@ class CondSectionFrame(ctk.CTkFrame):
 
         self.inv_vars: dict[tuple[int, int], ctk.BooleanVar] = {}
         self.use_vars: dict[tuple[int, int], ctk.StringVar] = {}
+        self.take_cells: dict[tuple[int, int], dict] = {}
         self.group_inv_vars: dict[int, ctk.BooleanVar] = {}
         self.group_intra_op_vars: dict[int, ctk.StringVar] = {}
         self.rows: dict[tuple[int, int], ctk.CTkFrame] = {}
@@ -149,6 +151,7 @@ class CondSectionFrame(ctk.CTkFrame):
         self.group_frames.clear()
         self.inv_vars.clear()
         self.use_vars.clear()
+        self.take_cells.clear()
         self.group_inv_vars.clear()
         self.group_intra_op_vars.clear()
         self.rows.clear()
@@ -261,12 +264,18 @@ class CondSectionFrame(ctk.CTkFrame):
             return
         gf = self.group_frames[gi]
         mode_menu, bit_menu = gf["mode_menu"], gf["bit_menu"]
-        width = self.vec_dep.width_of(gf["combo"].get()) if self.vec_dep else None
+        sel = gf["combo"].get()
+        width = self.vec_dep.width_of(sel) if self.vec_dep else None
         if width is None:
             mode_menu.pack_forget()
             bit_menu.pack_forget()
             return
-        # owner 非 vector 時「同索引」無意義，從模式清單移除
+        # 維度向量相依：取法改在相依列上編輯（§6），不顯示 header 模式/bit
+        if self.vec_dep.owner_ndim() >= 1 and self.vec_dep.dep_ndim(sel) >= 1:
+            mode_menu.pack_forget()
+            bit_menu.pack_forget()
+            return
+        # legacy 非維度向量：維持原「模式＋bit」逐 bit 行為
         modes = list(VEC_MODES)
         if not self.vec_dep.owner_is_vector():
             modes = [m for m in modes if m != VEC_MODE_SAME]
@@ -325,12 +334,15 @@ class CondSectionFrame(ctk.CTkFrame):
         if not list_frame.winfo_ismapped():
             list_frame.pack(fill="x", padx=S_SM, pady=(0, S_XS))
 
+        # 外層垂直容器：top（控制列）＋ sub（取法子選項列，僅維度向量取法需要時出現）
         row = ctk.CTkFrame(list_frame, fg_color="transparent")
         row.pack(fill="x", pady=1)
         row._key_slot = key_slot  # type: ignore[attr-defined]
         self.rows[key] = row
+        top = ctk.CTkFrame(row, fg_color="transparent")
+        top.pack(fill="x")
 
-        rh = ctk.CTkLabel(row, text="\u2261", width=18,
+        rh = ctk.CTkLabel(top, text="\u2261", width=18,
                           text_color=("gray40", "gray70"), cursor="hand2")
         rh.pack(side="left", padx=(2, S_SM))
         rh.bind("<ButtonPress-1>",
@@ -340,14 +352,90 @@ class CondSectionFrame(ctk.CTkFrame):
         rh.bind("<ButtonRelease-1>",
                 lambda _e, s=key_slot: self._on_cond_drag_release(s[0]))
 
-        ctk.CTkLabel(row, text=display_name, width=120, anchor="w").pack(side="left", padx=(0, S_SM))
+        ctk.CTkLabel(top, text=display_name, width=120, anchor="w").pack(side="left", padx=(0, S_SM))
         if not is_const:
-            ctk.CTkCheckBox(row, text="Inv", variable=self.inv_vars[key], width=50).pack(side="left", padx=(0, S_SM))
+            ctk.CTkCheckBox(top, text="Inv", variable=self.inv_vars[key], width=50).pack(side="left", padx=(0, S_SM))
         if can_use_hi_lo:
-            ctk.CTkComboBox(row, values=allowed_use,
+            ctk.CTkComboBox(top, values=allowed_use,
                             variable=self.use_vars[key], width=100).pack(side="left", padx=(0, S_SM))
-        ctk.CTkButton(row, text="Del", width=50,
+        if not is_const:
+            self._build_take_cell(top, row, key, name)
+        ctk.CTkButton(top, text="Del", width=50,
                       command=lambda s=key_slot: self._remove_cond_by_key((s[0], s[1]))).pack(side="left")
+
+    # ---- per-row 取法（§6）：維度向量相依才出現 ----
+    def _build_take_cell(self, top, row, key: tuple[int, int], name: str) -> None:
+        """在相依列上建「取法」下拉＋第二行子選項（n/m），讀寫 model.take[gi][ii]。"""
+        if self.vec_dep is None:
+            return
+        out_ndim = self.vec_dep.owner_ndim()
+        dep_ndim = self.vec_dep.dep_ndim(name)
+        if out_ndim < 1 or dep_ndim < 1:
+            return  # scalar / legacy 非維度向量：無取法控制
+        gi, ii = key
+        forms = take_forms(out_ndim, dep_ndim)
+        labels = [f.label for f in forms]
+        id_by_label = {f.label: f.id for f in forms}
+        label_by_id = {f.id: f.label for f in forms}
+        needs_by_id = {f.id: f.needs for f in forms}
+
+        cur = (self.model.take[gi][ii]
+               if gi < len(self.model.take) and ii < len(self.model.take[gi]) else None)
+        form_id, n, m = take_to_form(cur)
+        if form_id not in label_by_id:  # None 或不在清單 → 套預設
+            form_id, n, m = default_form(out_ndim, dep_ndim)
+        form_var = ctk.StringVar(value=label_by_id.get(form_id, labels[0]))
+        n_var = ctk.StringVar(value=str(n))
+        m_var = ctk.StringVar(value=str(m))
+
+        ctk.CTkLabel(top, text="\u53d6\u6cd5", font=FONT_HINT).pack(side="left", padx=(S_SM, 2))
+        menu = ctk.CTkOptionMenu(top, values=labels, variable=form_var, width=150)
+        menu.pack(side="left", padx=(0, S_SM))
+        sub = ctk.CTkFrame(row, fg_color="transparent")
+
+        cell = {"form_var": form_var, "n_var": n_var, "m_var": m_var, "sub": sub,
+                "menu": menu, "id_by_label": id_by_label, "needs_by_id": needs_by_id}
+        self.take_cells[key] = cell
+
+        form_var.trace_add("write", lambda *_a, k=key: self._on_take_form_changed(k))
+        n_var.trace_add("write", lambda *_a, k=key: self._commit_take(k))
+        m_var.trace_add("write", lambda *_a, k=key: self._commit_take(k))
+        self._render_take_sub(key)
+
+    def _current_take_form_id(self, key: tuple[int, int]) -> str:
+        cell = self.take_cells[key]
+        return cell["id_by_label"].get(cell["form_var"].get(), "")
+
+    def _render_take_sub(self, key: tuple[int, int]) -> None:
+        """依目前取法重建第二行數字欄（偏移值 / 欄索引 / 欄偏移）。"""
+        cell = self.take_cells[key]
+        sub = cell["sub"]
+        for w in sub.winfo_children():
+            w.destroy()
+        needs = cell["needs_by_id"].get(self._current_take_form_id(key), ())
+        if needs:
+            sub.pack(fill="x", padx=(40, 0))
+            for field, label in needs:
+                ctk.CTkLabel(sub, text=label, font=FONT_HINT).pack(side="left", padx=(0, 2))
+                var = cell["n_var"] if field == "n" else cell["m_var"]
+                ctk.CTkEntry(sub, textvariable=var, width=56).pack(side="left", padx=(0, S_SM))
+        else:
+            sub.pack_forget()
+
+    def _on_take_form_changed(self, key: tuple[int, int]) -> None:
+        self._render_take_sub(key)
+        self._commit_take(key)
+
+    def _commit_take(self, key: tuple[int, int]) -> None:
+        """把目前取法寫回 model.take[gi][ii]。"""
+        gi, ii = key
+        if not (0 <= gi < len(self.model.take) and 0 <= ii < len(self.model.take[gi])):
+            return
+        cell = self.take_cells[key]
+        form_id = self._current_take_form_id(key)
+        self.model.take[gi][ii] = form_to_take(
+            form_id, _safe_int(cell["n_var"].get(), 0), _safe_int(cell["m_var"].get(), 0))
+        self._fire_change()
 
     def _on_inv_changed(self, gi: int, ii: int):
         if 0 <= gi < len(self.model.inv) and 0 <= ii < len(self.model.inv[gi]):
@@ -394,7 +482,7 @@ class CondSectionFrame(ctk.CTkFrame):
         sel = gf["combo"].get()
         if not sel:
             return
-        names, group_op = self._expand_selection(gf, sel)
+        names, group_op, take = self._expand_selection(gf, sel)
         if group_op is not None and 0 <= gi < len(self.model.group_intra_op):
             # 全部/任一：reduction 由整組 intra_op 承載（and/or）
             self.model.group_intra_op[gi] = group_op
@@ -404,16 +492,18 @@ class CondSectionFrame(ctk.CTkFrame):
         added = False
         for name in names:
             dep_key = DEP_HIGH if name == "High" else (DEP_LOW if name == "Low" else name)
-            if self.model.add_dep(gi, dep_key):
+            if self.model.add_dep(gi, dep_key, take=take):
                 self._add_cond_row(gi, dep_key)
                 added = True
         if added:
             self._fire_change()
 
-    def _expand_selection(self, gf: dict, sel: str) -> tuple[list[str], str | None]:
-        """把 combo 選取（含 vector 模式/ bit）展開成具體相依名與需設定的 group op。"""
+    def _expand_selection(
+        self, gf: dict, sel: str
+    ) -> tuple[list[str], str | None, dict | None]:
+        """把 combo 選取（含 vector 模式/ bit）展開成具體相依名、group op 與 take。"""
         if self.vec_dep is None:
-            return ([sel], None)
+            return ([sel], None, None)
         mode = gf["mode_var"].get()
         bit = _safe_int(gf["bit_var"].get(), 0)
         return self.vec_dep.expand(sel, mode, bit)
@@ -682,6 +772,9 @@ class CondSectionFrame(ctk.CTkFrame):
     def get_use_groups(self) -> list[list[str]]:
         return self.model.to_use_groups()
 
+    def get_take_groups(self) -> list[list[dict | None]]:
+        return self.model.to_take_groups()
+
     def get_group_inv(self) -> list[bool]:
         """每個非空 group 的整組反相旗標，與 get_groups() 同序。"""
         return self.model.to_group_inv()
@@ -934,10 +1027,13 @@ class _VecDepHelper:
     由 RailEditorFrame 建立（唯一知道 vector 結構／目前 active bit 的地方）。CondSectionFrame
     只透過這三個方法與 vector 互動，不自行理解群組結構。"""
 
-    def __init__(self, width_of, owner_is_vector, expand):
+    def __init__(self, width_of, owner_is_vector, expand,
+                 owner_ndim=None, dep_ndim=None):
         self.width_of = width_of              # (sel) -> int | None
         self.owner_is_vector = owner_is_vector  # () -> bool
-        self.expand = expand                  # (sel, mode, bit) -> (names, group_op)
+        self.expand = expand                  # (sel, mode, bit) -> (names, group_op, take)
+        self.owner_ndim = owner_ndim or (lambda: 0)         # () -> int：owner 維度數
+        self.dep_ndim = dep_ndim or (lambda _name: 0)       # (name) -> int：dep 維度數
 
 
 def _node_base_of(rails: list[PowerRail]) -> tuple[str, bool]:
@@ -983,7 +1079,8 @@ class RailEditorFrame(ctk.CTkFrame):
         self._active_bit = 0
         self._cond_editor: Optional[dict] = None  # {"kind": "output"|"input", ...}
         self._vec_dep = _VecDepHelper(
-            self._dep_vector_width, self._owner_is_vector, self._expand_dep)
+            self._dep_vector_width, self._owner_is_vector, self._expand_dep,
+            self._owner_ndim, self._dep_ndim)
         self._build_ui()
 
     # ---- helpers ----
@@ -1006,24 +1103,58 @@ class RailEditorFrame(ctk.CTkFrame):
     def _owner_is_vector(self) -> bool:
         return self.is_vector()
 
-    def _expand_dep(self, sel: str, mode: str, bit: int) -> tuple[list[str], str | None]:
-        """把 (base, 模式, bit) 展開成具體相依名與需設定的 group op（方案甲 GUI 糖衣）。
+    def _dep_dim_params(self, sel: str) -> list[str]:
+        """sel 對應的相依節點維度名清單（新維度模型向量才有；legacy 向量為空）。"""
+        for r in self.get_all_rails():
+            if r.group_base == sel:
+                return list(getattr(r, "dim_params", None) or [])
+        return []
 
-        scalar / High / Low 原樣回傳；vector 依模式產生具體 base[i]：
+    def _owner_ndim(self) -> int:
+        """owner（本節點）維度數（0/1/2）。"""
+        return len(self._selected_dim_params())
+
+    def _dep_ndim(self, name: str) -> int:
+        """相依 name（可為 base 或 base[i]）的維度數；非維度向量回 0。"""
+        for r in self.get_all_rails():
+            if r.name == name or r.group_base == name:
+                return len(getattr(r, "dim_params", None) or [])
+        return 0
+
+    def _dim_vector_dep(self, sel: str) -> bool:
+        """owner 與 dep 皆為維度向量（§6 取法的作用對象）。"""
+        return bool(self._selected_dim_params()) and bool(self._dep_dim_params(sel))
+
+    def _default_take_for(self, sel: str) -> dict | None:
+        """維度向量相依的預設 take（由 take_rules 單一來源決定）。"""
+        out_ndim = len(self._selected_dim_params())
+        dep_ndim = len(self._dep_dim_params(sel))
+        form, n, m = default_form(out_ndim, dep_ndim)
+        return form_to_take(form, n, m)
+
+    def _expand_dep(
+        self, sel: str, mode: str, bit: int
+    ) -> tuple[list[str], str | None, dict | None]:
+        """把 (base, 模式, bit) 展開成具體相依名、需設定的 group op、以及 take（方案甲 GUI 糖衣）。
+
+        scalar / High / Low 原樣回傳；維度向量（owner+dep 皆有 dim_params）只掛一個 base[0]
+        把手、套 take_rules 預設 take（幾何之後在相依列上編輯）。其餘向量仍逐 bit 展開：
           同索引→目前 active bit；全部/任一→全 bit + and/or；指定→base[k]。"""
         if sel in ("High", "Low"):
-            return ([sel], None)
+            return ([sel], None, None)
         n = self._dep_vector_width(sel)
         if n is None:
-            return ([sel], None)
+            return ([sel], None, None)
+        if self._dim_vector_dep(sel):
+            return ([_bit_name(sel, 0)], None, self._default_take_for(sel))
         if mode == VEC_MODE_SAME:
-            return ([_bit_name(sel, min(self._active_bit, n - 1))], None)
+            return ([_bit_name(sel, min(self._active_bit, n - 1))], None, None)
         if mode == VEC_MODE_ALL:
-            return ([_bit_name(sel, i) for i in range(n)], "and")
+            return ([_bit_name(sel, i) for i in range(n)], "and", None)
         if mode == VEC_MODE_ANY:
-            return ([_bit_name(sel, i) for i in range(n)], "or")
+            return ([_bit_name(sel, i) for i in range(n)], "or", None)
         # VEC_MODE_PICK（或未知模式）→ 指定 bit
-        return ([_bit_name(sel, max(0, min(bit, n - 1)))], None)
+        return ([_bit_name(sel, max(0, min(bit, n - 1)))], None, None)
 
     def refresh_dep_options(self) -> None:
         """刷新作用中 bit 的 Conditions / Input Timing 的 signal 下拉名單。"""
@@ -1499,6 +1630,9 @@ class RailEditorFrame(ctk.CTkFrame):
         rail.depends_on_hi_use_groups = hi.get_use_groups()
         rail.depends_on_lo_use_groups = lo.get_use_groups()
         rail.depends_on_force_use_groups = fo.get_use_groups()
+        rail.depends_on_hi_take_groups = hi.get_take_groups()
+        rail.depends_on_lo_take_groups = lo.get_take_groups()
+        rail.depends_on_force_take_groups = fo.get_take_groups()
         rail.depends_on_hi_group_inv = hi.get_group_inv()
         rail.depends_on_lo_group_inv = lo.get_group_inv()
         rail.depends_on_force_group_inv = fo.get_group_inv()

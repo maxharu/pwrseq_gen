@@ -223,3 +223,33 @@ pwrseq_gen 新功能設計: 以「維度 + slice」取代 parametric
 	   -> oDDR_PWROK: Same row + All col OR(3.5 連續窗); vccd_hv_pg_deb: 1D Same row + inv. 跨維度合規(3.4).
 	c. ddr_pcamp_a1_lo (1D 取 2D 的 Lo): assign ddr_pcamp_a1_lo[gv_cpu] = ddr_pwrok_lo[gv_cpu*NUM_CPU_MEM];
 	   -> row=Same, col=Specific 0(3.4/3.7).
+
+6. 合法 assign 形狀
+	LHS 由輸出維度決定, RHS 由被引用訊號的維度與 take 決定.
+	n、m 為非負整數; 「+/-」表示該項可加可減. 偏移為 0 即該軸不偏移(Same).
+	1 維輸出沒有 col genvar, 引用 2 維時 col 只能是常數 m, 或整列 AND/OR(見 3.4), 不可用 gv_col.
+	Same row + Same col 即 6.2 引用 2 維「row 偏移 + col 偏移」的 n=m=0 特例: twoDim[gv_row*NUM_COL + gv_col].
+	跨步的 All row 歸約(間隔 NUM_COL)仍依 3.5, 不能寫成單一 part-select, 故不列入下列.
+
+	6.1 輸出為 1 維: oneDim[gv_row]
+		引用 1 維:
+			assign oneDim[gv_row] = oneDim[n];                                    (Specific row)
+			assign oneDim[gv_row] = oneDim[gv_row +/- n];                         (相對偏移, 見 3.6)
+			assign oneDim[gv_row] = |oneDim;                                      (All row OR)
+			assign oneDim[gv_row] = &oneDim;                                      (All row AND)
+		引用 2 維(col 已收斂):
+			assign oneDim[gv_row] = twoDim[(gv_row +/- n)*NUM_COL +/- m];         (row 偏移 + Specific col m)
+			assign oneDim[gv_row] = |twoDim[(gv_row +/- n)*NUM_COL +: NUM_COL];   (row 偏移 + All col OR)
+			assign oneDim[gv_row] = &twoDim[(gv_row +/- n)*NUM_COL +: NUM_COL];   (row 偏移 + All col AND)
+
+	6.2 輸出為 2 維: twoDim[gv_row*NUM_COL + gv_col]
+		引用 1 維(沿 col 廣播, 見 2.3):
+			assign twoDim[gv_row*NUM_COL + gv_col] = oneDim[n];                              (Specific row)
+			assign twoDim[gv_row*NUM_COL + gv_col] = oneDim[gv_row +/- n];                   (相對偏移, 見 3.6)
+			assign twoDim[gv_row*NUM_COL + gv_col] = |oneDim;                                (All row OR)
+			assign twoDim[gv_row*NUM_COL + gv_col] = &oneDim;                                (All row AND)
+		引用 2 維:
+			assign twoDim[gv_row*NUM_COL + gv_col] = twoDim[(gv_row +/- n)*NUM_COL +/- m];             (row 偏移 + Specific col m)
+			assign twoDim[gv_row*NUM_COL + gv_col] = twoDim[(gv_row +/- n)*NUM_COL + gv_col +/- m];    (row 偏移 + col 偏移; n=m=0 即 Same+Same 完全對齊)
+			assign twoDim[gv_row*NUM_COL + gv_col] = |twoDim[(gv_row +/- n)*NUM_COL +: NUM_COL];       (row 偏移 + All col OR)
+			assign twoDim[gv_row*NUM_COL + gv_col] = &twoDim[(gv_row +/- n)*NUM_COL +: NUM_COL];       (row 偏移 + All col AND)

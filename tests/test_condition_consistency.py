@@ -76,6 +76,9 @@ class _LeafTuple(CondVisitor):
     def any_group(self, groups):
         raise AssertionError("resolve_dep never returns a group join")
 
+    def take_ref(self, node):
+        raise AssertionError("resolve_dep never returns a take_ref in these configs")
+
 
 def _spec_leaf(dep, use, name_to_rail):
     """Documented semantics (F-DEP-07, timing-sim-behavior.mdc §2)."""

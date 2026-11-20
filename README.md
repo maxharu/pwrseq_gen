@@ -8,8 +8,9 @@
 
 - **節點編輯**：Input／Output 節點、Hi／Lo／Force 三段條件、群組內 AND／OR／XOR 運算、debounce 設定；
   **vector 節點**（一個 base 展開成 N 個 bit、每 bit 條件獨立）與 **parameter**（具名整數常數，vector 寬度可用公式引用）。
-  條件相依下拉在選取的相依為 vector 時**收合成一筆 base**（不逐 bit 展開），並提供消費模式：同索引（`base[i]`，對應目前 bit）、
-  全部（`&`，整組 AND）、任一（`|`，整組 OR）、指定 bit；按新增時於 GUI 層展開成具體 `base[i]` 相依（儲存格式不變）。
+  條件相依下拉在選取的相依為 vector 時**收合成一筆 base**（不逐 bit 展開）。**legacy 非維度向量**提供消費模式：
+  同索引（`base[i]`，對應目前 bit）、全部（`&`，整組 AND）、任一（`|`，整組 OR）、指定 bit；按新增時於 GUI 層展開成具體
+  `base[i]` 相依（儲存格式不變）。**維度向量**（有 `dim_params`）則改用相依列上的 **per-row 取法編輯器**（見下，§6）。
   條件分頁的 bit 以**複選框**呈現（Shift 連選）：勾選多個 bit 時為**即時共編**——編輯錨點 bit 會同步套用到其他勾選 bit，
   並自動替換同索引相依（`V[錨點]→V[目標]`，固定索引與 scalar 不動）。
 - **全域維度（dimensions）**：parameter 面板直接以「**維度個數 [0/1/2]**」下拉宣告維度——選了 N 就長出 N 列
@@ -18,9 +19,14 @@
   （取代舊 parametric）辨識 signal 的 2D bus 結構。
 - **Signal 維度宣告**：節點宣告頁以「**維度 [0/1/2]**」下拉＋「**Bits**」維度 parameter 下拉取代舊的自由公式寬度欄位：
   0 維＝純量、1 維＝`[P1-1:0]`、2 維＝flat bus `[P1*P2-1:0]`；Bits 下拉只列**已宣告的全域維度**（row=維度1、col=維度2），
-  所選維度存進 `dim_params` 供後續 take/slice 認得幾何；左側 Node 清單與卡片標記對 2 維訊號顯示 `[row×col]`（如 `[2×4]`）、
-  其餘顯示 `[×N]`。目前落地的是宣告骨架（維度→寬度、round-trip、Verilog 宣告、形狀標記）；
-  take 選項與 slice 條件（條件頁仍為逐 bit，尚無 slice）在後續階段實作，詳見 `PseqGeneratorNewFunction.txt` 與 `ROADMAP.md`。
+  所選維度存進 `dim_params` 供 take/slice 認得幾何；左側 Node 清單與卡片標記對 2 維訊號顯示 `[row×col]`（如 `[2×4]`）、
+  其餘顯示 `[×N]`。
+- **維度向量取法（§6）**：維度向量引用別的維度向量時，相依列上以「**取法**」下拉＋第二行 n/m 子選項授權合法 assign 形狀
+  （`PseqGeneratorNewFunction.txt` §6）。選項/預設/映射由單一規則模組 `core/take_rules.py` 依「輸出維度×被引用維度」決定：
+  1 維引用＝相對偏移／指定絕對／全部AND／全部OR；2 維引用＝row 偏移＋{指定 col／全 col OR／全 col AND}，輸出 2 維再加
+  row 偏移＋col 偏移（含完全對齊 `gv_row*C+gv_col`）。非法組合（§3.4 輸出缺 gv_col、§3.5 跨步 All-row）直接不顯示。
+  Verilog 以 generate-for 展開；C／sim／drawio／excel 的維度向量 take 仍為後續階段（Stage F）。slice 尚未實作，詳見
+  `PseqGeneratorNewFunction.txt` 與 `ROADMAP.md`。
 - **程式碼產生**：
   - Verilog（`verilog_generator.py`）
   - C（`c_generator.py`）

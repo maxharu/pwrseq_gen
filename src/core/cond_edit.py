@@ -59,6 +59,7 @@ class CondEditModel:
     groups: list[list[str]] = field(default_factory=lambda: [[]])
     inv: list[list[bool]] = field(default_factory=list)
     use: list[list[str]] = field(default_factory=list)
+    take: list[list[dict | None]] = field(default_factory=list)  # 維度 take（階段D），每項 dict|None
     group_inv: list[bool] = field(default_factory=list)
     group_intra_op: list[str] = field(default_factory=list)
 
@@ -82,12 +83,17 @@ class CondEditModel:
             [str(x) for x in _fit(self.use[gi] if gi < len(self.use) else [], len(g), "self")]
             for gi, g in enumerate(self.groups)
         ]
+        self.take = [
+            _fit(self.take[gi] if gi < len(self.take) else [], len(g), None)
+            for gi, g in enumerate(self.groups)
+        ]
 
     # ---- 結構操作 ----
     def add_group(self) -> None:
         self.groups.append([])
         self.inv.append([])
         self.use.append([])
+        self.take.append([])
         self.group_inv.append(False)
         self.group_intra_op.append("and")
 
@@ -95,25 +101,28 @@ class CondEditModel:
         """刪除整個 group；刪到一個不剩時重設為單一空 group。"""
         if not (0 <= gi < len(self.groups)):
             return False
-        for seq in (self.groups, self.inv, self.use, self.group_inv, self.group_intra_op):
+        for seq in (self.groups, self.inv, self.use, self.take,
+                    self.group_inv, self.group_intra_op):
             del seq[gi]
         if not self.groups:
-            self.groups, self.inv, self.use = [[]], [[]], [[]]
+            self.groups, self.inv, self.use, self.take = [[]], [[]], [[]], [[]]
             self.group_inv, self.group_intra_op = [False], ["and"]
         return True
 
-    def add_dep(self, gi: int, name: str, *, inv: bool = False, use: str = "self") -> bool:
+    def add_dep(self, gi: int, name: str, *, inv: bool = False, use: str = "self",
+                take: dict | None = None) -> bool:
         if not (0 <= gi < len(self.groups)):
             return False
         self.groups[gi].append(name)
         self.inv[gi].append(bool(inv) and not is_const_dep(name))
         self.use[gi].append(str(use))
+        self.take[gi].append(take)
         return True
 
     def remove_dep(self, gi: int, ii: int) -> bool:
         if not (0 <= gi < len(self.groups)) or not (0 <= ii < len(self.groups[gi])):
             return False
-        for seq in (self.groups[gi], self.inv[gi], self.use[gi]):
+        for seq in (self.groups[gi], self.inv[gi], self.use[gi], self.take[gi]):
             del seq[ii]
         return True
 
@@ -123,7 +132,7 @@ class CondEditModel:
         order = _move_order(len(self.groups[gi]), from_idx, to_idx)
         if order is None:
             return False
-        for seq in (self.groups[gi], self.inv[gi], self.use[gi]):
+        for seq in (self.groups[gi], self.inv[gi], self.use[gi], self.take[gi]):
             seq[:] = [seq[o] for o in order]
         return True
 
@@ -131,7 +140,8 @@ class CondEditModel:
         order = _move_order(len(self.groups), from_idx, to_idx)
         if order is None:
             return False
-        for seq in (self.groups, self.inv, self.use, self.group_inv, self.group_intra_op):
+        for seq in (self.groups, self.inv, self.use, self.take,
+                    self.group_inv, self.group_intra_op):
             seq[:] = [seq[o] for o in order]
         return True
 
@@ -147,6 +157,9 @@ class CondEditModel:
 
     def to_use_groups(self) -> list[list[str]]:
         return [list(self.use[gi]) for gi in self._filled()]
+
+    def to_take_groups(self) -> list[list[dict | None]]:
+        return [list(self.take[gi]) for gi in self._filled()]
 
     def to_group_inv(self) -> list[bool]:
         return [self.group_inv[gi] for gi in self._filled()]
@@ -183,6 +196,7 @@ class CondEditModel:
         use_flat=None,
         group_inv=None,
         group_intra_op=None,
+        take_groups=None,
     ) -> CondEditModel:
         """以 groups 版為主、以名稱為 key 的扁平版為備援，組出模型。
 
@@ -193,6 +207,7 @@ class CondEditModel:
         use_groups = use_groups or []
         inv_flat = inv_flat or {}
         use_flat = use_flat or {}
+        take_groups = take_groups or []
         return cls(
             groups=groups,
             inv=[
@@ -211,6 +226,14 @@ class CondEditModel:
                 ]
                 for gi, g in enumerate(groups)
             ],
+            take=[
+                [
+                    (take_groups[gi][ii]
+                     if gi < len(take_groups) and ii < len(take_groups[gi]) else None)
+                    for ii in range(len(g))
+                ]
+                for gi, g in enumerate(groups)
+            ],
             group_inv=list(group_inv or []),
             group_intra_op=list(group_intra_op or []),
         )
@@ -226,6 +249,7 @@ class CondEditModel:
             use_flat=getattr(rail, f"depends_on_{kind}_use", None),
             group_inv=getattr(rail, f"depends_on_{kind}_group_inv", None),
             group_intra_op=getattr(rail, f"depends_on_{kind}_intra_op", None),
+            take_groups=getattr(rail, f"depends_on_{kind}_take_groups", None),
         )
 
 

@@ -117,6 +117,9 @@ class _EdgeItems(CondVisitor):
     def any_group(self, groups: list[list[_EdgeItem]]) -> list[_EdgeItem]:
         return [item for terms in groups for item in terms]
 
+    def take_ref(self, node):
+        raise NotImplementedError("dim-vector take 尚未接線（階段F：時序圖）")
+
 
 def _condition_items(
     rail: PowerRail, kind: str, name_to_rail: dict[str, PowerRail]

@@ -248,6 +248,9 @@ class _DrawioCond(CondVisitor):
     def any_group(self, groups: list[_GroupPlan]) -> list[_GroupPlan]:
         return [g for g in groups if g.terms]
 
+    def take_ref(self, node):
+        raise NotImplementedError("dim-vector take 尚未接線（階段F：Draw.io）")
+
 
 class _CondSignalKeys(CondVisitor):
     """蒐集條件樹引用到的 (節點, hi|lo)，用來決定哪些 xxx_hi / xxx_lo 要拉線出來。"""
@@ -268,6 +271,9 @@ class _CondSignalKeys(CondVisitor):
         self, op: str, items: list[list[tuple[str, str]]], inv: bool
     ) -> list[tuple[str, str]]:
         return [key for item in items for key in item]
+
+    def take_ref(self, node):
+        raise NotImplementedError("dim-vector take 尚未接線（階段F：Draw.io）")
 
     def any_group(
         self, groups: list[list[tuple[str, str]]]

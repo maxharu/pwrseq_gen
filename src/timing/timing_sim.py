@@ -347,6 +347,9 @@ class _SimCond(CondVisitor):
     def any_group(self, groups: list[int]) -> int:
         return 1 if any(groups) else 0
 
+    def take_ref(self, node):
+        raise NotImplementedError("dim-vector take 尚未接線（階段F：模擬器）")
+
 
 def _finest_pulse_scale(pulses: list[str]) -> int:
     if not pulses:

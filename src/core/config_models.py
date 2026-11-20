@@ -123,6 +123,12 @@ class ConditionConfig:
     depends_on_force_groups: list[list[str]] = field(default_factory=list)
     depends_on_force_group_inv: list[bool] = field(default_factory=list)
     depends_on_force_intra_op: list[str] = field(default_factory=list)
+    # 維度 vector 的 take 取法（階段D）：與 use_groups 平行 per-group per-item；
+    # 每 item 為 {"row": {kind,index,op}, "col": {...}} 或 None（無 take）。幾何不入存，
+    # 由被引用 rail 的 dim_params 推。空則不序列化，舊檔 byte 不變。
+    depends_on_hi_take_groups: list[list[dict | None]] = field(default_factory=list)
+    depends_on_lo_take_groups: list[list[dict | None]] = field(default_factory=list)
+    depends_on_force_take_groups: list[list[dict | None]] = field(default_factory=list)
 
     def get_hi_groups(self) -> list[list[str]]:
         """取得 Hi 依賴分組，無 groups 時回傳單一 group"""
@@ -189,6 +195,22 @@ class ConditionConfig:
             except IndexError:
                 pass
         return self.depends_on_force_use.get(name, "self")
+
+    def _get_take(self, kind: str, group_idx: int, item_idx: int) -> dict | None:
+        groups = getattr(self, f"depends_on_{kind}_take_groups", [])
+        try:
+            return groups[group_idx][item_idx]
+        except IndexError:
+            return None
+
+    def get_hi_take(self, group_idx: int, item_idx: int) -> dict | None:
+        return self._get_take("hi", group_idx, item_idx)
+
+    def get_lo_take(self, group_idx: int, item_idx: int) -> dict | None:
+        return self._get_take("lo", group_idx, item_idx)
+
+    def get_force_take(self, group_idx: int, item_idx: int) -> dict | None:
+        return self._get_take("force", group_idx, item_idx)
 
     def get_hi_group_inv(self, group_idx: int) -> bool:
         try:
@@ -285,6 +307,9 @@ class PowerRail:
     depends_on_force_groups: InitVar = _UNSET
     depends_on_force_group_inv: InitVar = _UNSET
     depends_on_force_intra_op: InitVar = _UNSET
+    depends_on_hi_take_groups: InitVar = _UNSET
+    depends_on_lo_take_groups: InitVar = _UNSET
+    depends_on_force_take_groups: InitVar = _UNSET
     cond: ConditionConfig = field(default_factory=ConditionConfig)
     pulse_hi: str = DEFAULT_PULSE  # Hi 週期使用的 pulse（單一訊號）
     pulse_lo: str = DEFAULT_PULSE  # Lo 週期使用的 pulse
@@ -349,6 +374,9 @@ class PowerRail:
         depends_on_force_groups,
         depends_on_force_group_inv,
         depends_on_force_intra_op,
+        depends_on_hi_take_groups,
+        depends_on_lo_take_groups,
+        depends_on_force_take_groups,
     ) -> None:
         """把建構子收到的條件 kwargs 路由進 self.cond；未給（_UNSET）者保留 cond 預設。"""
         for name in _COND_FIELDS:
@@ -388,6 +416,15 @@ class PowerRail:
 
     def get_force_use(self, group_idx: int, item_idx: int, name: str) -> str:
         return self.cond.get_force_use(group_idx, item_idx, name)
+
+    def get_hi_take(self, group_idx: int, item_idx: int) -> dict | None:
+        return self.cond.get_hi_take(group_idx, item_idx)
+
+    def get_lo_take(self, group_idx: int, item_idx: int) -> dict | None:
+        return self.cond.get_lo_take(group_idx, item_idx)
+
+    def get_force_take(self, group_idx: int, item_idx: int) -> dict | None:
+        return self.cond.get_force_take(group_idx, item_idx)
 
     def get_hi_group_inv(self, group_idx: int) -> bool:
         return self.cond.get_hi_group_inv(group_idx)
@@ -647,6 +684,9 @@ def _cond_kind_to_dict(rail: PowerRail, kind: str) -> dict:
         out[f"depends_on_{kind}_inv_groups"] = inv_g
     if use_g:
         out[f"depends_on_{kind}_use_groups"] = use_g
+    take_g = getattr(rail, f"depends_on_{kind}_take_groups")
+    if any(any(item is not None for item in g) for g in take_g):
+        out[f"depends_on_{kind}_take_groups"] = take_g
     if any(g_inv):
         out[f"depends_on_{kind}_group_inv"] = g_inv
     if intra:
@@ -776,6 +816,9 @@ def _build_rail_from_dict(name: str, seq_type: str, r: dict) -> PowerRail:
         depends_on_lo_group_inv=r.get("depends_on_lo_group_inv") or [],
         depends_on_hi_intra_op=r.get("depends_on_hi_intra_op") or [],
         depends_on_lo_intra_op=r.get("depends_on_lo_intra_op") or [],
+        depends_on_hi_take_groups=r.get("depends_on_hi_take_groups") or [],
+        depends_on_lo_take_groups=r.get("depends_on_lo_take_groups") or [],
+        depends_on_force_take_groups=r.get("depends_on_force_take_groups") or [],
         depends_on_force=r.get("depends_on_force", []),
         depends_on_force_inv=r.get("depends_on_force_inv", {}),
         depends_on_force_use=r.get("depends_on_force_use", {}),

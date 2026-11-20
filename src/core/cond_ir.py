@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.constants import DEP_HIGH, DEP_LOW
+from core.take_expr import Take, take_from_dict
 
 CONDITION_KINDS = ("hi", "lo", "force")
 
@@ -55,6 +56,11 @@ class CondVisitor(ABC):
     @abstractmethod
     def any_group(self, groups: list[Any]) -> Any:
         """group 之間固定 OR。"""
+
+    @abstractmethod
+    def take_ref(self, node: "TakeRef") -> Any:
+        """維度 vector 的 take 引用葉：沿 genvar 以 row/col take 索引被引用 bus
+        （階段D）。葉節點，直接拿 node（含 base / use / ref_ndim / row / col / col_size）。"""
 
 
 class CondTree(ABC):
@@ -114,6 +120,24 @@ class AnyGroup(CondTree):
         return visitor.any_group([g.accept(visitor) for g in self.groups])
 
 
+@dataclass(frozen=True)
+class TakeRef(CondTree):
+    """維度 vector 的 take 引用（Level/Cond 的維度版）。
+
+    base：被引用 vector 的 base 名；use："level"（準位）或 "hi"/"lo"/"force"（條件線）。
+    ref_ndim 與 col_size 由被引用 rail 的 dim_params 推得，幾何不入存。row/col 為 Take。
+    葉節點，無子 CondTree，accept 直接把自己交給 visitor。"""
+    base: str
+    use: str
+    ref_ndim: int
+    row: Take | None = None
+    col: Take | None = None
+    col_size: str = ""
+
+    def accept(self, visitor: CondVisitor) -> Any:
+        return visitor.take_ref(self)
+
+
 def resolve_condition(rail, kind: str, name_to_rail: dict) -> CondTree:
     """rail 的 kind（hi / lo / force）條件樹。"""
     if kind not in _EMPTY_DEFAULT:
@@ -127,20 +151,23 @@ def resolve_condition(rail, kind: str, name_to_rail: dict) -> CondTree:
     get_use = getattr(rail, f"get_{kind}_use")
     get_group_inv = getattr(rail, f"get_{kind}_group_inv")
     get_intra_op = getattr(rail, f"get_{kind}_intra_op")
+    get_take = getattr(rail, f"get_{kind}_take")
 
     nodes: list[CondTree] = []
     for gi, group in enumerate(groups):
         items = tuple(
-            resolve_item(dep, get_inv(gi, ii, dep), get_use(gi, ii, dep), name_to_rail)
+            resolve_item(dep, get_inv(gi, ii, dep), get_use(gi, ii, dep), name_to_rail,
+                         get_take(gi, ii))
             for ii, dep in enumerate(group)
         )
         nodes.append(Group(get_intra_op(gi), items, get_group_inv(gi)))
     return AnyGroup(tuple(nodes))
 
 
-def resolve_item(dep: str, inv: bool, use: str, name_to_rail: dict) -> CondTree:
-    """單一依賴項（含 inv）。"""
-    leaf = resolve_dep(dep, use, name_to_rail)
+def resolve_item(dep: str, inv: bool, use: str, name_to_rail: dict,
+                 take: dict | None = None) -> CondTree:
+    """單一依賴項（含 inv）。take 非 None 且被引用 rail 有維度時 → TakeRef。"""
+    leaf = resolve_dep(dep, use, name_to_rail, take)
     if not inv:
         return leaf
     # 反相常數在這裡就摺掉：四個下游本來各自做這件事（Verilog `~1'b1` 不會出現），
@@ -150,14 +177,32 @@ def resolve_item(dep: str, inv: bool, use: str, name_to_rail: dict) -> CondTree:
     return Not(leaf)
 
 
-def resolve_dep(dep: str, use: str, name_to_rail: dict) -> CondTree:
+def resolve_dep(dep: str, use: str, name_to_rail: dict, take: dict | None = None) -> CondTree:
     """單一依賴項的葉節點（不含 inv）。"""
     if dep == DEP_HIGH:
         return Const(1)
     if dep == DEP_LOW:
         return Const(0)
     dep_rail = name_to_rail.get(dep)
+    if take and dep_rail is not None and getattr(dep_rail, "dim_params", None):
+        return _take_ref(dep_rail, use, take)
     # use=hi/lo/force 只對有 PSEQCELL 的 output 有意義；其餘一律退化為讀準位
     if dep_rail is not None and dep_rail.seq_type == "output" and use in CONDITION_KINDS:
         return Cond(dep, use)
     return Level(dep)
+
+
+def _take_ref(dep_rail, use: str, take: dict) -> "TakeRef":
+    """由被引用 rail 的 dim_params 推幾何，組成 TakeRef（幾何不入存）。"""
+    dims = list(dep_rail.dim_params)
+    ndim = len(dims)
+    resolved_use = (use if dep_rail.seq_type == "output" and use in CONDITION_KINDS
+                    else "level")
+    return TakeRef(
+        base=dep_rail.group_base,
+        use=resolved_use,
+        ref_ndim=ndim,
+        row=take_from_dict(take.get("row")),
+        col=take_from_dict(take.get("col")),
+        col_size=dims[1] if ndim == 2 else "",
+    )
