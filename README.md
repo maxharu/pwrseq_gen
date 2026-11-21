@@ -23,7 +23,7 @@
   其餘顯示 `[×N]`。
 - **維度向量取法（§6）**：維度向量引用別的維度向量時，相依列上以「**取法**」下拉＋第二行 n/m 子選項授權合法 assign 形狀
   （`PseqGeneratorNewFunction.txt` §6）。選項/預設/映射由單一規則模組 `core/take_rules.py` 依「輸出維度×被引用維度」決定：
-  1 維引用＝相對偏移／指定絕對／全部AND／全部OR；2 維引用＝row 偏移＋{指定 col／全 col OR／全 col AND}，輸出 2 維再加
+  1 維引用＝相對偏移／指定絕對／全部AND／全部OR（全部AND/OR 可帶 row 下界 n，即 `&oneDim[NUM_ROW-1 : n]`，`NUM_ROW > n >= 0`，n=0 為整條）；2 維引用＝row 偏移＋{指定 col／全 col OR／全 col AND}，輸出 2 維再加
   row 偏移＋col 偏移（含完全對齊 `gv_row*C+gv_col`）。非法組合（§3.4 輸出缺 gv_col、§3.5 跨步 All-row）直接不顯示。
   Verilog 以 generate-for 展開；C／sim／drawio／excel 的維度向量 take 仍為後續階段（Stage F）。slice 尚未實作，詳見
   `PseqGeneratorNewFunction.txt` 與 `ROADMAP.md`。

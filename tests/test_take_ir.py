@@ -122,6 +122,29 @@ class TestResolveTakeRef:
         assert item.row == Take("same", "", "and")
         assert item.col == Take("all", "", "or")
 
+    def test_row_size_from_first_dim(self):
+        sig2, n2r = _sig4_sig2(with_take=True)
+        item = resolve_condition(sig2, "hi", n2r).groups[0].items[0]
+        assert item.row_size == "NUM_CPU"
+
+    def test_row_lower_bound_passes_through(self):
+        # 1D All 歸約的下界 lo 必須經 IR 原樣帶到 TakeRef.row（不得在 IR 丟掉）
+        sig4 = PowerRail(
+            "SIG4[0]", "output", group_base="SIG4", bit_index=0,
+            width_expr="NUM_CPU", dim_params=["NUM_CPU"],
+        )
+        sig2 = PowerRail(
+            "SIG2[0]", "output", group_base="SIG2", bit_index=0,
+            width_expr="1", dim_params=[],
+            depends_on_hi=["SIG4[0]"],
+            depends_on_hi_groups=[["SIG4[0]"]],
+            depends_on_hi_use_groups=[["hi"]],
+            depends_on_hi_take_groups=[[{"row": {"kind": "all", "op": "or", "lo": 1}}]],
+        )
+        item = resolve_condition(sig2, "hi", {"SIG4[0]": sig4, "SIG2[0]": sig2}).groups[0].items[0]
+        assert isinstance(item, TakeRef)
+        assert item.row == Take("all", "", "or", 1)
+
     def test_dim_ref_without_take_stays_cond(self):
         sig2, n2r = _sig4_sig2(with_take=False)
         tree = resolve_condition(sig2, "hi", n2r)

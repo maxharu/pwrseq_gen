@@ -46,6 +46,31 @@ class TestOneDim:
     def test_custom_genvar_name(self):
         assert take_expr("aaa", 1, row=Take(SAME), gv_row="gv_cpu") == "aaa[gv_cpu]"
 
+    def test_all_or_with_lower_bound(self):
+        # 3.6 延伸：|oneDim[NUM_ROW-1 : n]，n 為 row 下界（NUM_ROW > n >= 0）
+        assert take_expr("aaa", 1, row=Take(ALL, op="or", lo=1),
+                         row_size="NUM_ROW") == "|aaa[NUM_ROW-1 : 1]"
+
+    def test_all_and_with_lower_bound(self):
+        assert take_expr("aaa", 1, row=Take(ALL, op="and", lo=2),
+                         row_size="NUM_ROW") == "&aaa[NUM_ROW-1 : 2]"
+
+    def test_lower_bound_zero_is_whole_bus(self):
+        # n=0 必須與舊輸出 byte 相同，黃金輸出不變的前提
+        assert take_expr("aaa", 1, row=Take(ALL, op="or", lo=0)) == "|aaa"
+
+    def test_lower_bound_without_row_size_rejected(self):
+        with pytest.raises(ValueError):
+            take_expr("aaa", 1, row=Take(ALL, op="or", lo=1))
+
+    def test_negative_lower_bound_rejected(self):
+        with pytest.raises(ValueError):
+            take_expr("aaa", 1, row=Take(ALL, op="or", lo=-1), row_size="NUM_ROW")
+
+    def test_lower_bound_on_non_all_rejected(self):
+        with pytest.raises(ValueError):
+            take_expr("aaa", 1, row=Take(SAME, lo=1), row_size="NUM_ROW")
+
     def test_col_on_one_dim_rejected(self):
         with pytest.raises(ValueError):
             take_expr("aaa", 1, row=Take(SAME), col=Take(SAME))
@@ -132,6 +157,12 @@ class TestTwoDimUnsupported:
     def test_missing_col_take_rejected(self):
         with pytest.raises(ValueError):
             take_expr("aaa", 2, row=Take(SAME), col_size=self.M)
+
+    def test_row_lower_bound_on_two_dim_rejected(self):
+        # 範圍只作用於 1D；2D 的 row 範圍是跨步歸約，不支援
+        with pytest.raises(ValueError):
+            take_expr("aaa", 2, row=Take(ALL, op="or", lo=1), col=Take(ALL, op="or"),
+                      col_size=self.M, row_size="NUM_ROW")
 
 
 class TestInvalidInputs:

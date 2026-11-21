@@ -194,7 +194,8 @@ class _VerilogCond(CondVisitor):
         base = internal_sig(node.base)
         bus = base if node.use == "level" else f"{base}_{node.use}"
         return take_expr(bus, node.ref_ndim, node.row, node.col,
-                         col_size=node.col_size, gv_row=GV_ROW, gv_col=GV_COL)
+                         col_size=node.col_size, row_size=node.row_size,
+                         gv_row=GV_ROW, gv_col=GV_COL)
 
 
 def _sep() -> str:

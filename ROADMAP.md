@@ -531,6 +531,14 @@ condition wire（`wire [k-1:0] base_hi, …`）、單一 `PSEQCELL`/`DEB` WIDTH=
   1 維 dep：相對偏移／指定絕對／全部AND／全部OR；2 維 dep：row 偏移 + {指定col／全col OR／全col AND}，
   輸出 2 維再加 row 偏移 + col 偏移（gv_col，n=m=0 即完全對齊）。scalar／legacy 非維度向量維持原狀。
   `tests/test_take_rules.py`、`tests/test_gui_take.py`、`tests/test_take_ir.py::TestVerilogSection6Forms`。
+- **1D All 歸約加下界（已完成）**：1D 被引用訊號的 All AND/OR 取法多一個數字欄 n，產出
+  `|oneDim[NUM_ROW-1 : n]`（`NUM_ROW > n >= 0`）。n=0 即整條 bus，輸出與舊版 byte 相同；
+  x15 的 `|oCPU_PRSNT[NUM_CPU-1:1]` 即 n=1 的形狀。實作：`Take` 新增 `lo`（只給 ALL 用，
+  序列化時 n=0 不寫入），`TakeRef` 新增 `row_size`（由 `dim_params[0]` 帶入），`take_rules`
+  的 ALL 形狀加 `("n", "下界")`，validator 檢查 `0 <= lo < 最大 NUM_ROW`（以 parameter 預設值為畫布，
+  實際 N 更小時的越界由使用者負責）。2D 的 row 範圍是跨步歸約（§3.5），明確不支援。
+  `tests/test_take_expr.py`、`tests/test_take_rules.py`、`tests/test_take_ir.py`、
+  `tests/test_validator.py::TestTakeLowerBound`、`tests/test_gui_take.py::TestAllRowLowerBoundCell`。
 - **後續**：§4.4 條件頁大改版（分組標籤／Slice／規則清單）；§3.5 跨步 All-row 歸約；
   §3.6.2 自由運算式逃生口；階段F 把 C／sim／drawio／excel 的 `take_ref` 佔位換成具體材質化（`take_cells`）；
   slice（符號述詞＋分組標籤＋else、row/col 軸）。

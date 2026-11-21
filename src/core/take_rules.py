@@ -36,8 +36,9 @@ class TakeForm:
 _FORMS = {
     REL_ROW: TakeForm(REL_ROW, "相對偏移", (("n", "偏移值"),)),
     ABS_ROW: TakeForm(ABS_ROW, "指定(絕對)", (("n", "索引"),)),
-    ALL_ROW_AND: TakeForm(ALL_ROW_AND, "全部AND", ()),
-    ALL_ROW_OR: TakeForm(ALL_ROW_OR, "全部OR", ()),
+    # 1D All 的 n 是 row 下界：|oneDim[NUM_ROW-1 : n]，n=0 即整條 bus
+    ALL_ROW_AND: TakeForm(ALL_ROW_AND, "全部AND", (("n", "下界"),)),
+    ALL_ROW_OR: TakeForm(ALL_ROW_OR, "全部OR", (("n", "下界"),)),
     ROWOFF_SPEC_COL: TakeForm(ROWOFF_SPEC_COL, "row偏移+指定col",
                               (("n", "row偏移值"), ("m", "欄索引"))),
     ROWOFF_ALLCOL_OR: TakeForm(ROWOFF_ALLCOL_OR, "row偏移+全col OR", (("n", "row偏移值"),)),
@@ -89,10 +90,11 @@ def form_to_take(form_id: str | None, n: int = 0, m: int = 0) -> dict | None:
         return {"row": {"kind": "specific", "index": _row_expr(n)}}
     if form_id == ABS_ROW:
         return {"row": {"kind": "specific", "index": str(n)}}
-    if form_id == ALL_ROW_AND:
-        return {"row": {"kind": "all", "op": "and"}}
-    if form_id == ALL_ROW_OR:
-        return {"row": {"kind": "all", "op": "or"}}
+    if form_id in (ALL_ROW_AND, ALL_ROW_OR):
+        row = {"kind": "all", "op": "and" if form_id == ALL_ROW_AND else "or"}
+        if n:
+            row["lo"] = n  # 只在非零時寫入，舊格式（無 lo）與 n=0 的輸出不變
+        return {"row": row}
     if form_id == ROWOFF_SPEC_COL:
         return {"row": {"kind": "specific", "index": _row_expr(n)},
                 "col": {"kind": "specific", "index": str(m)}}
@@ -126,7 +128,8 @@ def take_to_form(take: dict | None) -> tuple[str | None, int, int]:
     if col is None:
         # 1 維 dep
         if rkind == "all":
-            return (ALL_ROW_AND if row.get("op") == "and" else ALL_ROW_OR, 0, 0)
+            lo = int(row.get("lo", 0))
+            return (ALL_ROW_AND if row.get("op") == "and" else ALL_ROW_OR, lo, 0)
         idx = str(row.get("index", GV_ROW))
         if rkind == "same" or idx.startswith(GV_ROW):
             return (REL_ROW, _parse_offset(idx or GV_ROW, GV_ROW), 0)

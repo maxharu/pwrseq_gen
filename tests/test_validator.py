@@ -4,13 +4,35 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from core.config_models import PowerRail, PowerSeqConfig
+from core.config_models import Parameter, PowerRail, PowerSeqConfig
 from core.validator import (
     check_circular_dependency,
     check_duplicate_names,
     check_missing_deps,
+    check_take_lower_bounds,
     validate,
 )
+
+
+def _row_bound_config(lo, dims=("NUM_CPU",), max_value=4, row_kind="all", take_op="or"):
+    """SIG2 以 1D All 歸約引用 SIG4（dims 維度向量）的 hi 條件，row 下界為 lo。"""
+    sig4 = PowerRail(
+        "SIG4[0]", "output", group_base="SIG4", bit_index=0,
+        width_expr="NUM_CPU", dim_params=list(dims),
+    )
+    row = {"kind": row_kind, "op": take_op, "lo": lo}
+    sig2 = PowerRail(
+        "SIG2[0]", "output",
+        depends_on_hi=["SIG4[0]"],
+        depends_on_hi_groups=[["SIG4[0]"]],
+        depends_on_hi_use_groups=[["hi"]],
+        depends_on_hi_take_groups=[[{"row": row}]],
+    )
+    return PowerSeqConfig(
+        parameters=[Parameter("NUM_CPU", max_value)],
+        dimensions=["NUM_CPU"],
+        rails=[sig4, sig2],
+    )
 
 
 class TestCheckDuplicateNames:
@@ -125,3 +147,43 @@ class TestValidate:
         ok, errs = validate(cfg)
         assert ok is False
         assert any("empty" in e for e in errs)
+
+class TestTakeLowerBound:
+    """1D All 歸約的 row 下界 lo：|oneDim[NUM_ROW-1 : lo]，需 0 <= lo < 最大 NUM_ROW。"""
+
+    def test_valid_lower_bound_passes(self):
+        assert check_take_lower_bounds(_row_bound_config(lo=1)) == []
+
+    def test_zero_lower_bound_passes(self):
+        assert check_take_lower_bounds(_row_bound_config(lo=0)) == []
+
+    def test_lower_bound_at_max_rejected(self):
+        # NUM_ROW > lo：lo == 最大值時範圍為空，不允許
+        errs = check_take_lower_bounds(_row_bound_config(lo=4, max_value=4))
+        assert len(errs) == 1 and "SIG2[0]" in errs[0]
+
+    def test_negative_lower_bound_rejected(self):
+        errs = check_take_lower_bounds(_row_bound_config(lo=-1))
+        assert len(errs) == 1
+
+    def test_non_integer_lower_bound_rejected(self):
+        errs = check_take_lower_bounds(_row_bound_config(lo="1"))
+        assert len(errs) == 1
+
+    def test_validate_surfaces_lower_bound_error(self):
+        ok, errors = validate(_row_bound_config(lo=9, max_value=4))
+        assert not ok
+        assert any("SIG2[0]" in e for e in errors)
+
+    def test_non_all_kind_with_lower_bound_rejected(self):
+        errs = check_take_lower_bounds(_row_bound_config(lo=1, row_kind="specific"))
+        assert len(errs) == 1
+
+    def test_two_dim_source_rejected(self):
+        # 2D row 範圍是跨步歸約（3.5），不允許
+        cfg = _row_bound_config(lo=1, dims=("NUM_CPU", "NUM_CPU"))
+        cfg.parameters.append(Parameter("NUM_CPU_MEM", 8))
+        cfg.dimensions = ["NUM_CPU", "NUM_CPU_MEM"]
+        cfg.rails[0].dim_params = ["NUM_CPU", "NUM_CPU_MEM"]
+        errs = check_take_lower_bounds(cfg)
+        assert len(errs) == 1

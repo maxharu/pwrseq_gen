@@ -51,6 +51,18 @@ class TestTakeForms:
                 assert "all_row" not in f.id
 
 
+class TestAllRowLowerBound:
+    def test_all_forms_expose_lower_bound_field(self):
+        # 1D All 歸約的 n 是 row 下界（|oneDim[NUM_ROW-1 : n]），UI 要有數字欄
+        forms = {f.id: f for f in take_forms(1, 1)}
+        assert forms[ALL_ROW_AND].needs == (("n", "下界"),)
+        assert forms[ALL_ROW_OR].needs == (("n", "下界"),)
+
+    def test_all_forms_default_zero(self):
+        assert default_form(1, 1) == (REL_ROW, 0, 0)
+        assert form_to_take(ALL_ROW_OR)["row"] == {"kind": "all", "op": "or"}
+
+
 class TestDefault:
     def test_dep1_default_aligned_row(self):
         assert default_form(1, 1) == (REL_ROW, 0, 0)
@@ -67,7 +79,7 @@ class TestDefault:
 class TestRoundTrip:
     def test_1d_forms(self):
         for form, n in [(REL_ROW, 0), (REL_ROW, -1), (REL_ROW, 2), (ABS_ROW, 3),
-                        (ALL_ROW_AND, 0), (ALL_ROW_OR, 0)]:
+                        (ALL_ROW_AND, 0), (ALL_ROW_OR, 0), (ALL_ROW_AND, 1), (ALL_ROW_OR, 2)]:
             take = form_to_take(form, n, 0)
             assert take_to_form(take) == (form, n, 0)
 
@@ -86,12 +98,12 @@ class TestRoundTrip:
 class TestTakeExprIntegration:
     """form_to_take → take_from_dict → take_expr 要產出 §6 的片段。"""
 
-    def _expr(self, form, n, m, ref_ndim, bus="bus", col_size="C"):
+    def _expr(self, form, n, m, ref_ndim, bus="bus", col_size="C", row_size="R"):
         t = form_to_take(form, n, m)
         return take_expr(bus, ref_ndim,
                          take_from_dict(t.get("row")),
                          take_from_dict(t.get("col")) if "col" in t else None,
-                         col_size=col_size)
+                         col_size=col_size, row_size=row_size)
 
     def test_1d(self):
         assert self._expr(REL_ROW, 0, 0, 1) == "bus[gv_row]"
@@ -99,6 +111,11 @@ class TestTakeExprIntegration:
         assert self._expr(ABS_ROW, 3, 0, 1) == "bus[3]"
         assert self._expr(ALL_ROW_AND, 0, 0, 1) == "&bus"
         assert self._expr(ALL_ROW_OR, 0, 0, 1) == "|bus"
+
+    def test_1d_all_with_lower_bound(self):
+        # §6 延伸：|oneDim[NUM_ROW-1 : n]；CPU_PRSNT 的 |oCPU_PRSNT[NUM_CPU-1:1] 即 n=1
+        assert self._expr(ALL_ROW_OR, 1, 0, 1, bus="prsnt", row_size="NUM_CPU") == "|prsnt[NUM_CPU-1 : 1]"
+        assert self._expr(ALL_ROW_AND, 2, 0, 1, bus="x", row_size="NUM_ROW") == "&x[NUM_ROW-1 : 2]"
 
     def test_2d(self):
         assert self._expr(ROWOFF_SPEC_COL, 0, 0, 2) == "bus[gv_row*C + 0]"

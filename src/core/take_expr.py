@@ -18,17 +18,23 @@ _REDUCE = {"and": "&", "or": "|"}
 
 @dataclass(frozen=True)
 class Take:
-    """單一軸的取法：Same / Specific(index 算式) / All(op=and|or)。"""
+    """單一軸的取法：Same / Specific(index 算式) / All(op=and|or, lo 下界)。
+
+    lo 只給 ALL 用：All 歸約的範圍為 [NUM_ROW-1 : lo]，NUM_ROW > lo >= 0。
+    lo=0 即整條 bus（與不帶下界的舊輸出相同）。
+    """
     kind: str
     index: str = ""   # SPECIFIC 用：索引算式，如 "0"、"gv_row-1"
     op: str = "and"   # ALL 用：and | or
+    lo: int = 0       # ALL 用：row 下界（整數常數）
 
 
 def take_from_dict(d: dict | None) -> Take | None:
-    """把序列化的 take dict（{kind,index,op}）還原成 Take；None/空 → None。"""
+    """把序列化的 take dict（{kind,index,op,lo}）還原成 Take；None/空 → None。"""
     if not d:
         return None
-    return Take(kind=d.get("kind", SAME), index=d.get("index", ""), op=d.get("op", "and"))
+    return Take(kind=d.get("kind", SAME), index=d.get("index", ""), op=d.get("op", "and"),
+                lo=int(d.get("lo", 0)))
 
 
 def _check_kind(t: Take) -> None:
@@ -36,6 +42,10 @@ def _check_kind(t: Take) -> None:
         raise ValueError(f"未知的 take 種類: {t.kind!r}")
     if t.kind == ALL and t.op not in _REDUCE:
         raise ValueError(f"All take 的 op 需為 and|or: {t.op!r}")
+    if t.lo < 0:
+        raise ValueError(f"row 下界 lo 需 >= 0: {t.lo}")
+    if t.lo and t.kind != ALL:
+        raise ValueError("只有 All 取法可帶下界 lo")
 
 
 def _maybe_paren(term: str) -> str:
@@ -47,17 +57,24 @@ def _row_base(row: Take, gv_row: str) -> str:
     return gv_row if row.kind == SAME else _maybe_paren(row.index)
 
 
-def _one_dim(bus: str, row: Take, gv_row: str) -> str:
+def _one_dim(bus: str, row: Take, gv_row: str, row_size: str) -> str:
     if row.kind == SAME:
         return f"{bus}[{gv_row}]"
     if row.kind == SPECIFIC:
         return f"{bus}[{row.index}]"
-    return f"{_REDUCE[row.op]}{bus}"  # ALL
+    if row.lo == 0:
+        return f"{_REDUCE[row.op]}{bus}"  # ALL 整條
+    if not row_size:
+        raise ValueError("帶下界的 All 歸約需提供 row_size（row 維度大小符號）")
+    return f"{_REDUCE[row.op]}{bus}[{row_size}-1 : {row.lo}]"  # ALL 範圍
 
 
 def _two_dim(bus: str, row: Take, col: Take, col_size: str, gv_row: str, gv_col: str) -> str:
     if not col_size:
         raise ValueError("2 維引用需提供 col_size（col 維度大小符號）")
+    if row.lo:
+        # 範圍下界只作用於 1D；2D 的 row 範圍是跨步歸約（3.5），不支援
+        raise ValueError("2 維引用的 row 不支援範圍下界 lo")
 
     row_all = row.kind == ALL
     col_all = col.kind == ALL
@@ -86,6 +103,7 @@ def take_expr(
     col: Take | None = None,
     *,
     col_size: str = "",
+    row_size: str = "",
     gv_row: str = "gv_row",
     gv_col: str = "gv_col",
 ) -> str:
@@ -94,6 +112,7 @@ def take_expr(
     ref_ndim：被引用訊號維度（0/1/2）。
     row/col：各軸 take；0 維皆不給、1 維只給 row、2 維兩者都給。
     col_size：2 維 col 維度大小符號（如 "NUM_CPU_MEM"）。
+    row_size：1 維 row 維度大小符號（如 "NUM_CPU"），只在 All 帶下界 lo 時需要。
     """
     if ref_ndim == 0:
         if row is not None or col is not None:
@@ -106,7 +125,7 @@ def take_expr(
         if col is not None:
             raise ValueError("1 維訊號只有 row 軸，不可給 col take")
         _check_kind(row)
-        return _one_dim(bus, row, gv_row)
+        return _one_dim(bus, row, gv_row, row_size)
 
     if ref_ndim == 2:
         if row is None or col is None:

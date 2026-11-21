@@ -15,6 +15,8 @@ pytest.importorskip("customtkinter")
 
 from core.config_models import PowerRail
 from core.take_rules import (
+    ALL_ROW_AND,
+    ALL_ROW_OR,
     REL_ROW,
     ROWOFF_ALLCOL_AND,
     ROWOFF_COLOFF,
@@ -152,3 +154,39 @@ class TestScalarNoTakeCell:
             assert (0, 1) not in sec.take_cells
         finally:
             ed.destroy()
+
+
+class TestAllRowLowerBoundCell:
+    """1D All 歸約的 n 欄即 row 下界 lo：|oneDim[NUM_ROW-1 : n]。"""
+
+    def test_all_form_shows_lower_bound_entry(self, ctk_root):
+        ed, sec, cell = _sec_add(ctk_root, _sig2_1d(), _sig2_1d(), "SIG2")
+        try:
+            label = next(f.label for f in take_forms(1, 1) if f.id == ALL_ROW_OR)
+            cell["form_var"].set(label)
+            # 全部OR 只需下界 n → 子列有 1 個 (label + entry)
+            assert len(cell["sub"].winfo_children()) == 2
+        finally:
+            ed.destroy()
+
+    def test_lower_bound_writes_model_take(self, ctk_root):
+        ed, sec, cell = _sec_add(ctk_root, _sig2_1d(), _sig2_1d(), "SIG2")
+        try:
+            label = next(f.label for f in take_forms(1, 1) if f.id == ALL_ROW_OR)
+            cell["form_var"].set(label)
+            cell["n_var"].set("1")
+            assert sec.model.take[0][0] == {"row": {"kind": "all", "op": "or", "lo": 1}}
+        finally:
+            ed.destroy()
+
+    def test_lower_bound_carried_by_get_rails(self, ctk_root):
+        ed, sec, cell = _sec_add(ctk_root, _sig2_1d(), _sig2_1d(), "SIG2")
+        try:
+            label = next(f.label for f in take_forms(1, 1) if f.id == ALL_ROW_AND)
+            cell["form_var"].set(label)
+            cell["n_var"].set("2")
+            rails = ed.get_rails()
+            assert rails[0].depends_on_hi_take_groups == [[form_to_take(ALL_ROW_AND, 2, 0)]]
+        finally:
+            ed.destroy()
+

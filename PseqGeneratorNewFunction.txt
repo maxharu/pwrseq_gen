@@ -237,6 +237,9 @@ pwrseq_gen 新功能設計: 以「維度 + slice」取代 parametric
 			assign oneDim[gv_row] = oneDim[gv_row +/- n];                         (相對偏移, 見 3.6)
 			assign oneDim[gv_row] = |oneDim;                                      (All row OR)
 			assign oneDim[gv_row] = &oneDim;                                      (All row AND)
+			# 下界範圍（3.6 延伸，NUM_ROW > n >= 0；n=0 即上面的整條）
+			assign oneDim[gv_row] = |oneDim[NUM_ROW-1 : n];                             (All row OR, 下界 n)
+			assign oneDim[gv_row] = &oneDim[NUM_ROW-1 : n];                             (All row AND, 下界 n)
 		引用 2 維(col 已收斂):
 			assign oneDim[gv_row] = twoDim[(gv_row +/- n)*NUM_COL +/- m];         (row 偏移 + Specific col m)
 			assign oneDim[gv_row] = |twoDim[(gv_row +/- n)*NUM_COL +: NUM_COL];   (row 偏移 + All col OR)

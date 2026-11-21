@@ -125,13 +125,14 @@ class TakeRef(CondTree):
     """維度 vector 的 take 引用（Level/Cond 的維度版）。
 
     base：被引用 vector 的 base 名；use："level"（準位）或 "hi"/"lo"/"force"（條件線）。
-    ref_ndim 與 col_size 由被引用 rail 的 dim_params 推得，幾何不入存。row/col 為 Take。
+    ref_ndim 與 row_size / col_size 由被引用 rail 的 dim_params 推得，幾何不入存。row/col 為 Take。
     葉節點，無子 CondTree，accept 直接把自己交給 visitor。"""
     base: str
     use: str
     ref_ndim: int
     row: Take | None = None
     col: Take | None = None
+    row_size: str = ""
     col_size: str = ""
 
     def accept(self, visitor: CondVisitor) -> Any:
@@ -204,5 +205,6 @@ def _take_ref(dep_rail, use: str, take: dict) -> "TakeRef":
         ref_ndim=ndim,
         row=take_from_dict(take.get("row")),
         col=take_from_dict(take.get("col")),
+        row_size=dims[0] if ndim >= 1 else "",
         col_size=dims[1] if ndim == 2 else "",
     )
