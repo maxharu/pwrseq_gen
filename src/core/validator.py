@@ -147,6 +147,33 @@ def check_take_lower_bounds(config: PowerSeqConfig) -> list[str]:
     return errors
 
 
+def check_slice_reachability(config: PowerSeqConfig) -> list[str]:
+    """Slice 群組的 row 述詞在代表值（parameter 預設=最大值）下是否可達 → 警告清單（不報錯）。
+
+    §4.1(5)：絕對 row k 在實例 N <= k 時不可達（符號上仍合法），只警告。row 軸最大值取自
+    該 rail 第一維 dim_params[0] 對應 parameter 的 value。刻意不併入 validate() 的錯誤，
+    以免擋下匯出（符號 RTL 對任何 N 仍成立）。"""
+    warnings: list[str] = []
+    param_values = {p.name: p.value for p in getattr(config, "parameters", None) or []}
+    for rail in config.rails:
+        slices = getattr(rail, "slices", None) or []
+        if not slices:
+            continue
+        dims = list(getattr(rail, "dim_params", None) or [])
+        max_n = param_values.get(dims[0]) if dims else None
+        if not isinstance(max_n, int):
+            continue
+        name = rail.group_base or rail.name
+        for sg in slices:
+            for k in sg.rows:
+                if k >= max_n:
+                    warnings.append(
+                        f"'{name}' slice row {k} is unreachable at representative size "
+                        f"{dims[0]}={max_n}"
+                    )
+    return warnings
+
+
 def check_missing_deps(config: PowerSeqConfig) -> list[tuple[str, str]]:
     """檢查 depends_on_hi / depends_on_lo 中的名稱是否存在（排除 __HIGH__/__LOW__ 常數）"""
     valid_names = {r.name for r in config.rails}

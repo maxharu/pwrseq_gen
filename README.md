@@ -25,8 +25,12 @@
   （`PseqGeneratorNewFunction.txt` §6）。選項/預設/映射由單一規則模組 `core/take_rules.py` 依「輸出維度×被引用維度」決定：
   1 維引用＝相對偏移／指定絕對／全部AND／全部OR（全部AND/OR 可帶 row 下界 n，即 `&oneDim[NUM_ROW-1 : n]`，`NUM_ROW > n >= 0`，n=0 為整條）；2 維引用＝row 偏移＋{指定 col／全 col OR／全 col AND}，輸出 2 維再加
   row 偏移＋col 偏移（含完全對齊 `gv_row*C+gv_col`）。非法組合（§3.4 輸出缺 gv_col、§3.5 跨步 All-row）直接不顯示。
-  Verilog 以 generate-for 展開；C／sim／drawio／excel 的維度向量 take 仍為後續階段（Stage F）。slice 尚未實作，詳見
-  `PseqGeneratorNewFunction.txt` 與 `ROADMAP.md`。
+  Verilog 以 generate-for 展開；C／sim／drawio／excel 的維度向量 take 仍為後續階段（Stage F）。
+- **Slice 切片（V1，row 軸）**：維度輸出的條件頁可把 row 分成多組，每組一份條件（§4）。GUI 以 per-row 群組下拉＋
+  群組選擇器切換編輯器（取代逐 bit 勾選），群組選項＝現有群組＋else＋「新增…」，空群組自動移除、else 恆最後唯一。
+  底層 `ConditionConfig.slices`（扁平 `depends_on_*` 即 else，非空才序列化、舊檔 byte 不變）；Verilog 展成 generate-for
+  內 `if/else if/else`（述詞 `gv_row==k`），其餘後端遇 slice 報 `NotImplementedError`；不可達 row 出警告不阻擋匯出。
+  col／兩者軸尚未實作，詳見 `PseqGeneratorNewFunction.txt` §4.4 與 `ROADMAP.md`。
 - **程式碼產生**：
   - Verilog（`verilog_generator.py`）
   - C（`c_generator.py`）

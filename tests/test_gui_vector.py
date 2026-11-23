@@ -77,8 +77,8 @@ class TestRailEditorNode:
         finally:
             ed.destroy()
 
-    def test_condition_tab_syncs_bit_selector_after_width_change(self, ctk_root):
-        """切到條件分頁時 Bit 複選框須反映目前維度寬度（即使維度改後未呼叫 count 變更 handler）。"""
+    def test_condition_tab_syncs_slice_selector_after_width_change(self, ctk_root):
+        """切到條件分頁時維度 output 走 slice 面板（取代 per-bit），Row 分組須反映目前維度寬度。"""
         from gui.widgets import COND_TAB, RailEditorFrame
 
         ed = RailEditorFrame(ctk_root, _scalar_output(),
@@ -88,8 +88,9 @@ class TestRailEditorNode:
         try:
             ed.var_dim_count.set("1")   # 改成 1 維（NUM_CPU=2），但刻意不呼叫 _on_dim_count_changed
             ed._render_dim_bits()        # 只重建 Bits 下拉，不做 _sync_bit_selector
-            ed._on_mode_seg(COND_TAB)    # 點「條件」→ _sync_bit_selector 追上 → 2 個 bit 複選框
-            assert len(ed._bit_link_vars) == 2
+            ed._on_mode_seg(COND_TAB)    # 點「條件」→ _sync_slice_selector 追上 → 2 個 row 分組
+            assert ed._slice_active is True
+            assert len(ed._row_group) == 2
         finally:
             ed.destroy()
 

@@ -129,6 +129,9 @@ class ConditionConfig:
     depends_on_hi_take_groups: list[list[dict | None]] = field(default_factory=list)
     depends_on_lo_take_groups: list[list[dict | None]] = field(default_factory=list)
     depends_on_force_take_groups: list[list[dict | None]] = field(default_factory=list)
+    # Slice（§4，row 軸 V1）：非 else 群組的有序清單；扁平 depends_on_* 本身就是 else。
+    # 空 → 不切片，序列化不輸出 slices 鍵（舊檔 byte 不變）。每組見 SliceGroup。
+    slices: list["SliceGroup"] = field(default_factory=list)
 
     def get_hi_groups(self) -> list[list[str]]:
         """取得 Hi 依賴分組，無 groups 時回傳單一 group"""
@@ -265,6 +268,18 @@ class ConditionConfig:
         return [d for g in groups for d in g]
 
 
+@dataclass
+class SliceGroup:
+    """單一非 else 切片群組（V1 row 軸）。
+
+    rows：被指派到本組的具體 row 索引（GUI 以最大值畫布枚舉 0..max-1；§4.4 分組標籤）。
+    cond：本組自己的一整份 Hi/Lo/Force 條件，與扁平 else 同構（直接重用 ConditionConfig，
+          故 resolve_condition / CondEditModel.from_rail 可原封套用在 cond 上）。
+    """
+    rows: list[int] = field(default_factory=list)
+    cond: ConditionConfig = field(default_factory=ConditionConfig)
+
+
 # ConditionConfig 的欄位名（委派用）；委派迴圈與退化測試都以此為準。
 _COND_FIELDS: tuple[str, ...] = tuple(f.name for f in fields(ConditionConfig))
 
@@ -310,6 +325,7 @@ class PowerRail:
     depends_on_hi_take_groups: InitVar = _UNSET
     depends_on_lo_take_groups: InitVar = _UNSET
     depends_on_force_take_groups: InitVar = _UNSET
+    slices: InitVar = _UNSET
     cond: ConditionConfig = field(default_factory=ConditionConfig)
     pulse_hi: str = DEFAULT_PULSE  # Hi 週期使用的 pulse（單一訊號）
     pulse_lo: str = DEFAULT_PULSE  # Lo 週期使用的 pulse
@@ -377,6 +393,7 @@ class PowerRail:
         depends_on_hi_take_groups,
         depends_on_lo_take_groups,
         depends_on_force_take_groups,
+        slices,
     ) -> None:
         """把建構子收到的條件 kwargs 路由進 self.cond；未給（_UNSET）者保留 cond 預設。"""
         for name in _COND_FIELDS:
@@ -723,6 +740,14 @@ def _rail_physical_dict(rail: PowerRail) -> dict:
     }
 
 
+def _slice_group_to_dict(sg: "SliceGroup") -> dict:
+    """單一非 else 切片群組 → dict：rows + 本組三 kind 條件（重用 _cond_kind_to_dict）。"""
+    d: dict = {"rows": list(sg.rows)}
+    for kind in ("hi", "lo", "force"):
+        d.update(_cond_kind_to_dict(sg.cond, kind))
+    return d
+
+
 def _rail_cond_dict(rail: PowerRail) -> dict:
     """節點的逐 bit 條件欄位；vector 收合時每 bit 各存一份。"""
     if rail.seq_type == "input":
@@ -730,6 +755,9 @@ def _rail_cond_dict(rail: PowerRail) -> dict:
     d: dict = {}
     for kind in ("hi", "lo", "force"):
         d.update(_cond_kind_to_dict(rail, kind))
+    # slices 只在非空時輸出（§4 相容性：不切片 byte 不變）；扁平欄位即 else 組。
+    if rail.cond.slices:
+        d["slices"] = [_slice_group_to_dict(sg) for sg in rail.cond.slices]
     return d
 
 
@@ -787,6 +815,27 @@ def _normalize_seq_type(st) -> str:
     if st_lower in ("external", "input"):
         return "input"
     return "output"  # power_rail / signal / output / 未知
+
+
+def _cond_from_dict(g: dict) -> ConditionConfig:
+    """由 dict 的 groups 系欄位建一份 ConditionConfig（供 slice 群組用；一律 groups-based）。"""
+    kw: dict = {}
+    for kind in ("hi", "lo", "force"):
+        for suffix in ("groups", "inv_groups", "use_groups", "group_inv", "intra_op", "take_groups"):
+            kw[f"depends_on_{kind}_{suffix}"] = g.get(f"depends_on_{kind}_{suffix}") or []
+    return ConditionConfig(**kw)
+
+
+def _slices_from_dict(raw) -> list[SliceGroup]:
+    """slices 原始清單 → list[SliceGroup]；非 dict 項與非整數 row 略過。"""
+    out: list[SliceGroup] = []
+    for g in raw or []:
+        if not isinstance(g, dict):
+            continue
+        rows = [int(x) for x in (g.get("rows") or [])
+                if isinstance(x, int) and not isinstance(x, bool)]
+        out.append(SliceGroup(rows=rows, cond=_cond_from_dict(g)))
+    return out
 
 
 def _build_rail_from_dict(name: str, seq_type: str, r: dict) -> PowerRail:
@@ -857,6 +906,9 @@ def _build_rail_from_dict(name: str, seq_type: str, r: dict) -> PowerRail:
         lo_intra_op=r.get("lo_intra_op") or [],
     )
     _normalize_rail_after_load(rail)
+    slices = _slices_from_dict(r.get("slices"))
+    if slices:
+        rail.cond.slices = slices
     return rail
 
 

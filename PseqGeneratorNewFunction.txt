@@ -167,6 +167,10 @@ pwrseq_gen 新功能設計: 以「維度 + slice」取代 parametric
 	           group else  : assign xxx[gv_row] = aaa[gv_row-1];
 
 	4.4 slice 的 UI: 分組標籤 + 規則清單 + 選擇器切換編輯器
+	    [實作狀態] V1 已完成 row 軸(1D 與 2D 的 row 軸): per-row 群組下拉 + 群組選擇器切換編輯器,
+	    群組選項 = 現有群組 + else + 「新增...」, 空群組自動移除、else 恆最後唯一; 僅 Verilog 後端支援,
+	    其餘後端遇 slice 報 NotImplementedError; 不可達 row(k >= 最大 NUM_ROW)出警告不阻擋.
+	    col 軸 / 兩者軸、以及大維度的區段選擇器(前 k 個/指定 k/其餘)尚未實作.
 	    (取代「勾選 row -> 按 Slice -> 就地切段、每段內嵌編輯器」的舊做法; 舊做法頁面過長、
 	     換組麻煩、符號維度時 checkbox 笨重、「其餘」易被誤解為剩格.)
 	    1) 分組標籤取代「勾選->Slice->鎖定」:
@@ -249,8 +253,8 @@ pwrseq_gen 新功能設計: 以「維度 + slice」取代 parametric
 		引用 1 維(沿 col 廣播, 見 2.3):
 			assign twoDim[gv_row*NUM_COL + gv_col] = oneDim[n];                              (Specific row)
 			assign twoDim[gv_row*NUM_COL + gv_col] = oneDim[gv_row +/- n];                   (相對偏移, 見 3.6)
-			assign twoDim[gv_row*NUM_COL + gv_col] = |oneDim;                                (All row OR)
-			assign twoDim[gv_row*NUM_COL + gv_col] = &oneDim;                                (All row AND)
+			assign twoDim[gv_row*NUM_COL + gv_col] = |oneDim[NUM_ROW-1 : n];                 (All row OR, 下界 n)
+			assign twoDim[gv_row*NUM_COL + gv_col] = &oneDim[NUM_ROW-1 : n];                 (All row AND, 下界 n)
 		引用 2 維:
 			assign twoDim[gv_row*NUM_COL + gv_col] = twoDim[(gv_row +/- n)*NUM_COL +/- m];             (row 偏移 + Specific col m)
 			assign twoDim[gv_row*NUM_COL + gv_col] = twoDim[(gv_row +/- n)*NUM_COL + gv_col +/- m];    (row 偏移 + col 偏移; n=m=0 即 Same+Same 完全對齊)

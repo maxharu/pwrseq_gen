@@ -16,6 +16,7 @@ from core.config_models import (
     DEFAULT_PULSE,
     ConditionConfig,
     PowerRail,
+    SliceGroup,
     apply_input_wave_dict,
     eval_width,
     rail_input_wave_spec,
@@ -1078,6 +1079,14 @@ class RailEditorFrame(ctk.CTkFrame):
         self._bit_rails: list[PowerRail] = [copy.deepcopy(r) for r in rails]
         self._active_bit = 0
         self._cond_editor: Optional[dict] = None  # {"kind": "output"|"input", ...}
+        # Slice（§4，V1 row 軸）：維度 output 向量的條件頁用群組選擇器取代 per-bit。
+        # _row_group[r] = 群組 id（0=else）；_slice_rails[gid] 持該組條件；扁平=else。
+        self._slice_active = False
+        self._row_group: list[int] = []
+        self._slice_rails: dict[int, PowerRail] = {}
+        self._active_group = 0
+        self._next_gid = 1
+        self._row_menus: list = []
         self._vec_dep = _VecDepHelper(
             self._dep_vector_width, self._owner_is_vector, self._expand_dep,
             self._owner_ndim, self._dep_ndim)
@@ -1433,6 +1442,23 @@ class RailEditorFrame(ctk.CTkFrame):
         self._bit_checkboxes: list[ctk.CTkCheckBox] = []
         self._anchor_idx: Optional[int] = None
         self._suspend_broadcast = False
+        # Slice 面板（維度 output 向量時取代 Bit 選擇器）：左 Row 分組、右 群組選擇器。
+        self._slice_row = ctk.CTkFrame(parent, fg_color="transparent")
+        ctk.CTkLabel(self._slice_row, text="切片軸: row（V1）",
+                     font=FONT_HINT, text_color="gray").pack(anchor="w", padx=S_SM)
+        _body = ctk.CTkFrame(self._slice_row, fg_color="transparent")
+        _body.pack(fill="x")
+        _left = ctk.CTkFrame(_body, fg_color="transparent")
+        _left.pack(side="left", anchor="n")
+        ctk.CTkLabel(_left, text="Row 分組", font=FONT_BODY).pack(anchor="w")
+        self._row_assign_box = ctk.CTkFrame(_left, fg_color="transparent")
+        self._row_assign_box.pack(anchor="w")
+        _right = ctk.CTkFrame(_body, fg_color="transparent")
+        _right.pack(side="left", anchor="n", padx=(S_MD, 0))
+        ctk.CTkLabel(_right, text="群組", font=FONT_BODY).pack(side="left", padx=(0, S_SM))
+        self._group_sel = ctk.CTkOptionMenu(_right, values=["else"], width=90,
+                                            command=self._on_group_sel)
+        self._group_sel.pack(side="left")
         self._cond_host = ctk.CTkFrame(parent, fg_color="transparent")
         self._cond_host.pack(fill="x")
         self._sync_bit_selector()
@@ -1509,26 +1535,30 @@ class RailEditorFrame(ctk.CTkFrame):
                 frame.pack(fill="x", padx=S_SM, pady=S_SM)
                 self._cond_editor = {"kind": "input", "wave": frame}
             else:
-                tabs = ctk.CTkTabview(self._cond_host, height=220)
-                tabs.pack(fill="x", padx=S_SM, pady=S_SM)
-                sections: dict[str, CondSectionFrame] = {}
-                for kind in ("hi", "lo", "force"):
-                    theme = COND_THEME[kind]
-                    tabs.add(theme["name"])
-                    sec = CondSectionFrame(
-                        tabs.tab(theme["name"]), kind,
-                        get_dep_options=self._dep_options,
-                        is_pseqcell_for=self._is_pseqcell_for,
-                        model=CondEditModel.from_rail(bit, kind),
-                        get_self_name=self.base_name,
-                        vec_dep=self._vec_dep,
-                        on_change=self._on_cond_live_change,
-                    )
-                    sec.pack(fill="both", expand=True, padx=S_SM, pady=S_SM)
-                    sections[kind] = sec
-                self._cond_editor = {"kind": "output", "tabs": tabs, "sections": sections}
+                self._cond_editor = self._mount_output_sections(bit, self._on_cond_live_change)
         finally:
             self._suspend_broadcast = False
+
+    def _mount_output_sections(self, rail: PowerRail, on_change) -> dict:
+        """在 _cond_host 掛 Hi/Lo/Force 三分頁（per-bit 與 slice 群組共用）。"""
+        tabs = ctk.CTkTabview(self._cond_host, height=220)
+        tabs.pack(fill="x", padx=S_SM, pady=S_SM)
+        sections: dict[str, CondSectionFrame] = {}
+        for kind in ("hi", "lo", "force"):
+            theme = COND_THEME[kind]
+            tabs.add(theme["name"])
+            sec = CondSectionFrame(
+                tabs.tab(theme["name"]), kind,
+                get_dep_options=self._dep_options,
+                is_pseqcell_for=self._is_pseqcell_for,
+                model=CondEditModel.from_rail(rail, kind),
+                get_self_name=self.base_name,
+                vec_dep=self._vec_dep,
+                on_change=on_change,
+            )
+            sec.pack(fill="both", expand=True, padx=S_SM, pady=S_SM)
+            sections[kind] = sec
+        return {"kind": "output", "tabs": tabs, "sections": sections}
 
     # ---- 多 bit 即時共編 ----
     def _on_cond_live_change(self):
@@ -1640,8 +1670,188 @@ class RailEditorFrame(ctk.CTkFrame):
         rail.depends_on_lo_intra_op = lo.get_group_intra_op()
         rail.depends_on_force_intra_op = fo.get_group_intra_op()
 
+    # ---- slice（維度 output 向量，V1 row 軸）----
+    def _is_dim_slice_node(self) -> bool:
+        """輸出且至少 1 維 → 條件頁走 slice 群組編輯（取代 per-bit）。"""
+        return self.var_type.get() == "output" and len(self._selected_dim_params()) >= 1
+
+    def _rep_row_count(self) -> int:
+        """row 軸的最大值畫布：取 dim_params[0] 對應 parameter 的 value（§4.1 最大值畫布）。"""
+        dims = self._selected_dim_params()
+        if not dims:
+            return 1
+        for p in self._parameters():
+            if getattr(p, "name", None) == dims[0]:
+                return max(1, int(p.value))
+        return max(1, len(self._bit_rails) or 1)
+
+    def _present_group_ids(self) -> list[int]:
+        """目前有 row 指派的非 else 群組 id（升冪＝建立序＝if/else-if 優先權）。"""
+        return sorted({g for g in self._row_group if g != 0})
+
+    def _group_labels(self) -> dict[int, str]:
+        """群組 id → 顯示標籤：0→else，非 else 依升冪 A/B/...。"""
+        labels = {0: "else"}
+        for i, gid in enumerate(self._present_group_ids()):
+            labels[gid] = chr(ord("A") + i) if i < 26 else f"G{gid}"
+        return labels
+
+    def _label_to_gid(self, label: str) -> int:
+        for gid, lab in self._group_labels().items():
+            if lab == label:
+                return gid
+        return 0
+
+    def _load_slice_state_from_head(self, rep_n: int) -> None:
+        """首次進 slice 模式：由 head（bit0）的扁平條件＝else、cond.slices＝非 else 群組載入。"""
+        head = self._bit_rails[0] if self._bit_rails else PowerRail(
+            name=self.base_name(), seq_type="output")
+        else_rail = copy.deepcopy(head)
+        else_rail.cond.slices = []  # else 不帶 slices
+        self._slice_rails = {0: else_rail}
+        self._row_group = [0] * rep_n
+        self._next_gid = 1
+        for sg in (getattr(head.cond, "slices", None) or []):
+            gid = self._next_gid
+            self._next_gid += 1
+            gr = PowerRail(name=f"{self.base_name()}~g{gid}", seq_type="output")
+            gr.cond = copy.deepcopy(sg.cond)
+            self._slice_rails[gid] = gr
+            for r in sg.rows:
+                if 0 <= r < rep_n:
+                    self._row_group[r] = gid
+        self._active_group = 0
+
+    def _enter_slice_mode(self) -> None:
+        rep_n = self._rep_row_count()
+        if not self._slice_active:
+            self._load_slice_state_from_head(rep_n)
+            self._slice_active = True
+        else:
+            if len(self._row_group) < rep_n:
+                self._row_group += [0] * (rep_n - len(self._row_group))
+            elif len(self._row_group) > rep_n:
+                del self._row_group[rep_n:]
+            self._prune_empty_groups()
+
+    def _prune_empty_groups(self) -> None:
+        present = set(self._present_group_ids())
+        for gid in list(self._slice_rails):
+            if gid != 0 and gid not in present:
+                del self._slice_rails[gid]
+        if self._active_group != 0 and self._active_group not in present:
+            self._active_group = 0
+
+    def _create_group(self) -> int:
+        gid = self._next_gid
+        self._next_gid += 1
+        self._slice_rails[gid] = PowerRail(
+            name=f"{self.base_name()}~g{gid}", seq_type="output")
+        return gid
+
+    def _collect_active_group(self) -> None:
+        ed = self._cond_editor
+        if ed is None or ed.get("kind") != "output":
+            return
+        rail = self._slice_rails.get(self._active_group)
+        if rail is not None:
+            self._apply_output_sections(rail, ed["sections"])
+
+    def _build_group_editor(self, gid: int) -> None:
+        self._active_group = gid
+        rail = self._slice_rails.setdefault(
+            gid, PowerRail(name=f"{self.base_name()}~g{gid}", seq_type="output"))
+        self._suspend_broadcast = True
+        try:
+            self._cond_editor = self._mount_output_sections(rail, self._on_slice_cond_change)
+        finally:
+            self._suspend_broadcast = False
+
+    def _on_slice_cond_change(self) -> None:
+        if self._suspend_broadcast:
+            return
+        self._collect_active_group()
+
+    def _on_row_group_pick(self, row: int, value: str) -> None:
+        if value == "新增...":
+            self._row_group[row] = self._create_group()
+        elif value == "else":
+            self._row_group[row] = 0
+        else:
+            self._row_group[row] = self._label_to_gid(value)
+        self._prune_empty_groups()
+        self._sync_slice_selector()
+
+    def _on_group_sel(self, label: str) -> None:
+        self._collect_active_group()
+        self._destroy_cond_editor()
+        self._build_group_editor(self._label_to_gid(label))
+
+    def _render_slice_panel(self) -> None:
+        for w in self._row_assign_box.winfo_children():
+            w.destroy()
+        labels = self._group_labels()
+        present = self._present_group_ids()
+        row_values = [labels[g] for g in present] + ["else", "新增..."]
+        self._row_menus = []
+        for r in range(len(self._row_group)):
+            fr = ctk.CTkFrame(self._row_assign_box, fg_color="transparent")
+            fr.pack(anchor="w")
+            ctk.CTkLabel(fr, text=f"row{r}", font=FONT_BODY, width=48).pack(side="left")
+            menu = ctk.CTkOptionMenu(
+                fr, values=row_values, width=90,
+                command=lambda val, rr=r: self._on_row_group_pick(rr, val))
+            menu.set(labels.get(self._row_group[r], "else"))
+            menu.pack(side="left")
+            self._row_menus.append(menu)
+        self._group_sel.configure(values=[labels[g] for g in present] + ["else"])
+        self._group_sel.set(labels.get(self._active_group, "else"))
+
+    def _sync_slice_selector(self) -> None:
+        """維度 output 向量的條件頁：Row 分組 + 群組選擇器，取代 Bit 選擇器。"""
+        self._collect_active_group()
+        self._destroy_cond_editor()
+        self._enter_slice_mode()
+        self._bit_row.pack_forget()
+        self._slice_row.pack(fill="x", padx=S_SM, pady=(0, S_SM), before=self._cond_host)
+        self._render_slice_panel()
+        if self._active_group != 0 and self._active_group not in self._present_group_ids():
+            self._active_group = 0
+        self._build_group_editor(self._active_group)
+
+    def _build_slice_groups(self) -> list:
+        groups = []
+        for gid in self._present_group_ids():
+            rows = [r for r in range(len(self._row_group)) if self._row_group[r] == gid]
+            groups.append(SliceGroup(rows=rows, cond=copy.deepcopy(self._slice_rails[gid].cond)))
+        return groups
+
+    def _get_rails_sliced(self) -> list[PowerRail]:
+        """維度 output 向量：bit0（head）扁平＝else 組、cond.slices＝非 else 群組；其餘 bit 空。"""
+        self._collect_active_group()
+        base = self.base_name()
+        dims = self._selected_dim_params()
+        width_expr = self._width_expr()
+        n = self._parse_width()
+        out: list[PowerRail] = []
+        for i in range(n):
+            rail = PowerRail(name=f"{base}[{i}]", seq_type="output")
+            self._apply_physical(rail, "output")
+            out.append(rail)
+        else_rail = self._slice_rails.get(0)
+        if else_rail is not None:
+            out[0].cond = copy.deepcopy(else_rail.cond)
+        out[0].cond.slices = self._build_slice_groups()
+        set_group_metadata(out, base, width_expr, dims)
+        return out
+
     def _sync_bit_selector(self):
         """依 Vector 勾選＋寬度，調整 `_bit_rails` 長度與 Bit 選擇器，重建作用中 bit 編輯器。"""
+        if self._is_dim_slice_node():
+            self._sync_slice_selector()
+            return
+        self._slice_active = False
+        self._slice_row.pack_forget()
         self._collect_active_bit()
         self._destroy_cond_editor()
         is_vec = self.is_vector()
@@ -1738,9 +1948,14 @@ class RailEditorFrame(ctk.CTkFrame):
             self.pseq_timing_wrap.pack(fill="x", pady=(0, S_SM))
         if not initial:
             # Type 改變 → 條件編輯器型態（Hi/Lo/Force ↔ Timing Hi/Lo）也要換
-            self._collect_active_bit()
-            self._destroy_cond_editor()
-            self._build_bit_editor(self._active_bit)
+            self._slice_row.pack_forget()
+            if self._is_dim_slice_node():
+                self._sync_slice_selector()
+            else:
+                self._slice_active = False
+                self._collect_active_bit()
+                self._destroy_cond_editor()
+                self._build_bit_editor(self._active_bit)
 
     def _on_deb_toggle(self, initial: bool = False):
         if self.var_deb_enable.get():
@@ -1787,6 +2002,8 @@ class RailEditorFrame(ctk.CTkFrame):
     # ---- collect ----
     def get_rails(self) -> list[PowerRail]:
         """攤成 N 個 PowerRail（vector 帶群組 metadata，scalar 回單一 rail）。"""
+        if self._is_dim_slice_node():
+            return self._get_rails_sliced()
         base = self.base_name()
         seq_type = self.var_type.get()
         is_vec = self.is_vector()

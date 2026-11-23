@@ -7,7 +7,7 @@
 """
 import os
 
-from core.cond_ir import CondVisitor, Const, resolve_condition
+from core.cond_ir import CondVisitor, Const, resolve_condition, resolve_sliced_condition
 from core.config_models import DEFAULT_PULSE, PowerRail, PowerSeqConfig, pulse_verilog_name
 from core.constants import DEP_HIGH, DEP_LOW
 from core.group_logic import verilog_intra_expr
@@ -225,11 +225,34 @@ def _emit_dim_vector_cond(lines: list[str], head: PowerRail, s: str,
     else:
         indent = "        "
         lhs_idx = GV_ROW
-    for kind, no_cond_note in _NO_CONDITION_NOTES.items():
-        tree = resolve_condition(head, kind, name_to_rail)
-        expr = tree.accept(renderer)
-        note = f"  {no_cond_note}" if isinstance(tree, Const) else ""
-        lines.append(f"{indent}assign {s}_{kind}[{lhs_idx}] = {expr};{note}")
+    # row slice：每個 kind 取分支清單（不切片→單一 else 分支）。slices 跨 kind 共用，
+    # 故各 kind 的述詞與順序一致，可逐分支 zip 成一個 if/else-if/else 包三條 assign。
+    branches_by_kind = {
+        kind: resolve_sliced_condition(head, kind, name_to_rail)
+        for kind in _NO_CONDITION_NOTES
+    }
+    n_branches = len(branches_by_kind["hi"])
+    if n_branches == 1:
+        for kind, no_cond_note in _NO_CONDITION_NOTES.items():
+            tree = branches_by_kind[kind][0][1]
+            expr = tree.accept(renderer)
+            note = f"  {no_cond_note}" if isinstance(tree, Const) else ""
+            lines.append(f"{indent}assign {s}_{kind}[{lhs_idx}] = {expr};{note}")
+    else:
+        preds = [branches_by_kind["hi"][bi][0] for bi in range(n_branches)]
+        for bi, pred in enumerate(preds):
+            if bi == 0:
+                lines.append(f"{indent}if ({pred}) begin")
+            elif pred is None:
+                lines.append(f"{indent}end else begin")
+            else:
+                lines.append(f"{indent}end else if ({pred}) begin")
+            for kind, no_cond_note in _NO_CONDITION_NOTES.items():
+                tree = branches_by_kind[kind][bi][1]
+                expr = tree.accept(renderer)
+                note = f"  {no_cond_note}" if isinstance(tree, Const) else ""
+                lines.append(f"{indent}    assign {s}_{kind}[{lhs_idx}] = {expr};{note}")
+        lines.append(f"{indent}end")
     if two_d:
         lines.append("        end")
     lines.append("    end")

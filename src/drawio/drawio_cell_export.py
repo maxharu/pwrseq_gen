@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from xml.dom import minidom
 
-from core.cond_ir import AnyGroup, CondVisitor, resolve_condition
+from core.cond_ir import AnyGroup, CondVisitor, assert_backend_no_slices, resolve_condition
 from core.config_models import PowerRail, PowerSeqConfig
 from core.naming import internal_sig
 from drawio.drawio_export_options import DrawioExportOptions
@@ -930,6 +930,7 @@ def generate_drawio(
     options: DrawioExportOptions | None = None,
 ) -> str:
     """Generate cell-centric Draw.io XML (single page, multi-column grid)."""
+    assert_backend_no_slices(config.rails, "Draw.io export")
     opts = options or DrawioExportOptions.defaults()
     name_to_rail = {r.name: r for r in config.rails}
     valid = set(name_to_rail)

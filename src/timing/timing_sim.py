@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core.cond_ir import CondVisitor, resolve_condition, resolve_item
+from core.cond_ir import CondVisitor, assert_backend_no_slices, resolve_condition, resolve_item
 from core.config_models import (
     DEFAULT_PULSE,
     PowerRail,
@@ -555,6 +555,7 @@ def default_scenario_for_config(config: PowerSeqConfig) -> TimingScenario:
 
 def simulate(config: PowerSeqConfig, scenario: TimingScenario) -> SimResult:
     """執行離散 pulse 模擬，回傳各軌跡。"""
+    assert_backend_no_slices(config.rails, "timing sim")
     steps = max(10, scenario.steps)
     pulses = list(config.pulses or [DEFAULT_PULSE])
 

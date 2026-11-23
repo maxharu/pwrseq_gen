@@ -539,6 +539,17 @@ condition wire（`wire [k-1:0] base_hi, …`）、單一 `PSEQCELL`/`DEB` WIDTH=
   實際 N 更小時的越界由使用者負責）。2D 的 row 範圍是跨步歸約（§3.5），明確不支援。
   `tests/test_take_expr.py`、`tests/test_take_rules.py`、`tests/test_take_ir.py`、
   `tests/test_validator.py::TestTakeLowerBound`、`tests/test_gui_take.py::TestAllRowLowerBoundCell`。
-- **後續**：§4.4 條件頁大改版（分組標籤／Slice／規則清單）；§3.5 跨步 All-row 歸約；
-  §3.6.2 自由運算式逃生口；階段F 把 C／sim／drawio／excel 的 `take_ref` 佔位換成具體材質化（`take_cells`）；
-  slice（符號述詞＋分組標籤＋else、row/col 軸）。
+- **Slice V1（row 軸，已完成）**：§4 的 slice 切片落地到 row 軸（1D 與 2D 的 row 軸；col／兩者後續）。
+  資料模型（[src/core/config_models.py](src/core/config_models.py)）：`ConditionConfig.slices: list[SliceGroup]`，
+  `SliceGroup{rows, cond}` 為非 else 群組的有序清單，扁平 `depends_on_*` 本身即 else；`slices` 非空才序列化，
+  舊檔與非切片 config → golden byte 不變。IR（[src/core/cond_ir.py](src/core/cond_ir.py)）：`resolve_sliced_condition`
+  把 head 展開成 `[(述詞, 解析後條件), …, (None, else)]`，`render_row_predicate` 產 `gv_row==k` 的 `||` 連接；
+  語意仍單源於 `resolve_condition`。Verilog（[src/codegen/verilog_generator.py](src/codegen/verilog_generator.py)）：
+  維度 vector 條件由 `_emit_dim_vector_cond` 在多群組時展成 generate-for 內 `if/else if/else`，單群組沿用原本單行 assign。
+  其餘四後端（C／sim／drawio／timing_export）以 `assert_backend_no_slices` 佔位報 `NotImplementedError`（無切片不觸發）。
+  validator `check_slice_reachability` 對 `k >= 最大 NUM_ROW` 的不可達 row 出警告（不阻擋匯出）。GUI
+  （[src/gui/widgets.py](src/gui/widgets.py)）：維度輸出的條件頁改「per-row 群組下拉 + 群組選擇器切換編輯器」
+  （取代逐 bit 勾選），群組選項＝現有群組 + else + 「新增…」，空群組自動移除、else 恆最後唯一。
+  `tests/test_slice.py`、`tests/test_slice_gui.py`、`tests/test_gui_vector.py`。
+- **後續**：§4.4 slice 的 col／兩者軸（`gv_col`、界線 `NUM_COL`）與區段選擇器（前 k 個／指定 k／其餘）；
+  §3.6.2 自由運算式逃生口；階段F 把 C／sim／drawio／excel 的 `take_ref`／slice 佔位換成具體材質化（`take_cells`）。

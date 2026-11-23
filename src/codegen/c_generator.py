@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from core.cond_ir import CondVisitor, resolve_condition
+from core.cond_ir import CondVisitor, assert_backend_no_slices, resolve_condition
 from core.config_models import PowerRail, PowerSeqConfig, eval_width, pulse_suffix
 from core.group_logic import c_intra_expr
 from core.naming import internal_sig, safe_name
@@ -190,6 +190,7 @@ def generate_c(
     產生 power.c 風格韌體 C 原始碼。
     output_filename 決定 #ifndef guard 與函式前綴；未提供時用 power / POWER_C。
     """
+    assert_backend_no_slices(config.rails, "C generator")
     if output_filename:
         guard, prefix, default_var = _filename_to_c_names(output_filename)
     else:
