@@ -42,11 +42,15 @@ ci.bat
 
 ## 5. Commit 與 push
 
-- 唯一長期分支是 `main`（`origin/main`）。
+- `main`（`origin/main`）是唯一長期分支，但**不得直接 push `main`**。每次修改先開 feature 分支，push 該分支，開 GitHub PR，由使用者在網站看過 diff/CI 後按合併。
+  - 分支命名沿用 Conventional 類型前綴，例：`feat/slice-col`、`fix/drawio-routing`、`docs/readme-slice`。
+  - 從最新 `main` 開分支；推分支後用 `gh pr create` 建 PR（標題用 Conventional Commits、描述用繁體中文摘要改了什麼/為什麼/哪支測試證明）。
+  - **合併由使用者在 GitHub 上執行**；agent 不自行 merge、不直接 push `main`。
 - Commit 訊息沿用 Conventional Commits + 繁體中文描述，例：`refactor(gui): 條件編輯器與節點清單的編輯邏輯抽成 core 純資料模型`、`fix(drawio): ...`、`test: ...`、`docs: ...`、`ci: ...`。
-- 便捷腳本 `git_push.bat` 會 `git add .` → commit → `git push origin main`；它**不會**跑 CI，用它之前自己先跑 `ci.bat`。
+- `git_push.bat` 會 `git add .` → commit → `git push origin main`（直推 main），**與本流程衝突，暫勿使用**；改走 feature 分支 + PR。
+- push / 開 PR 前自己先跑 `ci.bat` 全綠（腳本與 GitHub Actions 不會替你跑本地）。
 - 不要把 `output/` 、`doc/` 、客戶專有檔案（`.gitignore` 末段列的 X15 檔）加入版控。
-- 使用者只說「本地 commit」時，不必做完整文件稽核。
+- 使用者只說「本地 commit」時，不必做完整文件稽核，也不必開分支/PR。
 
 ## 6. 回報
 
