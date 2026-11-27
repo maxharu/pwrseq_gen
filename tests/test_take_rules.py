@@ -58,6 +58,21 @@ class TestAllRowLowerBound:
         assert forms[ALL_ROW_AND].needs == (("n", "下界"),)
         assert forms[ALL_ROW_OR].needs == (("n", "下界"),)
 
+    def test_all_col_forms_expose_col_lower_bound_field(self):
+        # 2D All col 歸約複用 m slot 當 col 下界（Q5），UI 要有第二欄
+        forms = {f.id: f for f in take_forms(1, 2)}
+        assert forms[ROWOFF_ALLCOL_OR].needs == (("n", "row偏移值"), ("m", "col下界"))
+        assert forms[ROWOFF_ALLCOL_AND].needs == (("n", "row偏移值"), ("m", "col下界"))
+
+    def test_all_col_lower_bound_round_trip(self):
+        # form_to_take 寫 col.lo、take_to_form 回填 m；lo=0 不寫出
+        t = form_to_take(ROWOFF_ALLCOL_OR, 0, 2)
+        assert t["col"]["lo"] == 2
+        assert take_to_form(t) == (ROWOFF_ALLCOL_OR, 0, 2)
+        t0 = form_to_take(ROWOFF_ALLCOL_AND, -1, 0)
+        assert "lo" not in t0["col"]
+        assert take_to_form(t0) == (ROWOFF_ALLCOL_AND, -1, 0)
+
     def test_all_forms_default_zero(self):
         assert default_form(1, 1) == (REL_ROW, 0, 0)
         assert form_to_take(ALL_ROW_OR)["row"] == {"kind": "all", "op": "or"}

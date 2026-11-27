@@ -106,44 +106,56 @@ def check_dimensions(config: PowerSeqConfig) -> list[str]:
 
 
 def check_take_lower_bounds(config: PowerSeqConfig) -> list[str]:
-    """1D All 歸約的 row 下界 lo（|oneDim[NUM_ROW-1 : lo]）：須為整數、0 <= lo < 來源 row 維度最大值。
+    """All 歸約的下界 lo：須為整數、0 <= lo < 對應維度最大值。
 
-    只允許 1 維來源；2D 的 row 範圍是跨步歸約（§3.5），不支援。NUM_ROW 是符號式，
-    這裡以 parameter 預設值（最大值）為畫布檢查；實際 N 更小時的越界由使用者負責。
+    row 下界（|oneDim[NUM_ROW-1 : lo]）只允許 1 維來源；col 下界
+    （|bus[base*C + NUM_COL-1 : base*C + lo]）只允許 2 維來源的 All col 歸約。
+    row 的 2D 範圍是跨步歸約（§3.5）、不支援。NUM_ROW/NUM_COL 是符號式，這裡以 parameter
+    預設值（最大值）為畫布檢查；實際 N 更小時的越界由使用者負責。
     """
     errors: list[str] = []
     rail_by_name = {r.name: r for r in config.rails}
     param_values = {p.name: p.value for p in getattr(config, "parameters", None) or []}
+
+    def _check(axis: str, rail_name: str, dep: str, node: dict, dim: str | None) -> None:
+        """單一軸的 lo 檢查：axis 用於錯誤訊息（row/col），dim 為該軸對應 parameter 名。"""
+        lo = node["lo"]
+        if node.get("kind") != "all":
+            errors.append(f"'{rail_name}' sets a {axis} lower bound on non-All take for '{dep}'")
+            return
+        if dim is None:
+            errors.append(f"'{rail_name}' {axis} lower bound on '{dep}' requires a "
+                          f"{'1-dim' if axis == 'row' else '2-dim'} source")
+            return
+        if isinstance(lo, bool) or not isinstance(lo, int) or lo < 0:
+            errors.append(
+                f"'{rail_name}' has invalid {axis} lower bound '{lo}' for '{dep}' "
+                f"(must be an integer >= 0)"
+            )
+            return
+        max_value = param_values.get(dim)
+        if isinstance(max_value, int) and not lo < max_value:
+            errors.append(
+                f"'{rail_name}' {axis} lower bound {lo} on '{dep}' must be < {dim} (max {max_value})"
+            )
+
     for rail in config.rails:
         for kind in ("hi", "lo", "force"):
             groups = getattr(rail, f"get_{kind}_groups")()
             get_take = getattr(rail, f"get_{kind}_take")
             for gi, group in enumerate(groups):
                 for ii, dep in enumerate(group):
-                    row = (get_take(gi, ii) or {}).get("row") or {}
-                    if "lo" not in row:
-                        continue
-                    lo = row["lo"]
-                    if row.get("kind") != "all":
-                        errors.append(f"'{rail.name}' sets a row lower bound on non-All take for '{dep}'")
-                        continue
+                    take = get_take(gi, ii) or {}
                     target = rail_by_name.get(dep)
                     dims = list(getattr(target, "dim_params", None) or []) if target else []
-                    if len(dims) != 1:
-                        errors.append(f"'{rail.name}' row lower bound on '{dep}' requires a 1-dim source")
-                        continue
-                    if isinstance(lo, bool) or not isinstance(lo, int) or lo < 0:
-                        errors.append(
-                            f"'{rail.name}' has invalid row lower bound '{lo}' for '{dep}' "
-                            f"(must be an integer >= 0)"
-                        )
-                        continue
-                    max_value = param_values.get(dims[0])
-                    if isinstance(max_value, int) and not lo < max_value:
-                        errors.append(
-                            f"'{rail.name}' row lower bound {lo} on '{dep}' must be < "
-                            f"{dims[0]} (max {max_value})"
-                        )
+                    row = take.get("row") or {}
+                    if "lo" in row:
+                        # row 下界只允許 1 維來源（dims[0]）；2D 來源視為無合法軸。
+                        _check("row", rail.name, dep, row, dims[0] if len(dims) == 1 else None)
+                    col = take.get("col") or {}
+                    if "lo" in col:
+                        # col 下界只允許 2 維來源（dims[1]）。
+                        _check("col", rail.name, dep, col, dims[1] if len(dims) >= 2 else None)
     return errors
 
 

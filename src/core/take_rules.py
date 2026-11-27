@@ -41,8 +41,9 @@ _FORMS = {
     ALL_ROW_OR: TakeForm(ALL_ROW_OR, "全部OR", (("n", "下界"),)),
     ROWOFF_SPEC_COL: TakeForm(ROWOFF_SPEC_COL, "row偏移+指定col",
                               (("n", "row偏移值"), ("m", "欄索引"))),
-    ROWOFF_ALLCOL_OR: TakeForm(ROWOFF_ALLCOL_OR, "row偏移+全col OR", (("n", "row偏移值"),)),
-    ROWOFF_ALLCOL_AND: TakeForm(ROWOFF_ALLCOL_AND, "row偏移+全col AND", (("n", "row偏移值"),)),
+    # All col 的 m 是 col 下界：|bus[base*C + C-1 : base*C + m]，m=0 即整列連續窗（複用 m slot）
+    ROWOFF_ALLCOL_OR: TakeForm(ROWOFF_ALLCOL_OR, "row偏移+全col OR", (("n", "row偏移值"), ("m", "col下界"))),
+    ROWOFF_ALLCOL_AND: TakeForm(ROWOFF_ALLCOL_AND, "row偏移+全col AND", (("n", "row偏移值"), ("m", "col下界"))),
     ROWOFF_COLOFF: TakeForm(ROWOFF_COLOFF, "row偏移+col偏移",
                             (("n", "row偏移值"), ("m", "欄偏移"))),
 }
@@ -98,12 +99,11 @@ def form_to_take(form_id: str | None, n: int = 0, m: int = 0) -> dict | None:
     if form_id == ROWOFF_SPEC_COL:
         return {"row": {"kind": "specific", "index": _row_expr(n)},
                 "col": {"kind": "specific", "index": str(m)}}
-    if form_id == ROWOFF_ALLCOL_OR:
-        return {"row": {"kind": "specific", "index": _row_expr(n)},
-                "col": {"kind": "all", "op": "or"}}
-    if form_id == ROWOFF_ALLCOL_AND:
-        return {"row": {"kind": "specific", "index": _row_expr(n)},
-                "col": {"kind": "all", "op": "and"}}
+    if form_id in (ROWOFF_ALLCOL_OR, ROWOFF_ALLCOL_AND):
+        col = {"kind": "all", "op": "or" if form_id == ROWOFF_ALLCOL_OR else "and"}
+        if m:
+            col["lo"] = m  # col 下界，只在非零時寫入（m=0 的輸出與舊格式不變）
+        return {"row": {"kind": "specific", "index": _row_expr(n)}, "col": col}
     if form_id == ROWOFF_COLOFF:
         return {"row": {"kind": "specific", "index": _row_expr(n)},
                 "col": {"kind": "specific", "index": _col_expr(m)}}
@@ -139,7 +139,8 @@ def take_to_form(take: dict | None) -> tuple[str | None, int, int]:
     n = _parse_offset(ridx, GV_ROW) if ridx.startswith(GV_ROW) else 0
     ckind = col.get("kind", "same")
     if ckind == "all":
-        return (ROWOFF_ALLCOL_AND if col.get("op") == "and" else ROWOFF_ALLCOL_OR, n, 0)
+        lo = int(col.get("lo", 0))  # col 下界回填 m slot
+        return (ROWOFF_ALLCOL_AND if col.get("op") == "and" else ROWOFF_ALLCOL_OR, n, lo)
     cidx = str(col.get("index", GV_COL)) if ckind != "same" else GV_COL
     if ckind == "same" or cidx.startswith(GV_COL):
         return (ROWOFF_COLOFF, n, _parse_offset(cidx, GV_COL))

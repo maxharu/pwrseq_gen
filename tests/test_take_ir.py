@@ -145,6 +145,28 @@ class TestResolveTakeRef:
         assert isinstance(item, TakeRef)
         assert item.row == Take("all", "", "or", 1)
 
+    def test_col_lower_bound_passes_through(self):
+        # 2D All col 歸約的 col 下界 lo 必須經 IR 原樣帶到 TakeRef.col
+        sig4 = PowerRail(
+            "SIG4[0]", "output", group_base="SIG4", bit_index=0,
+            width_expr="NUM_CPU*NUM_CPU_MEM", dim_params=["NUM_CPU", "NUM_CPU_MEM"],
+        )
+        sig2 = PowerRail(
+            "SIG2[0]", "output", group_base="SIG2", bit_index=0,
+            width_expr="NUM_CPU", dim_params=["NUM_CPU"],
+            depends_on_hi=["SIG4[0]"],
+            depends_on_hi_groups=[["SIG4[0]"]],
+            depends_on_hi_use_groups=[["hi"]],
+            depends_on_hi_take_groups=[[
+                {"row": {"kind": "same"}, "col": {"kind": "all", "op": "or", "lo": 1}}]],
+        )
+        item = resolve_condition(sig2, "hi", {"SIG4[0]": sig4, "SIG2[0]": sig2}).groups[0].items[0]
+        assert isinstance(item, TakeRef)
+        assert item.col == Take("all", "", "or", 1)
+        from codegen.verilog_generator import _VerilogCond
+        assert item.accept(_VerilogCond({"SIG4[0]": sig4, "SIG2[0]": sig2})) == (
+            "|sig4_hi[gv_row*NUM_CPU_MEM + NUM_CPU_MEM-1 : gv_row*NUM_CPU_MEM + 1]")
+
     def test_dim_ref_without_take_stays_cond(self):
         sig2, n2r = _sig4_sig2(with_take=False)
         tree = resolve_condition(sig2, "hi", n2r)

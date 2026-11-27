@@ -111,6 +111,26 @@ class TestTwoDim:
         assert take_expr("aaa", 2, row=Take(SPECIFIC, "0"), col=Take(ALL, op="and"),
                          col_size=self.M) == "&aaa[0*NUM_CPU_MEM +: NUM_CPU_MEM]"
 
+    def test_all_col_or_with_lower_bound(self):
+        # Q7：col 下界比照 1D 的 ranged part-select（上界固定 NUM_COL-1）
+        assert take_expr("aaa", 2, row=Take(SAME), col=Take(ALL, op="or", lo=1),
+                         col_size=self.M) == (
+            "|aaa[gv_row*NUM_CPU_MEM + NUM_CPU_MEM-1 : gv_row*NUM_CPU_MEM + 1]")
+
+    def test_all_col_and_with_lower_bound_specific_row(self):
+        assert take_expr("aaa", 2, row=Take(SPECIFIC, "0"), col=Take(ALL, op="and", lo=2),
+                         col_size=self.M) == (
+            "&aaa[0*NUM_CPU_MEM + NUM_CPU_MEM-1 : 0*NUM_CPU_MEM + 2]")
+
+    def test_all_col_lower_bound_zero_is_whole_window(self):
+        # lo=0 必須與舊輸出 byte 相同（黃金不變前提）
+        assert take_expr("aaa", 2, row=Take(SAME), col=Take(ALL, op="or", lo=0),
+                         col_size=self.M) == "|aaa[gv_row*NUM_CPU_MEM +: NUM_CPU_MEM]"
+
+    def test_col_lower_bound_on_non_all_rejected(self):
+        with pytest.raises(ValueError):
+            take_expr("aaa", 2, row=Take(SAME), col=Take(SAME, lo=1), col_size=self.M)
+
     def test_relative_row_offset_parenthesised(self):
         # 3.6：相對偏移進 *M 前需加括號
         assert take_expr("aaa", 2, row=Take(SPECIFIC, "gv_row-1"), col=Take(SAME),

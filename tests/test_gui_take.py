@@ -118,16 +118,15 @@ class TestTakeCellEdit:
         finally:
             ed.destroy()
 
-    def test_sub_row_hidden_for_allcol(self, ctk_root):
+    def test_allcol_exposes_col_lower_bound_field(self, ctk_root):
         ed, sec, cell = _sec_add(ctk_root, _sig2_1d(), _sig2_1d() + _sig4_2d(), "SIG4")
         try:
             label = next(f.label for f in take_forms(1, 2) if f.id == ROWOFF_ALLCOL_AND)
             cell["form_var"].set(label)
-            # 全col AND 只需 n → 子列有 1 個 entry；再看 spec col 需 n,m → 2 個
-            assert len(cell["sub"].winfo_children()) == 2  # (label + entry) for n
-            label2 = next(f.label for f in take_forms(1, 2) if f.id == ROWOFF_SPEC_COL)
-            cell["form_var"].set(label2)
-            assert len(cell["sub"].winfo_children()) == 4  # n + m 各 (label+entry)
+            # 全col AND 現有 n(row偏移) + m(col下界) → 子列 2 欄共 4 個 widget
+            assert len(cell["sub"].winfo_children()) == 4
+            cell["m_var"].set("1")  # col 下界寫入 col.lo
+            assert sec.model.take[0][0] == form_to_take(ROWOFF_ALLCOL_AND, 0, 1)
         finally:
             ed.destroy()
 
