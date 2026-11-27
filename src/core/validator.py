@@ -148,11 +148,11 @@ def check_take_lower_bounds(config: PowerSeqConfig) -> list[str]:
 
 
 def check_slice_reachability(config: PowerSeqConfig) -> list[str]:
-    """Slice 群組的 row 述詞在代表值（parameter 預設=最大值）下是否可達 → 警告清單（不報錯）。
+    """Slice 群組的述詞在代表值（parameter 預設=最大值）下是否可達 → 警告清單（不報錯）。
 
-    §4.1(5)：絕對 row k 在實例 N <= k 時不可達（符號上仍合法），只警告。row 軸最大值取自
-    該 rail 第一維 dim_params[0] 對應 parameter 的 value。刻意不併入 validate() 的錯誤，
-    以免擋下匯出（符號 RTL 對任何 N 仍成立）。"""
+    §4.1(5)：絕對索引 k 在實例 N <= k 時不可達（符號上仍合法），只警告。軸最大值取自該 rail
+    對應維度的 parameter value：row 軸取 dim_params[0]、col 軸取 dim_params[1]（§4.2）。刻意不
+    併入 validate() 的錯誤，以免擋下匯出（符號 RTL 對任何 N 仍成立）。"""
     warnings: list[str] = []
     param_values = {p.name: p.value for p in getattr(config, "parameters", None) or []}
     for rail in config.rails:
@@ -160,16 +160,19 @@ def check_slice_reachability(config: PowerSeqConfig) -> list[str]:
         if not slices:
             continue
         dims = list(getattr(rail, "dim_params", None) or [])
-        max_n = param_values.get(dims[0]) if dims else None
-        if not isinstance(max_n, int):
-            continue
         name = rail.group_base or rail.name
         for sg in slices:
+            axis_dim = 1 if getattr(sg, "axis", "row") == "col" else 0
+            dim = dims[axis_dim] if axis_dim < len(dims) else None
+            max_n = param_values.get(dim) if dim else None
+            if not isinstance(max_n, int):
+                continue
+            axis_word = "col" if axis_dim == 1 else "row"
             for k in sg.rows:
                 if k >= max_n:
                     warnings.append(
-                        f"'{name}' slice row {k} is unreachable at representative size "
-                        f"{dims[0]}={max_n}"
+                        f"'{name}' slice {axis_word} {k} is unreachable at representative size "
+                        f"{dim}={max_n}"
                     )
     return warnings
 
@@ -313,5 +316,14 @@ def validate(config: PowerSeqConfig) -> tuple[bool, list[str]]:
         if not r.name or not r.name.strip():
             errors.append("Rail with empty name exists")
             break
+
+    # col 軸切片只對 2D 訊號有意義（§4.2：1D 沒有 col 軸）；標 col 卻非 2D → 結構性錯誤。
+    for r in config.rails:
+        dims = list(getattr(r, "dim_params", None) or [])
+        if len(dims) >= 2:
+            continue
+        if any(getattr(sg, "axis", "row") == "col" for sg in (getattr(r, "slices", None) or [])):
+            name = r.group_base or r.name
+            errors.append(f"'{name}' has a col-axis slice but is not 2-dimensional")
 
     return len(errors) == 0, errors

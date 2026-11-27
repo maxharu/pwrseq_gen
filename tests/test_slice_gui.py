@@ -129,3 +129,71 @@ class TestSliceGroupEditing:
             assert head.cond.slices[0].cond.get_hi_groups() == [["BOOT"]]
         finally:
             ed.destroy()
+
+
+def _vv_2d():
+    return [PowerRail(f"VV[{i}]", "output", group_base="VV", bit_index=i,
+                      width_expr="NUM_CPU*NUM_CPU_MEM",
+                      dim_params=["NUM_CPU", "NUM_CPU_MEM"]) for i in range(8)]
+
+
+def _editor_2d(ctk_root, owner_rails):
+    from gui.widgets import RailEditorFrame
+    all_rails = owner_rails + [PowerRail("BOOT", "output"), PowerRail("BAR", "output")]
+    return RailEditorFrame(
+        ctk_root, owner_rails,
+        get_all_rails=lambda: all_rails,
+        get_pulses=lambda: ["PSEQ"],
+        get_parameters=lambda: [Parameter("NUM_CPU", 2), Parameter("NUM_CPU_MEM", 4)],
+        get_dimensions=lambda: ["NUM_CPU", "NUM_CPU_MEM"],
+    )
+
+
+class TestColAxisSlice:
+    def test_1d_axis_menu_has_no_col(self, ctk_root):
+        ed = _editor(ctk_root, _sig2_1d())
+        try:
+            _open_cond(ed)
+            assert ed._axis_menu.cget("values") == ["row"]
+        finally:
+            ed.destroy()
+
+    def test_2d_axis_menu_offers_col(self, ctk_root):
+        ed = _editor_2d(ctk_root, _vv_2d())
+        try:
+            _open_cond(ed)
+            assert "col" in ed._axis_menu.cget("values")
+        finally:
+            ed.destroy()
+
+    def test_switch_to_col_resizes_canvas_and_emits_axis(self, ctk_root):
+        ed = _editor_2d(ctk_root, _vv_2d())
+        try:
+            _open_cond(ed)
+            ed._on_axis_pick("col")
+            assert ed._slice_axis == "col"
+            assert len(ed._row_group) == 4  # NUM_CPU_MEM 最大值畫布
+            ed._on_row_group_pick(0, "新增...")
+            gid = ed._present_group_ids()[-1]
+            ed._on_group_sel(ed._group_labels()[gid])
+            sec = ed._cond_editor["sections"]["hi"]
+            sec.group_frames[0]["combo"].set("BOOT")
+            sec._add_cond_to_group(0)
+            out = ed.get_rails()
+            head = out[0]
+            assert len(head.cond.slices) == 1
+            assert head.cond.slices[0].axis == "col"
+            assert head.cond.slices[0].rows == [0]
+        finally:
+            ed.destroy()
+
+    def test_switch_axis_clears_groups(self, ctk_root):
+        ed = _editor_2d(ctk_root, _vv_2d())
+        try:
+            _open_cond(ed)
+            ed._on_row_group_pick(0, "新增...")  # 在 row 軸建一組
+            assert ed._present_group_ids() == [1]
+            ed._on_axis_pick("col")              # 切 col → 清空
+            assert ed._present_group_ids() == []
+        finally:
+            ed.destroy()

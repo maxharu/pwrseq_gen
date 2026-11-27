@@ -1079,9 +1079,11 @@ class RailEditorFrame(ctk.CTkFrame):
         self._bit_rails: list[PowerRail] = [copy.deepcopy(r) for r in rails]
         self._active_bit = 0
         self._cond_editor: Optional[dict] = None  # {"kind": "output"|"input", ...}
-        # Slice（§4，V1 row 軸）：維度 output 向量的條件頁用群組選擇器取代 per-bit。
+        # Slice（§4，row/col 軸）：維度 output 向量的條件頁用群組選擇器取代 per-bit。
         # _row_group[r] = 群組 id（0=else）；_slice_rails[gid] 持該組條件；扁平=else。
+        # _slice_axis：目前切片軸 row/col；一次單軸（§4.2），col 僅 2D 可選。
         self._slice_active = False
+        self._slice_axis = "row"
         self._row_group: list[int] = []
         self._slice_rails: dict[int, PowerRail] = {}
         self._active_group = 0
@@ -1442,15 +1444,20 @@ class RailEditorFrame(ctk.CTkFrame):
         self._bit_checkboxes: list[ctk.CTkCheckBox] = []
         self._anchor_idx: Optional[int] = None
         self._suspend_broadcast = False
-        # Slice 面板（維度 output 向量時取代 Bit 選擇器）：左 Row 分組、右 群組選擇器。
+        # Slice 面板（維度 output 向量時取代 Bit 選擇器）：上 切片軸、左 分組、右 群組選擇器。
         self._slice_row = ctk.CTkFrame(parent, fg_color="transparent")
-        ctk.CTkLabel(self._slice_row, text="切片軸: row（V1）",
-                     font=FONT_HINT, text_color="gray").pack(anchor="w", padx=S_SM)
+        _axfr = ctk.CTkFrame(self._slice_row, fg_color="transparent")
+        _axfr.pack(anchor="w", padx=S_SM)
+        ctk.CTkLabel(_axfr, text="切片軸:", font=FONT_BODY).pack(side="left", padx=(0, S_SM))
+        self._axis_menu = ctk.CTkOptionMenu(_axfr, values=["row"], width=80,
+                                            command=self._on_axis_pick)
+        self._axis_menu.pack(side="left")
         _body = ctk.CTkFrame(self._slice_row, fg_color="transparent")
         _body.pack(fill="x")
         _left = ctk.CTkFrame(_body, fg_color="transparent")
         _left.pack(side="left", anchor="n")
-        ctk.CTkLabel(_left, text="Row 分組", font=FONT_BODY).pack(anchor="w")
+        self._axis_group_label = ctk.CTkLabel(_left, text="Row 分組", font=FONT_BODY)
+        self._axis_group_label.pack(anchor="w")
         self._row_assign_box = ctk.CTkFrame(_left, fg_color="transparent")
         self._row_assign_box.pack(anchor="w")
         _right = ctk.CTkFrame(_body, fg_color="transparent")
@@ -1675,13 +1682,15 @@ class RailEditorFrame(ctk.CTkFrame):
         """輸出且至少 1 維 → 條件頁走 slice 群組編輯（取代 per-bit）。"""
         return self.var_type.get() == "output" and len(self._selected_dim_params()) >= 1
 
-    def _rep_row_count(self) -> int:
-        """row 軸的最大值畫布：取 dim_params[0] 對應 parameter 的 value（§4.1 最大值畫布）。"""
+    def _rep_axis_count(self) -> int:
+        """目前切片軸的最大值畫布：row 取 dim_params[0]、col 取 dim_params[1]（§4.1／§4.2）。"""
         dims = self._selected_dim_params()
-        if not dims:
+        idx = 1 if self._slice_axis == "col" else 0
+        if idx >= len(dims):
             return 1
+        name = dims[idx]
         for p in self._parameters():
-            if getattr(p, "name", None) == dims[0]:
+            if getattr(p, "name", None) == name:
                 return max(1, int(p.value))
         return max(1, len(self._bit_rails) or 1)
 
@@ -1702,16 +1711,21 @@ class RailEditorFrame(ctk.CTkFrame):
                 return gid
         return 0
 
-    def _load_slice_state_from_head(self, rep_n: int) -> None:
-        """首次進 slice 模式：由 head（bit0）的扁平條件＝else、cond.slices＝非 else 群組載入。"""
+    def _load_slice_state_from_head(self) -> None:
+        """首次進 slice 模式：由 head（bit0）的扁平條件＝else、cond.slices＝非 else 群組載入。
+
+        軸由既存 slices 的 axis 還原（單軸，取第一組即可）；rep_n 依該軸的最大值畫布算。"""
         head = self._bit_rails[0] if self._bit_rails else PowerRail(
             name=self.base_name(), seq_type="output")
+        stored = getattr(head.cond, "slices", None) or []
+        self._slice_axis = "col" if (stored and getattr(stored[0], "axis", "row") == "col") else "row"
+        rep_n = self._rep_axis_count()
         else_rail = copy.deepcopy(head)
         else_rail.cond.slices = []  # else 不帶 slices
         self._slice_rails = {0: else_rail}
         self._row_group = [0] * rep_n
         self._next_gid = 1
-        for sg in (getattr(head.cond, "slices", None) or []):
+        for sg in stored:
             gid = self._next_gid
             self._next_gid += 1
             gr = PowerRail(name=f"{self.base_name()}~g{gid}", seq_type="output")
@@ -1723,16 +1737,31 @@ class RailEditorFrame(ctk.CTkFrame):
         self._active_group = 0
 
     def _enter_slice_mode(self) -> None:
-        rep_n = self._rep_row_count()
         if not self._slice_active:
-            self._load_slice_state_from_head(rep_n)
+            self._load_slice_state_from_head()
             self._slice_active = True
         else:
+            rep_n = self._rep_axis_count()
             if len(self._row_group) < rep_n:
                 self._row_group += [0] * (rep_n - len(self._row_group))
             elif len(self._row_group) > rep_n:
                 del self._row_group[rep_n:]
             self._prune_empty_groups()
+
+    def _on_axis_pick(self, value: str) -> None:
+        """切片軸切換（§4.2）：Q8 清空目前軸的分組，新軸從全 else 重來（else 扁平條件保留）。"""
+        if value == self._slice_axis or value not in ("row", "col"):
+            return
+        self._collect_active_group()
+        self._slice_axis = value
+        else_rail = self._slice_rails.get(0)
+        self._slice_rails = {0: else_rail} if else_rail is not None else {}
+        self._row_group = [0] * self._rep_axis_count()
+        self._active_group = 0
+        self._next_gid = 1
+        self._destroy_cond_editor()
+        self._render_slice_panel()
+        self._build_group_editor(0)
 
     def _prune_empty_groups(self) -> None:
         present = set(self._present_group_ids())
@@ -1790,6 +1819,11 @@ class RailEditorFrame(ctk.CTkFrame):
     def _render_slice_panel(self) -> None:
         for w in self._row_assign_box.winfo_children():
             w.destroy()
+        # 切片軸下拉：2D 才提供 col（§4.2：1D 無 col 軸）。
+        two_d = len(self._selected_dim_params()) >= 2
+        self._axis_menu.configure(values=["row", "col"] if two_d else ["row"])
+        self._axis_menu.set(self._slice_axis)
+        self._axis_group_label.configure(text="Col 分組" if self._slice_axis == "col" else "Row 分組")
         labels = self._group_labels()
         present = self._present_group_ids()
         row_values = [labels[g] for g in present] + ["else", "新增..."]
@@ -1797,7 +1831,7 @@ class RailEditorFrame(ctk.CTkFrame):
         for r in range(len(self._row_group)):
             fr = ctk.CTkFrame(self._row_assign_box, fg_color="transparent")
             fr.pack(anchor="w")
-            ctk.CTkLabel(fr, text=f"row{r}", font=FONT_BODY, width=48).pack(side="left")
+            ctk.CTkLabel(fr, text=f"{self._slice_axis}{r}", font=FONT_BODY, width=48).pack(side="left")
             menu = ctk.CTkOptionMenu(
                 fr, values=row_values, width=90,
                 command=lambda val, rr=r: self._on_row_group_pick(rr, val))
@@ -1823,7 +1857,8 @@ class RailEditorFrame(ctk.CTkFrame):
         groups = []
         for gid in self._present_group_ids():
             rows = [r for r in range(len(self._row_group)) if self._row_group[r] == gid]
-            groups.append(SliceGroup(rows=rows, cond=copy.deepcopy(self._slice_rails[gid].cond)))
+            groups.append(SliceGroup(rows=rows, axis=self._slice_axis,
+                                     cond=copy.deepcopy(self._slice_rails[gid].cond)))
         return groups
 
     def _get_rails_sliced(self) -> list[PowerRail]:

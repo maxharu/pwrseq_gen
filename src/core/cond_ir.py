@@ -172,26 +172,30 @@ def assert_backend_no_slices(rails, backend: str) -> None:
     for r in rails:
         if getattr(r, "slices", None):
             raise NotImplementedError(
-                f"{backend} 尚未支援 slice 條件（節點 {r.group_base or r.name}）；目前僅 Verilog 支援 row 切片。"
+                f"{backend} 尚未支援 slice 條件（節點 {r.group_base or r.name}）；目前僅 Verilog 支援 row/col 切片。"
             )
 
 
 def render_row_predicate(rows, gv_row: str = "gv_row") -> str:
-    """把枚舉的 row 索引清單渲染成 generate-if 述詞：[0,1] → "gv_row==0 || gv_row==1"。
+    """把枚舉的索引清單渲染成 generate-if 述詞：[0,1] → "gv_row==0 || gv_row==1"。
 
-    §4.1(2)：slice 存對 genvar 的符號化述詞；V1 的具體枚舉就是 gv_row==k 的 OR。"""
+    §4.1(2)：slice 存對 genvar 的符號化述詞；V1 的具體枚舉就是 gv==k 的 OR。
+    col 軸傳 gv_row="gv_col" 即得 "gv_col==k"（§4.2 規則原封換軸）。"""
     return " || ".join(f"{gv_row}=={int(k)}" for k in rows)
 
 
-def resolve_sliced_condition(rail, kind: str, name_to_rail: dict):
-    """rail 的 kind 條件依 row slice 分支：回 [(pred, tree), ...,(None, else_tree)]。
+def resolve_sliced_condition(rail, kind: str, name_to_rail: dict,
+                             gv_row: str = "gv_row", gv_col: str = "gv_col"):
+    """rail 的 kind 條件依 slice 分支：回 [(pred, tree), ...,(None, else_tree)]。
 
-    非 else 群組（rail.slices）各一筆，pred 為 row 述詞字串；最後一筆 else 的 pred 為 None，
-    tree 取自扁平條件（即 catch-all）。不切片 → 只有單一 (None, tree)，與既有行為等價。
-    每組條件走與 resolve_condition 完全相同的解析（§4 條件語意單一來源）。"""
+    非 else 群組（rail.slices）各一筆，pred 為述詞字串（依該組 axis 用 gv_row 或 gv_col）；
+    最後一筆 else 的 pred 為 None，tree 取自扁平條件（即 catch-all）。不切片 → 只有單一
+    (None, tree)，與既有行為等價。每組條件走與 resolve_condition 完全相同的解析
+    （§4 條件語意單一來源）。"""
     branches = []
     for sg in getattr(rail, "slices", None) or []:
-        branches.append((render_row_predicate(sg.rows), resolve_condition(sg.cond, kind, name_to_rail)))
+        gv = gv_col if getattr(sg, "axis", "row") == "col" else gv_row
+        branches.append((render_row_predicate(sg.rows, gv), resolve_condition(sg.cond, kind, name_to_rail)))
     branches.append((None, resolve_condition(rail, kind, name_to_rail)))
     return branches
 
