@@ -90,7 +90,11 @@ def _two_dim(bus: str, row: Take, col: Take, col_size: str, gv_row: str, gv_col:
 
     base = _row_base(row, gv_row)
     if col_all:  # row=Same/Specific + col=All → 連續窗 part-select
-        return f"{_REDUCE[col.op]}{bus}[{base}*{col_size} +: {col_size}]"
+        if col.lo == 0:
+            return f"{_REDUCE[col.op]}{bus}[{base}*{col_size} +: {col_size}]"
+        # col 下界：比照 1D 的 ranged select，上界固定 NUM_COL-1（§6 延伸）
+        off = f"{base}*{col_size}"
+        return f"{_REDUCE[col.op]}{bus}[{off} + {col_size}-1 : {off} + {col.lo}]"
 
     col_term = gv_col if col.kind == SAME else _maybe_paren(col.index)
     return f"{bus}[{base}*{col_size} + {col_term}]"

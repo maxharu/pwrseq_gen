@@ -539,6 +539,16 @@ condition wire（`wire [k-1:0] base_hi, …`）、單一 `PSEQCELL`/`DEB` WIDTH=
   實際 N 更小時的越界由使用者負責）。2D 的 row 範圍是跨步歸約（§3.5），明確不支援。
   `tests/test_take_expr.py`、`tests/test_take_rules.py`、`tests/test_take_ir.py`、
   `tests/test_validator.py::TestTakeLowerBound`、`tests/test_gui_take.py::TestAllRowLowerBoundCell`。
+- **2D All col 歸約加下界（已完成）**：把 1D 的下界擴到 2D 被引用訊號的 All col 連續窗（§6 延伸）。
+  `ROWOFF_ALLCOL_OR/AND` 兩個 take 形狀複用 `m` slot 當 col 下界（`needs` 加 `("m","col下界")`），
+  產出 `|bus[base*NUM_COL + NUM_COL-1 : base*NUM_COL + m]`（`NUM_COL > m >= 0`，上界固定 NUM_COL-1）。
+  m=0 即整列連續窗 `+: NUM_COL`，輸出與舊版 byte 相同。實作：`take_expr._two_dim` 的 col-All 路徑吃
+  `col.lo`（`form_to_take` 只在非零寫 `col.lo`、`take_to_form` 回填 m）；validator `check_take_lower_bounds`
+  抽成 row/col 共用的 `_check`，col 下界只允許 2D 來源的 All col、檢查 `0 <= lo < 最大 NUM_COL`（dim_params[1]）。
+  1D 輸出←2D 與 2D 輸出←2D 共用同一條 emission。GUI 無需改（`_render_take_sub` 依 `needs` 泛用渲染）。
+  row 軸的 2D 範圍仍是跨步歸約、不支援；`row=All & col=All` 整條 `&bus` 不加界。
+  `tests/test_take_expr.py`、`tests/test_take_rules.py`、`tests/test_take_ir.py`、
+  `tests/test_validator.py::TestTakeColLowerBound`、`tests/test_gui_take.py`。
 - **Slice V1（row 軸，已完成）**：§4 的 slice 切片落地到 row 軸（1D 與 2D 的 row 軸；col／兩者後續）。
   資料模型（[src/core/config_models.py](src/core/config_models.py)）：`ConditionConfig.slices: list[SliceGroup]`，
   `SliceGroup{rows, cond}` 為非 else 群組的有序清單，扁平 `depends_on_*` 本身即 else；`slices` 非空才序列化，

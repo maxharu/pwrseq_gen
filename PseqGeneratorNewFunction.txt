@@ -248,6 +248,9 @@ pwrseq_gen 新功能設計: 以「維度 + slice」取代 parametric
 			assign oneDim[gv_row] = twoDim[(gv_row +/- n)*NUM_COL +/- m];         (row 偏移 + Specific col m)
 			assign oneDim[gv_row] = |twoDim[(gv_row +/- n)*NUM_COL +: NUM_COL];   (row 偏移 + All col OR)
 			assign oneDim[gv_row] = &twoDim[(gv_row +/- n)*NUM_COL +: NUM_COL];   (row 偏移 + All col AND)
+			# col 下界範圍（§6 延伸，NUM_COL > m >= 0；m=0 即上面的整列連續窗；上界固定 NUM_COL-1）
+			assign oneDim[gv_row] = |twoDim[(gv_row +/- n)*NUM_COL + NUM_COL-1 : (gv_row +/- n)*NUM_COL + m];  (row 偏移 + All col OR, 下界 m)
+			assign oneDim[gv_row] = &twoDim[(gv_row +/- n)*NUM_COL + NUM_COL-1 : (gv_row +/- n)*NUM_COL + m];  (row 偏移 + All col AND, 下界 m)
 
 	6.2 輸出為 2 維: twoDim[gv_row*NUM_COL + gv_col]
 		引用 1 維(沿 col 廣播, 見 2.3):
@@ -260,3 +263,6 @@ pwrseq_gen 新功能設計: 以「維度 + slice」取代 parametric
 			assign twoDim[gv_row*NUM_COL + gv_col] = twoDim[(gv_row +/- n)*NUM_COL + gv_col +/- m];    (row 偏移 + col 偏移; n=m=0 即 Same+Same 完全對齊)
 			assign twoDim[gv_row*NUM_COL + gv_col] = |twoDim[(gv_row +/- n)*NUM_COL +: NUM_COL];       (row 偏移 + All col OR)
 			assign twoDim[gv_row*NUM_COL + gv_col] = &twoDim[(gv_row +/- n)*NUM_COL +: NUM_COL];       (row 偏移 + All col AND)
+			# col 下界範圍（§6 延伸，NUM_COL > m >= 0；m=0 即上面的整列連續窗；上界固定 NUM_COL-1）
+			assign twoDim[gv_row*NUM_COL + gv_col] = |twoDim[(gv_row +/- n)*NUM_COL + NUM_COL-1 : (gv_row +/- n)*NUM_COL + m];  (row 偏移 + All col OR, 下界 m)
+			assign twoDim[gv_row*NUM_COL + gv_col] = &twoDim[(gv_row +/- n)*NUM_COL + NUM_COL-1 : (gv_row +/- n)*NUM_COL + m];  (row 偏移 + All col AND, 下界 m)

@@ -35,6 +35,27 @@ def _row_bound_config(lo, dims=("NUM_CPU",), max_value=4, row_kind="all", take_o
     )
 
 
+def _col_bound_config(lo, col_max=4, col_kind="all", dims=("NUM_CPU", "NUM_CPU_MEM")):
+    """SIG2（1D）以 All col 歸約引用 SIG4（2D）的 hi 條件，col 下界為 lo。"""
+    sig4 = PowerRail(
+        "SIG4[0]", "output", group_base="SIG4", bit_index=0,
+        width_expr="NUM_CPU*NUM_CPU_MEM", dim_params=list(dims),
+    )
+    take = {"row": {"kind": "same"}, "col": {"kind": col_kind, "op": "or", "lo": lo}}
+    sig2 = PowerRail(
+        "SIG2[0]", "output",
+        depends_on_hi=["SIG4[0]"],
+        depends_on_hi_groups=[["SIG4[0]"]],
+        depends_on_hi_use_groups=[["hi"]],
+        depends_on_hi_take_groups=[[take]],
+    )
+    return PowerSeqConfig(
+        parameters=[Parameter("NUM_CPU", 2), Parameter("NUM_CPU_MEM", col_max)],
+        dimensions=["NUM_CPU", "NUM_CPU_MEM"],
+        rails=[sig4, sig2],
+    )
+
+
 class TestCheckDuplicateNames:
     def test_no_duplicates(self):
         cfg = PowerSeqConfig(rails=[
@@ -187,3 +208,30 @@ class TestTakeLowerBound:
         cfg.rails[0].dim_params = ["NUM_CPU", "NUM_CPU_MEM"]
         errs = check_take_lower_bounds(cfg)
         assert len(errs) == 1
+
+
+class TestTakeColLowerBound:
+    """2D All col 歸約的 col 下界 lo：|bus[...NUM_COL-1 : ...lo]，需 0 <= lo < 最大 NUM_COL。"""
+
+    def test_valid_col_lower_bound_passes(self):
+        assert check_take_lower_bounds(_col_bound_config(lo=1)) == []
+
+    def test_zero_col_lower_bound_passes(self):
+        assert check_take_lower_bounds(_col_bound_config(lo=0)) == []
+
+    def test_col_lower_bound_at_max_rejected(self):
+        errs = check_take_lower_bounds(_col_bound_config(lo=4, col_max=4))
+        assert len(errs) == 1 and "SIG2[0]" in errs[0]
+
+    def test_negative_col_lower_bound_rejected(self):
+        errs = check_take_lower_bounds(_col_bound_config(lo=-1))
+        assert len(errs) == 1
+
+    def test_non_all_col_kind_with_lower_bound_rejected(self):
+        errs = check_take_lower_bounds(_col_bound_config(lo=1, col_kind="specific"))
+        assert len(errs) == 1
+
+    def test_validate_surfaces_col_lower_bound_error(self):
+        ok, errors = validate(_col_bound_config(lo=9, col_max=4))
+        assert not ok
+        assert any("SIG2[0]" in e for e in errors)
