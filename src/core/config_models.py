@@ -270,13 +270,17 @@ class ConditionConfig:
 
 @dataclass
 class SliceGroup:
-    """單一非 else 切片群組（V1 row 軸）。
+    """單一非 else 切片群組（§4，row 或 col 軸）。
 
-    rows：被指派到本組的具體 row 索引（GUI 以最大值畫布枚舉 0..max-1；§4.4 分組標籤）。
+    rows：被指派到本組的具體索引（GUI 以最大值畫布枚舉 0..max-1；§4.4 分組標籤）。
+          axis="row" 時為 row 索引、axis="col" 時為 col 索引（沿用同一欄位，row 路徑不動）。
+    axis：切片軸 "row"（預設）或 "col"；一個訊號的所有群組共用同一軸（本輪單軸）。
+          只有 col 才序列化 axis 鍵，row／舊檔不輸出 → byte 不變（§4 相容性）。
     cond：本組自己的一整份 Hi/Lo/Force 條件，與扁平 else 同構（直接重用 ConditionConfig，
           故 resolve_condition / CondEditModel.from_rail 可原封套用在 cond 上）。
     """
     rows: list[int] = field(default_factory=list)
+    axis: str = "row"
     cond: ConditionConfig = field(default_factory=ConditionConfig)
 
 
@@ -743,6 +747,9 @@ def _rail_physical_dict(rail: PowerRail) -> dict:
 def _slice_group_to_dict(sg: "SliceGroup") -> dict:
     """單一非 else 切片群組 → dict：rows + 本組三 kind 條件（重用 _cond_kind_to_dict）。"""
     d: dict = {"rows": list(sg.rows)}
+    # 只有 col 才輸出 axis（row／舊檔不輸出 → byte 不變，§4 相容性）。
+    if sg.axis == "col":
+        d["axis"] = "col"
     for kind in ("hi", "lo", "force"):
         d.update(_cond_kind_to_dict(sg.cond, kind))
     return d
@@ -834,7 +841,8 @@ def _slices_from_dict(raw) -> list[SliceGroup]:
             continue
         rows = [int(x) for x in (g.get("rows") or [])
                 if isinstance(x, int) and not isinstance(x, bool)]
-        out.append(SliceGroup(rows=rows, cond=_cond_from_dict(g)))
+        axis = "col" if g.get("axis") == "col" else "row"  # 缺鍵／非 col → row
+        out.append(SliceGroup(rows=rows, axis=axis, cond=_cond_from_dict(g)))
     return out
 
 
